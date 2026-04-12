@@ -305,7 +305,7 @@ var TatePlugin = class extends import_obsidian3.Plugin {
     this.addRibbonIcon("pilcrow", "\u7E26\u66F8\u304D\u3067\u958B\u304F", () => this.activateView());
     this.addCommand({
       id: "open-tate-view",
-      name: "TATE: Open vertical writing view",
+      name: "Open vertical writing view",
       callback: () => this.activateView()
     });
     this.addSettingTab(new TateSettingTab(this.app, this));
