@@ -36,8 +36,7 @@ export class VerticalWritingView extends ItemView {
         this.syncCoordinator = syncCoordinator;
 
         // registerDomEvent で登録することで onClose 時に自動解除される
-        this.registerDomEvent(editorEl.textarea, 'input', () => {
-            editorEl.adjustWidth();
+        this.registerDomEvent(editorEl.el, 'input', () => {
             syncCoordinator.onEditorChange();
         });
 

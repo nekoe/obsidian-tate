@@ -117,40 +117,68 @@ var SyncCoordinator = class {
 // src/ui/EditorElement.ts
 var EditorElement = class {
   constructor(container) {
-    this.textarea = container.createEl("textarea");
-    this.textarea.addClass("tate-editor");
-    this.textarea.setAttribute("spellcheck", "false");
-    this.textarea.setAttribute("placeholder", "\u30D5\u30A1\u30A4\u30EB\u3092\u958B\u3044\u3066\u304F\u3060\u3055\u3044");
+    this.el = container.createEl("div");
+    this.el.addClass("tate-editor");
+    this.el.setAttribute("contenteditable", "true");
+    this.el.setAttribute("spellcheck", "false");
+    this.el.setAttribute("data-placeholder", "\u30D5\u30A1\u30A4\u30EB\u3092\u958B\u3044\u3066\u304F\u3060\u3055\u3044");
   }
   getValue() {
-    return this.textarea.value;
+    return this.el.innerText;
   }
   setValue(content, preserveCursor) {
-    if (preserveCursor) {
-      const start = this.textarea.selectionStart;
-      const end = this.textarea.selectionEnd;
-      this.textarea.value = content;
-      this.textarea.setSelectionRange(
-        Math.min(start, content.length),
-        Math.min(end, content.length)
-      );
+    if (this.el.innerText === content) return;
+    if (preserveCursor && document.activeElement === this.el) {
+      const pos = this.getCharOffset();
+      this.el.innerText = content;
+      this.setCharOffset(Math.min(pos, content.length));
     } else {
-      this.textarea.value = content;
+      this.el.innerText = content;
     }
-    this.adjustWidth();
   }
   applySettings(settings) {
-    this.textarea.style.fontFamily = settings.fontFamily;
-    this.textarea.style.fontSize = `${settings.fontSize}px`;
+    this.el.style.fontFamily = settings.fontFamily;
+    this.el.style.fontSize = `${settings.fontSize}px`;
   }
-  // 縦書きモードでコンテンツ幅に合わせて textarea 幅を自動調整する
-  // view.ts 側で registerDomEvent から呼ぶ
+  // contenteditable div は writing-mode: vertical-rl で自動的に幅が広がるため不要
   adjustWidth() {
-    this.textarea.style.width = "auto";
-    this.textarea.style.width = `${this.textarea.scrollWidth}px`;
   }
   focus() {
-    this.textarea.focus();
+    this.el.focus();
+  }
+  // カーソル位置を文字オフセット（先頭からの文字数）で取得する
+  getCharOffset() {
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return 0;
+    const range = sel.getRangeAt(0);
+    const preRange = document.createRange();
+    preRange.selectNodeContents(this.el);
+    preRange.setEnd(range.startContainer, range.startOffset);
+    return preRange.toString().length;
+  }
+  // 文字オフセットを元にカーソル位置を復元する
+  setCharOffset(offset) {
+    const sel = window.getSelection();
+    if (!sel) return;
+    const range = document.createRange();
+    let remaining = offset;
+    const walker = document.createTreeWalker(this.el, NodeFilter.SHOW_TEXT);
+    let node = walker.nextNode();
+    while (node) {
+      if (remaining <= node.length) {
+        range.setStart(node, remaining);
+        range.collapse(true);
+        sel.removeAllRanges();
+        sel.addRange(range);
+        return;
+      }
+      remaining -= node.length;
+      node = walker.nextNode();
+    }
+    range.selectNodeContents(this.el);
+    range.collapse(false);
+    sel.removeAllRanges();
+    sel.addRange(range);
   }
 };
 
@@ -185,8 +213,7 @@ var VerticalWritingView = class extends import_obsidian.ItemView {
       (content, preserveCursor) => editorEl.setValue(content, preserveCursor)
     );
     this.syncCoordinator = syncCoordinator;
-    this.registerDomEvent(editorEl.textarea, "input", () => {
-      editorEl.adjustWidth();
+    this.registerDomEvent(editorEl.el, "input", () => {
       syncCoordinator.onEditorChange();
     });
     this.registerEvent(

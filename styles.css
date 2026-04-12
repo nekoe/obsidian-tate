@@ -6,24 +6,29 @@
     overflow-y: hidden;
 }
 
-/* 縦書きテキストエリア */
+/* 縦書きエディタ（contenteditable div） */
 .tate-editor {
     writing-mode: vertical-rl;
     text-orientation: mixed;
-    resize: none;
     height: 100%;
+    width: max-content;
     min-width: 100%;
-    border: none;
     outline: none;
     background: var(--background-primary);
     color: var(--text-normal);
     padding: 2rem;
     line-height: 2;
+    white-space: pre-wrap;
+    word-break: break-all;
     box-sizing: border-box;
+    cursor: text;
 }
 
-.tate-editor::placeholder {
+/* プレースホルダー（ファイル未選択時） */
+.tate-editor:empty::before {
+    content: attr(data-placeholder);
     color: var(--text-faint);
+    pointer-events: none;
 }
 
 /* スクロールバー調整 */
