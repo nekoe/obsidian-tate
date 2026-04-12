@@ -171,7 +171,8 @@ export class EditorElement {
 
     // ---- コマンドパレットから呼ぶ選択ラップメソッド ----
 
-    // 選択テキストを ｜選択《》 に変換してカーソルを《》の間に置く
+    // 選択テキストを tate-editing スパンとして展開し、カーソルを《》の間に置く
+    // カーソルがスパン外に出ると collapseEditing() が <ruby> 要素に収束する
     wrapSelectionWithRuby(): boolean {
         if (this.expandedEl) return false;
         const r = this.savedRange;
@@ -181,18 +182,31 @@ export class EditorElement {
         const selectedText = textNode.textContent!.slice(r.startOffset, r.endOffset);
         if (!selectedText) return false;
 
-        const prefix = `｜${selectedText}《`;
-        const before = textNode.textContent!.slice(0, r.startOffset);
-        const after = textNode.textContent!.slice(r.endOffset);
-        textNode.textContent = before + prefix + '》' + after;
+        const rawText = `｜${selectedText}《》`;
+        const span = document.createElement('span');
+        span.className = 'tate-editing';
+        span.textContent = rawText;
 
-        this.el.focus();
-        const sel = window.getSelection()!;
-        const range = document.createRange();
-        range.setStart(textNode, r.startOffset + prefix.length);
-        range.collapse(true);
-        sel.removeAllRanges();
-        sel.addRange(range);
+        this.isModifyingDom = true;
+        try {
+            this.replaceTextWithElement(textNode, r.startOffset, r.endOffset, span);
+            this.expandedEl = span;
+
+            // カーソルを《と》の間（rawText.length - 1 = 》の直前）に設定
+            const spanText = span.firstChild as Text | null;
+            if (spanText) {
+                this.el.focus();
+                const sel = window.getSelection()!;
+                const range = document.createRange();
+                range.setStart(spanText, rawText.length - 1);
+                range.collapse(true);
+                sel.removeAllRanges();
+                sel.addRange(range);
+            }
+        } finally {
+            this.isModifyingDom = false;
+        }
+
         this.savedRange = null;
         return true;
     }
