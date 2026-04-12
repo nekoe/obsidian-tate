@@ -29,18 +29,18 @@ src/
 │   ├── SyncCoordinator.ts     # 双方向同期制御
 │   └── DebounceQueue.ts       # デバウンス（flushAndExecute付き）
 └── ui/
-    └── EditorElement.ts       # textarea DOM管理
+    └── EditorElement.ts       # contenteditable div DOM管理
 styles.css                     # 縦書きCSS（writing-mode: vertical-rl）
 manifest.json                  # プラグインメタデータ（id: obsidian-tate）
 ```
 
 ## 重要な設計上の決定
 
-### textareaによる縦書き実現
-`writing-mode: vertical-rl` をtextareaに適用する（Chrome 119以降で正式対応。ObsidianはElectron/Chromiumベースのため動作する）。contenteditable divではなくtextareaを使う理由はIME（日本語入力）の安定性とブラウザネイティブのUndo/Redo。
+### contenteditable divによる縦書き実現
+`writing-mode: vertical-rl` をcontenteditable divに適用する。textareaへの`writing-mode`適用はChrome 119以降が必要だが、ObsidianのElectronバージョンによっては未対応のため、より広く動作するcontenteditable divを採用する。テキストの取得・設定には`innerText`を使用する。
 
 ### 双方向同期の競合防止
-- `textarea.value` への直接代入はinputイベントを発生させないため、`isApplyingExternalChange` フラグは不要
+- `el.innerText` への直接代入はinputイベントを発生させないため、`isApplyingExternalChange` フラグは不要
 - `SyncCoordinator.loadFile()` と `onExternalModify()` はどちらも非同期（vault.read）なのでシーケンス番号（loadSeq, externalModifySeq）を使って古い結果を捨てる
 - 自分の `vault.modify` が発火した `modify` イベントは内容比較（`externalContent === getEditorValue()`）でスキップ
 
@@ -48,7 +48,7 @@ manifest.json                  # プラグインメタデータ（id: obsidian-t
 `DebounceQueue.flushAndExecute()` はタイマーをキャンセルしつつペンディング中のコールバックを即時実行する。`SyncCoordinator.dispose()` から呼ぶことで、500msデバウンス待機中でもビューを閉じる際に確実に保存される。
 
 ### DOMイベントの自動解除
-inputイベントは `this.registerDomEvent(textarea, 'input', ...)` で登録する（`addEventListener` の直接呼び出しは禁止）。Obsidianの `Component.registerDomEvent` を使うと `onClose` 時に自動解除される。
+inputイベントは `this.registerDomEvent(el, 'input', ...)` で登録する（`addEventListener` の直接呼び出しは禁止）。Obsidianの `Component.registerDomEvent` を使うと `onClose` 時に自動解除される。
 
 ### ファイル切り替えの検知
 `file-open` ワークスペースイベントを使う（`active-leaf-change` より正確）。縦書きビュー自身がアクティブになっても `file-open` は発火しないため、表示中のファイルが意図せずリセットされない。
