@@ -53,7 +53,12 @@ inputイベントと compositionend イベントは `this.registerDomEvent(el, '
 ### Aozora記法のパース・シリアライズ
 `EditorElement` が青空文庫記法とDOM要素の双方向変換を担う。
 
-**パースパイプライン**（`parseToHtml()` → `innerHTML`）:  
+**パースパイプライン**（`parseToHtml()` / `parseInlineToHtml()` → `innerHTML`）:
+
+`parseToHtml()` と `parseInlineToHtml()` の2層構造になっている:
+- `parseToHtml(text)`: `setValue()` 用。テキストを `\n` で分割し、各段落を `<div>` で包む（字下げのため）。空文字の場合は `''` を返して `:empty::before` プレースホルダーを有効にする
+- `parseInlineToHtml(text)`: `collapseEditing()` 用。`<div>` で包まずインライン記法のみ変換する。段落 `<div>` の内側で収束処理を行う際に呼ぶ（`parseToHtml()` を使うと `<div>` がネストしてしまう）
+
 `applyParsers()` が `ParseSegment[]`（`text` / `html` の union型）を順番に変換する。優先順位:
 
 1. 明示ルビ `｜base《rt》`（`|` 半角も受け付ける）→ `<ruby data-ruby-explicit="true">`
@@ -78,7 +83,7 @@ inputイベントと compositionend イベントは `this.registerDomEvent(el, '
 `document` の `selectionchange` イベントを `registerDomEvent(document, 'selectionchange', ...)` で登録し、カーソル位置に応じて ruby/tcy/bouten 要素をその場で展開・収束する。
 
 - **展開**: カーソルが `<ruby>`・`<span data-tcy="explicit">`・`<span data-bouten>` に入ると `expandForEditing()` が要素を `<span class="tate-editing">` に置換し、Aozora 生テキストを表示する
-- **収束**: カーソルが外れると `collapseEditing()` が `parseToHtml()` で再パースして元の要素に戻す。編集内容は反映される
+- **収束**: カーソルが外れると `collapseEditing()` が `parseInlineToHtml()` で再パースして元の要素に戻す。編集内容は反映される（`parseToHtml()` を使うと段落 `<div>` の中に `<div>` がネストするため禁止）
 - **カーソル位置**: `rawOffsetForExpand()` が ruby（base/rt それぞれ）・tcy・bouten のカーソル位置を raw テキスト上のオフセットに変換する（tcy/bouten はコンテンツが先頭にあるため `return offset` のみ）
 - **再入防止**: `isModifyingDom` フラグで DOM 操作中の `selectionchange` 再入をブロックする
 - **`setValue()` との競合防止**: `this.expandedEl = null` と `this.savedRange = null` は `getValue() === content` の早期リターン**より前**に実行すること（detach 済みノード参照を防ぐ）
@@ -89,7 +94,7 @@ inputイベントと compositionend イベントは `this.registerDomEvent(el, '
 `add-ruby` / `add-tcy` / `add-bouten` コマンドで選択テキストに記法を適用できる。
 
 - **選択範囲キャッシュ**: `handleSelectionChange()` の先頭（`isModifyingDom` チェックより前）で、エディタ内に非 collapsed 選択があるとき `savedRange` フィールドに保存する。コマンドパレットを開くとフォーカスが離れるが、エディタ外の selectionchange ではキャッシュを**更新しない**（保持する）ことで、コマンド実行時に選択を復元できる
-- **ルビ**: `wrapSelectionWithRuby()` が `savedRange` の選択テキストを `｜text《》` に書き換え、カーソルを `《》` の間に置く。ユーザーがルビ文字を入力後 `》` を打つと `handleRubyCompletion()` が `<ruby>` 要素に変換する
+- **ルビ**: `wrapSelectionWithRuby()` が選択テキストを `｜text《》` とした `<span class="tate-editing">` スパンとして挿入し、`expandedEl` をセットしてインライン展開状態にする。ユーザーがルビ文字を入力後カーソルを外すと `collapseEditing()` が `<ruby>` 要素に収束する
 - **縦中横・傍点**: `wrapSelectionWith()` に共通化。`savedRange` の選択テキストを `replaceTextWithElement()` で要素に置換する
 - **エラー通知**: 選択なし・ビュー未開は `new Notice(...)` で通知。`editorEl` が null のときは `applyAnnotation()` が早期リターンする（誤メッセージを出さない）
 - **同期**: ラップ成功後に `view.ts` の `applyAnnotation()` が `syncCoordinator.onEditorChange()` を呼ぶ（`EditorElement` は `SyncCoordinator` を知らないため）
@@ -97,11 +102,19 @@ inputイベントと compositionend イベントは `this.registerDomEvent(el, '
 ### ファイル切り替えの検知
 `file-open` ワークスペースイベントを使う（`active-leaf-change` より正確）。縦書きビュー自身がアクティブになっても `file-open` は発火しないため、表示中のファイルが意図せずリセットされない。
 
+### 自動字下げ
+`text-indent: 1em` を CSS で適用する（ファイルには保存しない）。
+
+- `parseToHtml()` が段落を `<div>` で包む構造になっているため、`.tate-editor.tate-auto-indent` に `text-indent: 1em` を設定するだけで CSS 継承により各段落 `<div>` にも適用される
+- ユーザーが新規入力中（まだ `<div>` が生成されていない状態）でも、`.tate-editor` 自体の `text-indent` が直接テキストに適用されるため、常に字下げが有効になる
+- `applySettings()` で `el.toggleClass('tate-auto-indent', settings.autoIndent)` によりクラスを付け外しする
+
 ## 設定
 
 `TatePluginSettings`（`src/settings.ts`）:
 - `fontFamily`: CSS font-family 形式（デフォルト: Hiragino Mincho ProN系）
 - `fontSize`: px数値（デフォルト: 18）
+- `autoIndent`: 自動字下げ ON/OFF（デフォルト: `true`）
 
 設定変更後は `plugin.applySettingsToAllViews()` を呼んで開いているビューに即時反映する。
 
