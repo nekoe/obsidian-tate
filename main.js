@@ -115,6 +115,7 @@ var SyncCoordinator = class {
 };
 
 // src/ui/EditorElement.ts
+var KANJI_RE_STR = "[\u4E00-\u9FFF\u3400-\u4DBF\u{20000}-\u{2A6DF}\u3005\u3006\u3024]+";
 var EditorElement = class {
   constructor(container) {
     this.el = container.createEl("div");
@@ -124,61 +125,213 @@ var EditorElement = class {
     this.el.setAttribute("data-placeholder", "\u30D5\u30A1\u30A4\u30EB\u3092\u958B\u3044\u3066\u304F\u3060\u3055\u3044");
   }
   getValue() {
-    return this.el.innerText;
+    return Array.from(this.el.childNodes).map((n) => this.serializeNode(n)).join("");
   }
   setValue(content, preserveCursor) {
-    if (this.el.innerText === content) return;
+    if (this.getValue() === content) return;
     if (preserveCursor && document.activeElement === this.el) {
-      const pos = this.getCharOffset();
-      this.el.innerText = content;
-      this.setCharOffset(Math.min(pos, content.length));
+      const pos = this.getVisibleOffset();
+      this.el.innerHTML = this.parseToHtml(content);
+      this.setVisibleOffset(pos);
     } else {
-      this.el.innerText = content;
+      this.el.innerHTML = this.parseToHtml(content);
     }
+  }
+  // 》が入力されたときに直前のルビ記法を <ruby> 要素に変換する。
+  // input（isComposing=false）および compositionend の後に呼ぶ。
+  handleRubyCompletion() {
+    var _a, _b, _c;
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return;
+    const range = sel.getRangeAt(0);
+    if (range.startContainer.nodeType !== Node.TEXT_NODE) return;
+    if (this.isInsideRuby(range.startContainer)) return;
+    const textNode = range.startContainer;
+    const textBefore = (_b = (_a = textNode.textContent) == null ? void 0 : _a.slice(0, range.startOffset)) != null ? _b : "";
+    if (!textBefore.endsWith("\u300B")) return;
+    let match = textBefore.match(/\|([^|《》\n]+)《([^《》\n]*)》$/);
+    let explicit = true;
+    if (!match) {
+      match = textBefore.match(new RegExp(`(${KANJI_RE_STR})\u300A([^\u300A\u300B\\n]*)\u300B$`, "u"));
+      explicit = false;
+    }
+    if (!match) return;
+    const fullMatch = match[0];
+    const base = match[1];
+    const rt = match[2];
+    const matchStart = range.startOffset - fullMatch.length;
+    const before = textNode.textContent.slice(0, matchStart);
+    const after = textNode.textContent.slice(range.startOffset);
+    const rubyEl = this.createRubyEl(base, rt, explicit);
+    const parent = textNode.parentNode;
+    const afterNode = document.createTextNode(after);
+    parent.insertBefore(afterNode, (_c = textNode.nextSibling) != null ? _c : null);
+    parent.insertBefore(rubyEl, afterNode);
+    if (before) {
+      textNode.textContent = before;
+    } else {
+      parent.removeChild(textNode);
+    }
+    const newRange = document.createRange();
+    newRange.setStartAfter(rubyEl);
+    newRange.collapse(true);
+    sel.removeAllRanges();
+    sel.addRange(newRange);
   }
   applySettings(settings) {
     this.el.style.fontFamily = settings.fontFamily;
     this.el.style.fontSize = `${settings.fontSize}px`;
   }
-  // contenteditable div は writing-mode: vertical-rl で自動的に幅が広がるため不要
   adjustWidth() {
   }
   focus() {
     this.el.focus();
   }
-  // カーソル位置を文字オフセット（先頭からの文字数）で取得する
-  getCharOffset() {
+  // ---- ルビパーサー（Aozora 記法 → innerHTML） ----
+  parseToHtml(text) {
+    const segments = this.splitByExplicitRuby(text);
+    const html = segments.map(
+      (seg) => seg.type === "ruby" ? seg.html : this.convertImplicitRuby(seg.text)
+    ).join("");
+    return html.replace(/\n/g, "<br>");
+  }
+  splitByExplicitRuby(text) {
+    const result = [];
+    const re = /\|([^|《》\n]+)《([^《》\n]*)》/g;
+    let lastIndex = 0;
+    let m;
+    while ((m = re.exec(text)) !== null) {
+      if (m.index > lastIndex) {
+        result.push({ type: "text", text: text.slice(lastIndex, m.index) });
+      }
+      result.push({
+        type: "ruby",
+        html: `<ruby data-ruby-explicit="true">${this.esc(m[1])}<rt>${this.esc(m[2])}</rt></ruby>`
+      });
+      lastIndex = re.lastIndex;
+    }
+    if (lastIndex < text.length) {
+      result.push({ type: "text", text: text.slice(lastIndex) });
+    }
+    return result;
+  }
+  convertImplicitRuby(text) {
+    const re = new RegExp(`(${KANJI_RE_STR})\u300A([^\u300A\u300B\\n]*)\u300B`, "gu");
+    const parts = [];
+    let lastIndex = 0;
+    let m;
+    while ((m = re.exec(text)) !== null) {
+      if (m.index > lastIndex) {
+        parts.push(this.esc(text.slice(lastIndex, m.index)));
+      }
+      parts.push(
+        `<ruby data-ruby-explicit="false">${this.esc(m[1])}<rt>${this.esc(m[2])}</rt></ruby>`
+      );
+      lastIndex = re.lastIndex;
+    }
+    if (lastIndex < text.length) {
+      parts.push(this.esc(text.slice(lastIndex)));
+    }
+    return parts.join("");
+  }
+  esc(text) {
+    return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+  // ---- DOM シリアライザ（innerHTML → Aozora 記法） ----
+  serializeNode(node) {
+    var _a, _b, _c, _d;
+    if (node.nodeType === Node.TEXT_NODE) {
+      return (_a = node.textContent) != null ? _a : "";
+    }
+    if (!(node instanceof HTMLElement)) return "";
+    switch (node.tagName) {
+      case "RUBY": {
+        const explicit = node.getAttribute("data-ruby-explicit") !== "false";
+        const base = Array.from(node.childNodes).filter((n) => !(n instanceof HTMLElement && n.tagName === "RT")).map((n) => this.serializeNode(n)).join("");
+        const rt = (_c = (_b = node.querySelector("rt")) == null ? void 0 : _b.textContent) != null ? _c : "";
+        return explicit ? `|${base}\u300A${rt}\u300B` : `${base}\u300A${rt}\u300B`;
+      }
+      case "BR":
+        if (node.parentElement !== this.el && ((_d = node.parentElement) == null ? void 0 : _d.tagName) === "DIV" && node === node.parentElement.lastChild) {
+          return "";
+        }
+        return "\n";
+      case "DIV": {
+        const content = Array.from(node.childNodes).map((n) => this.serializeNode(n)).join("");
+        return node.previousSibling !== null ? "\n" + content : content;
+      }
+      default:
+        return Array.from(node.childNodes).map((n) => this.serializeNode(n)).join("");
+    }
+  }
+  // ---- カーソル操作（<rt> 内を除いた visible 文字数でオフセット管理） ----
+  getVisibleOffset() {
     const sel = window.getSelection();
     if (!sel || sel.rangeCount === 0) return 0;
     const range = sel.getRangeAt(0);
-    const preRange = document.createRange();
-    preRange.selectNodeContents(this.el);
-    preRange.setEnd(range.startContainer, range.startOffset);
-    return preRange.toString().length;
+    let count = 0;
+    const walker = document.createTreeWalker(this.el, NodeFilter.SHOW_TEXT);
+    let node = walker.nextNode();
+    while (node) {
+      if (node === range.startContainer) {
+        if (!this.isInsideRt(node)) count += range.startOffset;
+        break;
+      }
+      if (!this.isInsideRt(node)) count += node.length;
+      node = walker.nextNode();
+    }
+    return count;
   }
-  // 文字オフセットを元にカーソル位置を復元する
-  setCharOffset(offset) {
+  setVisibleOffset(offset) {
     const sel = window.getSelection();
     if (!sel) return;
-    const range = document.createRange();
     let remaining = offset;
     const walker = document.createTreeWalker(this.el, NodeFilter.SHOW_TEXT);
     let node = walker.nextNode();
     while (node) {
-      if (remaining <= node.length) {
-        range.setStart(node, remaining);
-        range.collapse(true);
-        sel.removeAllRanges();
-        sel.addRange(range);
-        return;
+      if (!this.isInsideRt(node)) {
+        if (remaining <= node.length) {
+          const range2 = document.createRange();
+          range2.setStart(node, remaining);
+          range2.collapse(true);
+          sel.removeAllRanges();
+          sel.addRange(range2);
+          return;
+        }
+        remaining -= node.length;
       }
-      remaining -= node.length;
       node = walker.nextNode();
     }
+    const range = document.createRange();
     range.selectNodeContents(this.el);
     range.collapse(false);
     sel.removeAllRanges();
     sel.addRange(range);
+  }
+  isInsideRt(node) {
+    let parent = node.parentElement;
+    while (parent && parent !== this.el) {
+      if (parent.tagName === "RT") return true;
+      parent = parent.parentElement;
+    }
+    return false;
+  }
+  isInsideRuby(node) {
+    let parent = node.parentElement;
+    while (parent && parent !== this.el) {
+      if (parent.tagName === "RUBY") return true;
+      parent = parent.parentElement;
+    }
+    return false;
+  }
+  createRubyEl(base, rt, explicit) {
+    const rubyEl = document.createElement("ruby");
+    rubyEl.setAttribute("data-ruby-explicit", String(explicit));
+    rubyEl.appendChild(document.createTextNode(base));
+    const rtEl = document.createElement("rt");
+    rtEl.textContent = rt;
+    rubyEl.appendChild(rtEl);
+    return rubyEl;
   }
 };
 
@@ -213,8 +366,14 @@ var VerticalWritingView = class extends import_obsidian.ItemView {
       (content, preserveCursor) => editorEl.setValue(content, preserveCursor)
     );
     this.syncCoordinator = syncCoordinator;
-    this.registerDomEvent(editorEl.el, "input", () => {
+    this.registerDomEvent(editorEl.el, "input", (e) => {
       syncCoordinator.onEditorChange();
+      if (!e.isComposing) {
+        editorEl.handleRubyCompletion();
+      }
+    });
+    this.registerDomEvent(editorEl.el, "compositionend", () => {
+      editorEl.handleRubyCompletion();
     });
     this.registerEvent(
       this.app.vault.on("modify", (file) => {

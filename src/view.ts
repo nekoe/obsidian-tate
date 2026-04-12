@@ -36,8 +36,14 @@ export class VerticalWritingView extends ItemView {
         this.syncCoordinator = syncCoordinator;
 
         // registerDomEvent で登録することで onClose 時に自動解除される
-        this.registerDomEvent(editorEl.el, 'input', () => {
+        this.registerDomEvent(editorEl.el, 'input', (e: Event) => {
             syncCoordinator.onEditorChange();
+            if (!(e as InputEvent).isComposing) {
+                editorEl.handleRubyCompletion();
+            }
+        });
+        this.registerDomEvent(editorEl.el, 'compositionend', () => {
+            editorEl.handleRubyCompletion();
         });
 
         this.registerEvent(
