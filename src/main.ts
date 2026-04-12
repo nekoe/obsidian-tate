@@ -17,7 +17,7 @@ export default class TatePlugin extends Plugin {
 
         this.addCommand({
             id: 'open-tate-view',
-            name: '縦書きビューを開く',
+            name: 'TATE: Open vertical writing view',
             callback: () => this.activateView(),
         });
 
