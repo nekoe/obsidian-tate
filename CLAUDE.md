@@ -37,10 +37,10 @@ manifest.json                  # プラグインメタデータ（id: obsidian-t
 ## 重要な設計上の決定
 
 ### contenteditable divによる縦書き実現
-`writing-mode: vertical-rl` をcontenteditable divに適用する。textareaへの`writing-mode`適用はChrome 119以降が必要だが、ObsidianのElectronバージョンによっては未対応のため、より広く動作するcontenteditable divを採用する。テキストの取得・設定には`innerText`を使用する。
+`writing-mode: vertical-rl` をcontenteditable divに適用する。textareaへの`writing-mode`適用はChrome 119以降が必要だが、ObsidianのElectronバージョンによっては未対応のため、より広く動作するcontenteditable divを採用する。テキストの取得には `getValue()`（カスタム `serializeNode()` DOMウォーカー）、設定には `setValue()`（`innerHTML = parseToHtml(content)`）を使用する。
 
 ### 双方向同期の競合防止
-- `el.innerText` への直接代入はinputイベントを発生させないため、`isApplyingExternalChange` フラグは不要
+- `el.innerHTML` への直接代入はinputイベントを発生させないため、`isApplyingExternalChange` フラグは不要
 - `SyncCoordinator.loadFile()` と `onExternalModify()` はどちらも非同期（vault.read）なのでシーケンス番号（loadSeq, externalModifySeq）を使って古い結果を捨てる
 - 自分の `vault.modify` が発火した `modify` イベントは内容比較（`externalContent === getEditorValue()`）でスキップ
 
@@ -48,7 +48,26 @@ manifest.json                  # プラグインメタデータ（id: obsidian-t
 `DebounceQueue.flushAndExecute()` はタイマーをキャンセルしつつペンディング中のコールバックを即時実行する。`SyncCoordinator.dispose()` から呼ぶことで、500msデバウンス待機中でもビューを閉じる際に確実に保存される。
 
 ### DOMイベントの自動解除
-inputイベントは `this.registerDomEvent(el, 'input', ...)` で登録する（`addEventListener` の直接呼び出しは禁止）。Obsidianの `Component.registerDomEvent` を使うと `onClose` 時に自動解除される。
+inputイベントと compositionend イベントは `this.registerDomEvent(el, 'input', ...)` / `this.registerDomEvent(el, 'compositionend', ...)` で登録する（`addEventListener` の直接呼び出しは禁止）。Obsidianの `Component.registerDomEvent` を使うと `onClose` 時に自動解除される。
+
+### Aozora記法のパース・シリアライズ
+`EditorElement` が青空文庫記法とDOM要素の双方向変換を担う。
+
+**パースパイプライン**（`parseToHtml()` → `innerHTML`）:  
+`applyParsers()` が `ParseSegment[]`（`text` / `html` の union型）を順番に変換する。優先順位:
+
+1. 明示ルビ `|base《rt》` → `<ruby data-ruby-explicit="true">`
+2. 明示縦中横 `X［＃「X」は縦中横］` → `<span data-tcy="explicit" class="tcy">`
+3. 省略ルビ `kanji《rt》`（直前の漢字連続を自動検出）→ `<ruby data-ruby-explicit="false">`
+4. 自動縦中横（2〜4桁の連続半角数字）→ `<span data-tcy="auto" class="tcy">`
+
+**シリアライズ**（`serializeNode()` → ファイルテキスト）:
+- `<ruby data-ruby-explicit="true">` → `|base《rt》`
+- `<ruby data-ruby-explicit="false">` → `base《rt》`
+- `<span data-tcy="explicit">` → `X［＃「X」は縦中横］`
+- `<span data-tcy="auto">` → `X`（マークアップなし・表示専用）
+
+**ライブ変換**: `》` / `］` 入力時に `handleRubyCompletion()` / `handleTcyCompletion()` がDOMを直接書き換える。IME対応のため `input`（`isComposing=false`）と `compositionend` の両方で呼ぶ。DOM操作（テキストノード分割→要素挿入→カーソル配置）は `replaceTextWithElement()` に共通化。
 
 ### ファイル切り替えの検知
 `file-open` ワークスペースイベントを使う（`active-leaf-change` より正確）。縦書きビュー自身がアクティブになっても `file-open` は発火しないため、表示中のファイルが意図せずリセットされない。
