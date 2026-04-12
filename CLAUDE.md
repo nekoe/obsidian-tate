@@ -48,7 +48,7 @@ manifest.json                  # プラグインメタデータ（id: obsidian-t
 `DebounceQueue.flushAndExecute()` はタイマーをキャンセルしつつペンディング中のコールバックを即時実行する。`SyncCoordinator.dispose()` から呼ぶことで、500msデバウンス待機中でもビューを閉じる際に確実に保存される。
 
 ### DOMイベントの自動解除
-inputイベントと compositionend イベントは `this.registerDomEvent(el, 'input', ...)` / `this.registerDomEvent(el, 'compositionend', ...)` で登録する（`addEventListener` の直接呼び出しは禁止）。Obsidianの `Component.registerDomEvent` を使うと `onClose` 時に自動解除される。
+input / compositionend / paste イベントはすべて `this.registerDomEvent(el, ...)` で登録する（`addEventListener` の直接呼び出しは禁止）。Obsidianの `Component.registerDomEvent` を使うと `onClose` 時に自動解除される。
 
 ### Aozora記法のパース・シリアライズ
 `EditorElement` が青空文庫記法とDOM要素の双方向変換を担う。
@@ -102,6 +102,9 @@ inputイベントと compositionend イベントは `this.registerDomEvent(el, '
 ### ファイル切り替えの検知
 `file-open` ワークスペースイベントを使う（`active-leaf-change` より正確）。縦書きビュー自身がアクティブになっても `file-open` は発火しないため、表示中のファイルが意図せずリセットされない。
 
+### ペーストのプレーンテキスト化
+`contenteditable` div はデフォルトでクリップボードの `text/html` を優先してペーストするため、インライン展開スパンのスタイルや外部 HTML のスタイルが貼り付けられてしまう。`paste` イベントで `e.preventDefault()` した後、`e.clipboardData.getData('text/plain')` でプレーンテキストのみ取得し、`document.execCommand('insertText', false, text)` で挿入する。`execCommand('insertText')` は deprecated だが Electron では動作し、カーソル位置への挿入・選択範囲の置換・アンドゥ履歴への追加を一括処理できる。
+
 ### 自動字下げ
 `text-indent: 1em` を CSS で適用する（ファイルには保存しない）。
 
@@ -115,6 +118,7 @@ inputイベントと compositionend イベントは `this.registerDomEvent(el, '
 - `fontFamily`: CSS font-family 形式（デフォルト: Hiragino Mincho ProN系）
 - `fontSize`: px数値（デフォルト: 18）
 - `autoIndent`: 自動字下げ ON/OFF（デフォルト: `true`）
+- `lineBreak`: 禁則処理ルール `'normal' | 'strict' | 'loose' | 'anywhere'`（デフォルト: `'normal'`）。CSS `line-break` プロパティに直接渡す
 
 設定変更後は `plugin.applySettingsToAllViews()` を呼んで開いているビューに即時反映する。
 
