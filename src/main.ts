@@ -1,4 +1,4 @@
-import { Plugin, WorkspaceLeaf } from 'obsidian';
+import { Notice, Plugin, WorkspaceLeaf } from 'obsidian';
 import { TATE_VIEW_TYPE, VerticalWritingView } from './view';
 import { DEFAULT_SETTINGS, TatePluginSettings, TateSettingTab } from './settings';
 
@@ -21,6 +21,24 @@ export default class TatePlugin extends Plugin {
             callback: () => this.activateView(),
         });
 
+        this.addCommand({
+            id: 'add-ruby',
+            name: 'Ruby: 選択テキストにルビを設定',
+            callback: () => this.dispatchToView(v => v.applyRuby()),
+        });
+
+        this.addCommand({
+            id: 'add-tcy',
+            name: 'TCY: 選択テキストを縦中横にする',
+            callback: () => this.dispatchToView(v => v.applyTcy()),
+        });
+
+        this.addCommand({
+            id: 'add-bouten',
+            name: 'BT: 選択テキストに傍点を付ける',
+            callback: () => this.dispatchToView(v => v.applyBouten()),
+        });
+
         this.addSettingTab(new TateSettingTab(this.app, this));
     }
 
@@ -38,6 +56,15 @@ export default class TatePlugin extends Plugin {
                 leaf.view.applySettings(this.settings);
             }
         });
+    }
+
+    private dispatchToView(action: (view: VerticalWritingView) => void): void {
+        const leaves = this.app.workspace.getLeavesOfType(TATE_VIEW_TYPE);
+        if (leaves.length === 0) {
+            new Notice('縦書きビューが開いていません');
+            return;
+        }
+        action(leaves[0].view as VerticalWritingView);
     }
 
     private async activateView(): Promise<void> {

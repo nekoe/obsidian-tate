@@ -14,6 +14,11 @@ export class EditorElement {
     private expandedEl: HTMLSpanElement | null = null;
     // selectionchange ハンドラ内での DOM 操作中に再入しないためのガード
     private isModifyingDom = false;
+    // コマンド実行時に使う選択範囲キャッシュ（コマンドパレット起動でフォーカスが外れた後も保持）
+    private savedRange: {
+        startContainer: Node; startOffset: number;
+        endContainer: Node; endOffset: number;
+    } | null = null;
 
     constructor(container: HTMLElement) {
         this.el = container.createEl('div');
@@ -30,8 +35,9 @@ export class EditorElement {
     }
 
     setValue(content: string, preserveCursor: boolean): void {
-        // 外部更新時は展開状態をリセット（早期リターンより先に実行）
+        // 外部更新時は展開状態・選択キャッシュをリセット（早期リターンより先に実行）
         this.expandedEl = null;
+        this.savedRange = null;
         if (this.getValue() === content) return;
 
         if (preserveCursor && document.activeElement === this.el) {
@@ -47,6 +53,24 @@ export class EditorElement {
 
     // カーソル移動のたびに呼ばれ、ruby/tcy 要素を展開・収束する
     handleSelectionChange(): void {
+        // DOM操作外かつエディタ内に非collapsed選択があるときのみキャッシュを更新
+        // （外れたときは保持することでコマンドパレット起動後も参照できる）
+        if (!this.isModifyingDom) {
+            const sc = window.getSelection();
+            if (sc && sc.rangeCount > 0) {
+                const rc = sc.getRangeAt(0);
+                if (!rc.collapsed
+                    && this.el.contains(rc.startContainer)
+                    && this.el.contains(rc.endContainer)) {
+                    this.savedRange = {
+                        startContainer: rc.startContainer,
+                        startOffset: rc.startOffset,
+                        endContainer: rc.endContainer,
+                        endOffset: rc.endOffset,
+                    };
+                }
+            }
+        }
         if (this.isModifyingDom) return;
         // エディタ外の selectionchange は展開中でない限り早期リターン（複数ビュー対策）
         const sel0 = window.getSelection();
@@ -69,6 +93,7 @@ export class EditorElement {
                 const savedOffset = range.startOffset;
 
                 this.collapseEditing();
+                this.savedRange = null; // 収束後は stale ノード参照を破棄
 
                 // ユーザーがカーソルを移動した先（savedNode）を復元する
                 if (savedNode.isConnected && this.el.contains(savedNode)) {
@@ -141,9 +166,77 @@ export class EditorElement {
 
     // ］が入力されたときに直前の縦中横記法を <span class="tcy"> 要素に変換する
     handleTcyCompletion(): void {
-        // 展開中は生テキスト編集中なのでライブ変換しない
-        if (this.expandedEl) return;
+        this.handleAnnotationCompletion('］', /［＃「([^「」\n]+)」は縦中横］$/, c => this.createTcyEl(c));
+    }
 
+    // ---- コマンドパレットから呼ぶ選択ラップメソッド ----
+
+    // 選択テキストを ｜選択《》 に変換してカーソルを《》の間に置く
+    wrapSelectionWithRuby(): boolean {
+        if (this.expandedEl) return false;
+        const r = this.savedRange;
+        if (!r || r.startContainer !== r.endContainer
+            || r.startContainer.nodeType !== Node.TEXT_NODE) return false;
+        const textNode = r.startContainer as Text;
+        const selectedText = textNode.textContent!.slice(r.startOffset, r.endOffset);
+        if (!selectedText) return false;
+
+        const prefix = `｜${selectedText}《`;
+        const before = textNode.textContent!.slice(0, r.startOffset);
+        const after = textNode.textContent!.slice(r.endOffset);
+        textNode.textContent = before + prefix + '》' + after;
+
+        this.el.focus();
+        const sel = window.getSelection()!;
+        const range = document.createRange();
+        range.setStart(textNode, r.startOffset + prefix.length);
+        range.collapse(true);
+        sel.removeAllRanges();
+        sel.addRange(range);
+        this.savedRange = null;
+        return true;
+    }
+
+    // 選択テキストを縦中横要素に変換する
+    wrapSelectionWithTcy(): boolean {
+        return this.wrapSelectionWith(c => this.createTcyEl(c));
+    }
+
+    // 選択テキストを傍点要素に変換する
+    wrapSelectionWithBouten(): boolean {
+        return this.wrapSelectionWith(c => this.createBoutenEl(c));
+    }
+
+    // ］が入力されたときに直前の傍点記法を <span class="bouten"> 要素に変換する
+    handleBoutenCompletion(): void {
+        this.handleAnnotationCompletion('］', /［＃「([^「」\n]+)」に傍点］$/, c => this.createBoutenEl(c));
+    }
+
+    // ---- 選択ラップ・アノテーション完了の共通ロジック ----
+
+    // tcy/bouten など要素置換型ラップの共通実装
+    private wrapSelectionWith(createElement: (content: string) => HTMLElement): boolean {
+        if (this.expandedEl) return false;
+        const r = this.savedRange;
+        if (!r || r.startContainer !== r.endContainer
+            || r.startContainer.nodeType !== Node.TEXT_NODE) return false;
+        const textNode = r.startContainer as Text;
+        const selectedText = textNode.textContent!.slice(r.startOffset, r.endOffset);
+        if (!selectedText) return false;
+
+        this.el.focus();
+        this.replaceTextWithElement(textNode, r.startOffset, r.endOffset, createElement(selectedText));
+        this.savedRange = null;
+        return true;
+    }
+
+    // tcy/bouten など終端文字で確定するライブ変換の共通実装
+    private handleAnnotationCompletion(
+        endChar: string,
+        re: RegExp,
+        createElement: (content: string) => HTMLElement,
+    ): void {
+        if (this.expandedEl) return;
         const sel = window.getSelection();
         if (!sel || sel.rangeCount === 0) return;
         const range = sel.getRangeAt(0);
@@ -152,23 +245,20 @@ export class EditorElement {
 
         const textNode = range.startContainer as Text;
         const textBefore = textNode.textContent?.slice(0, range.startOffset) ?? '';
-        if (!textBefore.endsWith('］')) return;
+        if (!textBefore.endsWith(endChar)) return;
 
-        // 縦中横記法: X［＃「X」は縦中横］
-        const annotationMatch = textBefore.match(/［＃「([^「」\n]+)」は縦中横］$/);
+        const annotationMatch = textBefore.match(re);
         if (!annotationMatch) return;
 
-        const tcyContent = annotationMatch[1];
+        const content = annotationMatch[1];
         const annotationStart = range.startOffset - annotationMatch[0].length;
-        if (!textBefore.slice(0, annotationStart).endsWith(tcyContent)) return;
-
-        const tcyStart = annotationStart - tcyContent.length;
+        if (!textBefore.slice(0, annotationStart).endsWith(content)) return;
 
         this.replaceTextWithElement(
             textNode,
-            tcyStart,
+            annotationStart - content.length,
             range.startOffset,
-            this.createTcyEl(tcyContent),
+            createElement(content),
         );
     }
 
@@ -191,6 +281,7 @@ export class EditorElement {
         while (el && el !== this.el) {
             if (el.tagName === 'RUBY') return el;
             if (el.tagName === 'SPAN' && el.getAttribute('data-tcy') === 'explicit') return el;
+            if (el.tagName === 'SPAN' && el.getAttribute('data-bouten')) return el;
             el = el.parentElement;
         }
         return null;
@@ -259,7 +350,7 @@ export class EditorElement {
                 return prefix + offset;
             }
         } else {
-            // <span data-tcy="explicit">: raw = 'X［＃「X」は縦中横］'
+            // <span data-tcy="explicit"> / <span data-bouten>: raw = 'X［＃「X」は縦中横/に傍点］'
             // コンテンツ部分 (X) は先頭にある
             return offset;
         }
@@ -271,6 +362,7 @@ export class EditorElement {
         const result = this.applyParsers(text, [
             t => this.splitByExplicitRuby(t),
             t => this.splitByExplicitTcy(t),
+            t => this.splitByExplicitBouten(t),
             t => this.splitByImplicitRuby(t),
         ]);
         return result.replace(/\n/g, '<br>');
@@ -317,31 +409,48 @@ export class EditorElement {
 
     // 明示縦中横 X［＃「X」は縦中横］ を分割する
     private splitByExplicitTcy(text: string): ParseSegment[] {
+        return this.splitByAnnotation(
+            text,
+            /［＃「([^「」\n]+)」は縦中横］/g,
+            c => `<span data-tcy="explicit" class="tcy">${this.esc(c)}</span>`,
+        );
+    }
+
+    // 傍点 base［＃「base」に傍点］ を分割する
+    private splitByExplicitBouten(text: string): ParseSegment[] {
+        return this.splitByAnnotation(
+            text,
+            /［＃「([^「」\n]+)」に傍点］/g,
+            c => `<span data-bouten="sesame" class="bouten">${this.esc(c)}</span>`,
+        );
+    }
+
+    // 前方参照型アノテーション記法「content［＃「content」...］」の共通分割ロジック
+    private splitByAnnotation(
+        text: string,
+        re: RegExp,
+        buildHtml: (content: string) => string,
+    ): ParseSegment[] {
         const result: ParseSegment[] = [];
-        const re = /［＃「([^「」\n]+)」は縦中横］/g;
         let lastIndex = 0;
         let m: RegExpExecArray | null;
 
         while ((m = re.exec(text)) !== null) {
-            const tcyContent = m[1];
+            const content = m[1];
             const annotationStart = m.index;
 
-            // 注記の直前（lastIndex から annotationStart まで）が tcyContent で終わっていなければ無効
-            if (!text.slice(lastIndex, annotationStart).endsWith(tcyContent)) {
-                // 無効な注記: re.lastIndex まで明示的にテキストとして追加し lastIndex を進める
+            // 注記の直前が content で終わっていなければ無効（re.lastIndex まで進めてスキップ）
+            if (!text.slice(lastIndex, annotationStart).endsWith(content)) {
                 result.push({ type: 'text', text: text.slice(lastIndex, re.lastIndex) });
                 lastIndex = re.lastIndex;
                 continue;
             }
 
-            const tcyStart = annotationStart - tcyContent.length;
-            if (tcyStart > lastIndex) {
-                result.push({ type: 'text', text: text.slice(lastIndex, tcyStart) });
+            const contentStart = annotationStart - content.length;
+            if (contentStart > lastIndex) {
+                result.push({ type: 'text', text: text.slice(lastIndex, contentStart) });
             }
-            result.push({
-                type: 'html',
-                html: `<span data-tcy="explicit" class="tcy">${this.esc(tcyContent)}</span>`,
-            });
+            result.push({ type: 'html', html: buildHtml(content) });
             lastIndex = re.lastIndex;
         }
         if (lastIndex < text.length) {
@@ -400,6 +509,10 @@ export class EditorElement {
                 if (tcy === 'explicit') {
                     const content = node.textContent ?? '';
                     return `${content}［＃「${content}」は縦中横］`;
+                }
+                if (node.getAttribute('data-bouten')) {
+                    const content = node.textContent ?? '';
+                    return `${content}［＃「${content}」に傍点］`;
                 }
                 // tate-editing スパンや不明なスパン: 子ノードをシリアライズ
                 return Array.from(node.childNodes)
@@ -541,6 +654,14 @@ export class EditorElement {
         const span = document.createElement('span');
         span.setAttribute('data-tcy', 'explicit');
         span.className = 'tcy';
+        span.textContent = content;
+        return span;
+    }
+
+    private createBoutenEl(content: string): HTMLElement {
+        const span = document.createElement('span');
+        span.setAttribute('data-bouten', 'sesame');
+        span.className = 'bouten';
         span.textContent = content;
         return span;
     }

@@ -1,4 +1,4 @@
-import { ItemView, MarkdownView, TFile, WorkspaceLeaf } from 'obsidian';
+import { ItemView, MarkdownView, Notice, TFile, WorkspaceLeaf } from 'obsidian';
 import type TatePlugin from './main';
 import { SyncCoordinator } from './sync/SyncCoordinator';
 import { EditorElement } from './ui/EditorElement';
@@ -41,11 +41,13 @@ export class VerticalWritingView extends ItemView {
             if (!(e as InputEvent).isComposing) {
                 editorEl.handleRubyCompletion();
                 editorEl.handleTcyCompletion();
+                editorEl.handleBoutenCompletion();
             }
         });
         this.registerDomEvent(editorEl.el, 'compositionend', () => {
             editorEl.handleRubyCompletion();
             editorEl.handleTcyCompletion();
+            editorEl.handleBoutenCompletion();
         });
         this.registerDomEvent(document, 'selectionchange', () => {
             editorEl.handleSelectionChange();
@@ -101,5 +103,18 @@ export class VerticalWritingView extends ItemView {
 
     applySettings(settings: TatePluginSettings): void {
         this.editorEl?.applySettings(settings);
+    }
+
+    applyRuby(): void   { this.applyAnnotation(el => el.wrapSelectionWithRuby()); }
+    applyTcy(): void    { this.applyAnnotation(el => el.wrapSelectionWithTcy()); }
+    applyBouten(): void { this.applyAnnotation(el => el.wrapSelectionWithBouten()); }
+
+    private applyAnnotation(wrap: (el: EditorElement) => boolean): void {
+        if (!this.editorEl) return;
+        if (!wrap(this.editorEl)) {
+            new Notice('テキストを選択してください');
+        } else {
+            this.syncCoordinator?.onEditorChange();
+        }
     }
 }

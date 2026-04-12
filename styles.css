@@ -36,6 +36,12 @@
     text-combine-upright: all;
 }
 
+/* 傍点（胡麻） */
+.tate-editor .bouten {
+    text-emphasis: sesame;
+    text-emphasis-position: over right;
+}
+
 /* インライン展開中の編集スパン */
 .tate-editor .tate-editing {
     background: var(--text-highlight-bg, rgba(255, 208, 0, 0.35));
