@@ -279,6 +279,7 @@ export class EditorElement {
     applySettings(settings: TatePluginSettings): void {
         this.el.style.fontFamily = settings.fontFamily;
         this.el.style.fontSize = `${settings.fontSize}px`;
+        this.el.toggleClass('tate-auto-indent', settings.autoIndent);
     }
 
     adjustWidth(): void { /* no-op: contenteditable div auto-sizes */ }
@@ -340,7 +341,9 @@ export class EditorElement {
         this.expandedEl = null;
 
         const tempDiv = document.createElement('div');
-        tempDiv.innerHTML = this.parseToHtml(rawText);
+        // parseInlineToHtml を使う（parseToHtml は <div> で包むため、段落 <div> 内で
+        // ネストした <div> が生成されてしまう）
+        tempDiv.innerHTML = this.parseInlineToHtml(rawText);
         while (tempDiv.firstChild) {
             parent.insertBefore(tempDiv.firstChild, nextSibling);
         }
@@ -372,14 +375,23 @@ export class EditorElement {
 
     // ---- パーサー（Aozora 記法 → innerHTML） ----
 
+    // ドキュメント全体用: 各段落を <div> で包む（text-indent を段落ごとに適用するため）
     private parseToHtml(text: string): string {
-        const result = this.applyParsers(text, [
+        if (!text) return '';
+        return text
+            .split('\n')
+            .map(line => `<div>${this.parseInlineToHtml(line) || '<br>'}</div>`)
+            .join('');
+    }
+
+    // インライン要素用: <div> で包まずAozora記法をHTML変換する（collapseEditing で使用）
+    private parseInlineToHtml(text: string): string {
+        return this.applyParsers(text, [
             t => this.splitByExplicitRuby(t),
             t => this.splitByExplicitTcy(t),
             t => this.splitByExplicitBouten(t),
             t => this.splitByImplicitRuby(t),
         ]);
-        return result.replace(/\n/g, '<br>');
     }
 
     // テキストにパーサーを順番に適用し、HTML 文字列を返す

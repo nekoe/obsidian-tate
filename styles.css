@@ -31,6 +31,11 @@
     pointer-events: none;
 }
 
+/* 自動字下げ（text-indent は子 div に継承されるため、各段落の行頭が揃う） */
+.tate-editor.tate-auto-indent {
+    text-indent: 1em;
+}
+
 /* 縦中横 */
 .tate-editor .tcy {
     text-combine-upright: all;

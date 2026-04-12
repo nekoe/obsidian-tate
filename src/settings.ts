@@ -4,11 +4,13 @@ import type TatePlugin from './main';
 export interface TatePluginSettings {
     fontFamily: string;
     fontSize: number;
+    autoIndent: boolean;
 }
 
 export const DEFAULT_SETTINGS: TatePluginSettings = {
     fontFamily: '"Hiragino Mincho ProN", "Yu Mincho", "YuMincho", "MS Mincho", serif',
     fontSize: 18,
+    autoIndent: true,
 };
 
 export class TateSettingTab extends PluginSettingTab {
@@ -45,6 +47,17 @@ export class TateSettingTab extends PluginSettingTab {
                 .setDynamicTooltip()
                 .onChange(async (value) => {
                     this.plugin.settings.fontSize = value;
+                    await this.plugin.saveSettings();
+                    this.plugin.applySettingsToAllViews();
+                }));
+
+        new Setting(containerEl)
+            .setName('自動字下げ')
+            .setDesc('各段落の行頭を1文字分インデントする')
+            .addToggle(toggle => toggle
+                .setValue(this.plugin.settings.autoIndent)
+                .onChange(async (value) => {
+                    this.plugin.settings.autoIndent = value;
                     await this.plugin.saveSettings();
                     this.plugin.applySettingsToAllViews();
                 }));
