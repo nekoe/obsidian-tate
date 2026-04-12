@@ -59,15 +59,24 @@ inputイベントと compositionend イベントは `this.registerDomEvent(el, '
 1. 明示ルビ `|base《rt》` → `<ruby data-ruby-explicit="true">`
 2. 明示縦中横 `X［＃「X」は縦中横］` → `<span data-tcy="explicit" class="tcy">`
 3. 省略ルビ `kanji《rt》`（直前の漢字連続を自動検出）→ `<ruby data-ruby-explicit="false">`
-4. 自動縦中横（2〜4桁の連続半角数字）→ `<span data-tcy="auto" class="tcy">`
 
 **シリアライズ**（`serializeNode()` → ファイルテキスト）:
 - `<ruby data-ruby-explicit="true">` → `|base《rt》`
 - `<ruby data-ruby-explicit="false">` → `base《rt》`
 - `<span data-tcy="explicit">` → `X［＃「X」は縦中横］`
-- `<span data-tcy="auto">` → `X`（マークアップなし・表示専用）
+- `<span class="tate-editing">` → 子ノードのテキストをそのまま返す（インライン展開中の生テキスト）
 
-**ライブ変換**: `》` / `］` 入力時に `handleRubyCompletion()` / `handleTcyCompletion()` がDOMを直接書き換える。IME対応のため `input`（`isComposing=false`）と `compositionend` の両方で呼ぶ。DOM操作（テキストノード分割→要素挿入→カーソル配置）は `replaceTextWithElement()` に共通化。
+**ライブ変換**: `》` / `］` 入力時に `handleRubyCompletion()` / `handleTcyCompletion()` がDOMを直接書き換える。IME対応のため `input`（`isComposing=false`）と `compositionend` の両方で呼ぶ。DOM操作（テキストノード分割→要素挿入→カーソル配置）は `replaceTextWithElement()` に共通化。展開中（`expandedEl` が非 null）はライブ変換を行わない。
+
+### インライン展開（Obsidian Markdown エディタ風）
+`document` の `selectionchange` イベントを `registerDomEvent(document, 'selectionchange', ...)` で登録し、カーソル位置に応じて ruby/tcy 要素をその場で展開・収束する。
+
+- **展開**: カーソルが `<ruby>` または `<span data-tcy="explicit">` に入ると `expandForEditing()` が要素を `<span class="tate-editing">` に置換し、Aozora 生テキストを表示する
+- **収束**: カーソルが外れると `collapseEditing()` が `parseToHtml()` で再パースして元の要素に戻す。編集内容は反映される
+- **カーソル位置**: `rawOffsetForExpand()` が ruby（base/rt それぞれ）・tcy のカーソル位置を raw テキスト上のオフセットに変換する
+- **再入防止**: `isModifyingDom` フラグで DOM 操作中の `selectionchange` 再入をブロックする
+- **`setValue()` との競合防止**: `this.expandedEl = null` は `getValue() === content` の早期リターン**より前**に実行すること（detach 済みノード参照を防ぐ）
+- **複数ビュー対策**: `handleSelectionChange()` 先頭で `expandedEl` が null かつカーソルがエディタ外の場合は即リターンする
 
 ### ファイル切り替えの検知
 `file-open` ワークスペースイベントを使う（`active-leaf-change` より正確）。縦書きビュー自身がアクティブになっても `file-open` は発火しないため、表示中のファイルが意図せずリセットされない。
