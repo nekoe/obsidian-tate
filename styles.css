@@ -36,6 +36,14 @@
     text-combine-upright: all;
 }
 
+/* インライン展開中の編集スパン */
+.tate-editor .tate-editing {
+    background: var(--text-highlight-bg, rgba(255, 208, 0, 0.35));
+    border-radius: 2px;
+    outline: 1px dashed var(--color-accent, #705dcf);
+    outline-offset: 2px;
+}
+
 /* スクロールバー調整 */
 .tate-container::-webkit-scrollbar {
     height: 8px;

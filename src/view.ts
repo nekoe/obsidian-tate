@@ -47,6 +47,9 @@ export class VerticalWritingView extends ItemView {
             editorEl.handleRubyCompletion();
             editorEl.handleTcyCompletion();
         });
+        this.registerDomEvent(document, 'selectionchange', () => {
+            editorEl.handleSelectionChange();
+        });
 
         this.registerEvent(
             this.app.vault.on('modify', (file) => {

@@ -10,6 +10,11 @@ type ParseSegment = { type: 'text'; text: string } | { type: 'html'; html: strin
 export class EditorElement {
     readonly el: HTMLDivElement;
 
+    // インライン展開中の編集スパン。null なら展開なし。
+    private expandedEl: HTMLSpanElement | null = null;
+    // selectionchange ハンドラ内での DOM 操作中に再入しないためのガード
+    private isModifyingDom = false;
+
     constructor(container: HTMLElement) {
         this.el = container.createEl('div');
         this.el.addClass('tate-editor');
@@ -25,6 +30,8 @@ export class EditorElement {
     }
 
     setValue(content: string, preserveCursor: boolean): void {
+        // 外部更新時は展開状態をリセット（早期リターンより先に実行）
+        this.expandedEl = null;
         if (this.getValue() === content) return;
 
         if (preserveCursor && document.activeElement === this.el) {
@@ -36,14 +43,74 @@ export class EditorElement {
         }
     }
 
-    // 》が入力されたときに直前のルビ記法を <ruby> 要素に変換する。
-    // input（isComposing=false）および compositionend の後に呼ぶ。
+    // ---- インライン展開/収束（selectionchange から呼ぶ） ----
+
+    // カーソル移動のたびに呼ばれ、ruby/tcy 要素を展開・収束する
+    handleSelectionChange(): void {
+        if (this.isModifyingDom) return;
+        // エディタ外の selectionchange は展開中でない限り早期リターン（複数ビュー対策）
+        const sel0 = window.getSelection();
+        if (!this.expandedEl && (!sel0 || sel0.rangeCount === 0 ||
+            !this.el.contains(sel0.getRangeAt(0).startContainer))) return;
+        this.isModifyingDom = true;
+        try {
+            const sel = window.getSelection();
+            if (!sel || sel.rangeCount === 0) return;
+            const range = sel.getRangeAt(0);
+
+            // カーソルがまだ展開スパン内にある → 何もしない
+            if (this.expandedEl && this.expandedEl.contains(range.startContainer)) {
+                return;
+            }
+
+            // カーソルが展開スパン外に出た → 収束してから意図した位置を復元
+            if (this.expandedEl) {
+                const savedNode = range.startContainer;
+                const savedOffset = range.startOffset;
+
+                this.collapseEditing();
+
+                // ユーザーがカーソルを移動した先（savedNode）を復元する
+                if (savedNode.isConnected && this.el.contains(savedNode)) {
+                    try {
+                        const maxOffset = savedNode.nodeType === Node.TEXT_NODE
+                            ? (savedNode as Text).length
+                            : savedNode.childNodes.length;
+                        const r = document.createRange();
+                        r.setStart(savedNode, Math.min(savedOffset, maxOffset));
+                        r.collapse(true);
+                        sel.removeAllRanges();
+                        sel.addRange(r);
+                    } catch { /* ノードが切り離されている場合は無視 */ }
+                }
+            }
+
+            // カーソルがエディタ内にあるか確認
+            if (sel.rangeCount === 0) return;
+            const currentRange = sel.getRangeAt(0);
+            if (!this.el.contains(currentRange.startContainer)) return;
+
+            // 展開可能な要素（ruby/tcy）の中にいれば展開
+            const target = this.findExpandableAncestor(currentRange.startContainer);
+            if (target) {
+                this.expandForEditing(target, currentRange);
+            }
+        } finally {
+            this.isModifyingDom = false;
+        }
+    }
+
+    // ---- ルビ・縦中横ライブ変換（input/compositionend から呼ぶ） ----
+
+    // 》が入力されたときに直前のルビ記法を <ruby> 要素に変換する
     handleRubyCompletion(): void {
+        // 展開中は生テキスト編集中なのでライブ変換しない
+        if (this.expandedEl) return;
+
         const sel = window.getSelection();
         if (!sel || sel.rangeCount === 0) return;
         const range = sel.getRangeAt(0);
         if (range.startContainer.nodeType !== Node.TEXT_NODE) return;
-        // <ruby> 内（ベーステキスト・rt）では変換しない
         if (this.isInsideRuby(range.startContainer)) return;
 
         const textNode = range.startContainer as Text;
@@ -72,14 +139,15 @@ export class EditorElement {
         );
     }
 
-    // ］が入力されたときに直前の縦中横記法を <span class="tcy"> 要素に変換する。
-    // input（isComposing=false）および compositionend の後に呼ぶ。
+    // ］が入力されたときに直前の縦中横記法を <span class="tcy"> 要素に変換する
     handleTcyCompletion(): void {
+        // 展開中は生テキスト編集中なのでライブ変換しない
+        if (this.expandedEl) return;
+
         const sel = window.getSelection();
         if (!sel || sel.rangeCount === 0) return;
         const range = sel.getRangeAt(0);
         if (range.startContainer.nodeType !== Node.TEXT_NODE) return;
-        // <ruby> 内では変換しない
         if (this.isInsideRuby(range.startContainer)) return;
 
         const textNode = range.startContainer as Text;
@@ -92,7 +160,6 @@ export class EditorElement {
 
         const tcyContent = annotationMatch[1];
         const annotationStart = range.startOffset - annotationMatch[0].length;
-        // 注記の直前のテキストが tcyContent で終わっていることを確認
         if (!textBefore.slice(0, annotationStart).endsWith(tcyContent)) return;
 
         const tcyStart = annotationStart - tcyContent.length;
@@ -101,7 +168,7 @@ export class EditorElement {
             textNode,
             tcyStart,
             range.startOffset,
-            this.createTcyEl(tcyContent, 'explicit'),
+            this.createTcyEl(tcyContent),
         );
     }
 
@@ -116,6 +183,88 @@ export class EditorElement {
         this.el.focus();
     }
 
+    // ---- インライン展開/収束 プライベートヘルパー ----
+
+    // node の祖先を遡って最初の展開可能要素（ruby/明示tcy）を返す
+    private findExpandableAncestor(node: Node): HTMLElement | null {
+        let el: HTMLElement | null = node instanceof HTMLElement ? node : node.parentElement;
+        while (el && el !== this.el) {
+            if (el.tagName === 'RUBY') return el;
+            if (el.tagName === 'SPAN' && el.getAttribute('data-tcy') === 'explicit') return el;
+            el = el.parentElement;
+        }
+        return null;
+    }
+
+    // target を生テキストの編集スパンに展開し、カーソルを対応位置に設定する
+    private expandForEditing(target: HTMLElement, range: Range): void {
+        const rawText = this.serializeNode(target);
+        const cursorOffset = this.rawOffsetForExpand(
+            target, range.startContainer, range.startOffset
+        );
+
+        const span = document.createElement('span');
+        span.className = 'tate-editing';
+        span.textContent = rawText;
+
+        target.parentNode!.replaceChild(span, target);
+        this.expandedEl = span;
+
+        const textNode = span.firstChild as Text | null;
+        if (textNode) {
+            const sel = window.getSelection();
+            if (sel) {
+                const r = document.createRange();
+                r.setStart(textNode, Math.min(cursorOffset, textNode.length));
+                r.collapse(true);
+                sel.removeAllRanges();
+                sel.addRange(r);
+            }
+        }
+    }
+
+    // 編集スパンを収束し、内容を再パースして元の位置に挿入する（カーソルは呼び出し元が処理）
+    private collapseEditing(): void {
+        if (!this.expandedEl) return;
+
+        const rawText = this.expandedEl.textContent ?? '';
+        const parent = this.expandedEl.parentNode!;
+        const nextSibling = this.expandedEl.nextSibling;
+
+        parent.removeChild(this.expandedEl);
+        this.expandedEl = null;
+
+        const tempDiv = document.createElement('div');
+        tempDiv.innerHTML = this.parseToHtml(rawText);
+        while (tempDiv.firstChild) {
+            parent.insertBefore(tempDiv.firstChild, nextSibling);
+        }
+    }
+
+    // 要素内のカーソル位置を raw テキスト上の文字オフセットに変換する
+    private rawOffsetForExpand(el: HTMLElement, node: Node, offset: number): number {
+        if (el.tagName === 'RUBY') {
+            const explicit = el.getAttribute('data-ruby-explicit') !== 'false';
+            const prefix = explicit ? 1 : 0; // '|'
+            const baseLen = Array.from(el.childNodes)
+                .filter(n => !(n instanceof HTMLElement && n.tagName === 'RT'))
+                .reduce((sum, n) => sum + (n.textContent?.length ?? 0), 0);
+            const rt = el.querySelector('rt');
+
+            if (rt && rt.contains(node)) {
+                // カーソルが <rt> 内: prefix + base + '《' + offset
+                return prefix + baseLen + 1 + offset;
+            } else {
+                // カーソルがベーステキスト内: prefix + offset
+                return prefix + offset;
+            }
+        } else {
+            // <span data-tcy="explicit">: raw = 'X［＃「X」は縦中横］'
+            // コンテンツ部分 (X) は先頭にある
+            return offset;
+        }
+    }
+
     // ---- パーサー（Aozora 記法 → innerHTML） ----
 
     private parseToHtml(text: string): string {
@@ -123,13 +272,11 @@ export class EditorElement {
             t => this.splitByExplicitRuby(t),
             t => this.splitByExplicitTcy(t),
             t => this.splitByImplicitRuby(t),
-            t => this.splitByAutoTcy(t),
         ]);
         return result.replace(/\n/g, '<br>');
     }
 
-    // テキストにパーサーを順番に適用し、HTML 文字列を返す。
-    // 各パーサーは 'text' セグメントのみを処理し、'html' セグメントはそのまま通過する。
+    // テキストにパーサーを順番に適用し、HTML 文字列を返す
     private applyParsers(
         text: string,
         parsers: Array<(t: string) => ParseSegment[]>
@@ -226,29 +373,6 @@ export class EditorElement {
         return result;
     }
 
-    // 2〜4桁の連続半角数字を自動縦中横として分割する（表示専用・保存時は元テキストに戻す）
-    private splitByAutoTcy(text: string): ParseSegment[] {
-        const re = /(?<![0-9])[0-9]{2,4}(?![0-9])/g;
-        const result: ParseSegment[] = [];
-        let lastIndex = 0;
-        let m: RegExpExecArray | null;
-
-        while ((m = re.exec(text)) !== null) {
-            if (m.index > lastIndex) {
-                result.push({ type: 'text', text: text.slice(lastIndex, m.index) });
-            }
-            result.push({
-                type: 'html',
-                html: `<span data-tcy="auto" class="tcy">${this.esc(m[0])}</span>`,
-            });
-            lastIndex = re.lastIndex;
-        }
-        if (lastIndex < text.length) {
-            result.push({ type: 'text', text: text.slice(lastIndex) });
-        }
-        return result;
-    }
-
     private esc(text: string): string {
         return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     }
@@ -277,10 +401,7 @@ export class EditorElement {
                     const content = node.textContent ?? '';
                     return `${content}［＃「${content}」は縦中横］`;
                 }
-                if (tcy === 'auto') {
-                    // 自動検出分はマークアップなしで保存
-                    return node.textContent ?? '';
-                }
+                // tate-editing スパンや不明なスパン: 子ノードをシリアライズ
                 return Array.from(node.childNodes)
                     .map(n => this.serializeNode(n))
                     .join('');
@@ -296,8 +417,7 @@ export class EditorElement {
                 }
                 return '\n';
             case 'DIV':
-                // Chrome の contenteditable が生成するブロック div。
-                // 前に sibling があれば改行として扱う。
+                // Chrome の contenteditable が生成するブロック div
                 {
                     const content = Array.from(node.childNodes)
                         .map(n => this.serializeNode(n))
@@ -417,9 +537,9 @@ export class EditorElement {
         return rubyEl;
     }
 
-    private createTcyEl(content: string, mode: 'explicit' | 'auto'): HTMLElement {
+    private createTcyEl(content: string): HTMLElement {
         const span = document.createElement('span');
-        span.setAttribute('data-tcy', mode);
+        span.setAttribute('data-tcy', 'explicit');
         span.className = 'tcy';
         span.textContent = content;
         return span;
