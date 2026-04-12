@@ -117,8 +117,8 @@ export class EditorElement {
         const textBefore = textNode.textContent?.slice(0, range.startOffset) ?? '';
         if (!textBefore.endsWith('》')) return;
 
-        // 明示形式を優先: |base《rt》
-        let match = textBefore.match(/\|([^|《》\n]+)《([^《》\n]*)》$/);
+        // 明示形式を優先: ｜base《rt》 または |base《rt》
+        let match = textBefore.match(/[|｜]([^|｜《》\n]+)《([^《》\n]*)》$/);
         let explicit = true;
         if (!match) {
             // 省略形式: 直前の漢字連続部分《rt》
@@ -292,10 +292,10 @@ export class EditorElement {
             .join('');
     }
 
-    // 明示ルビ |base《rt》 を分割する
+    // 明示ルビ ｜base《rt》（または |base《rt》）を分割する
     private splitByExplicitRuby(text: string): ParseSegment[] {
         const result: ParseSegment[] = [];
-        const re = /\|([^|《》\n]+)《([^《》\n]*)》/g;
+        const re = /[|｜]([^|｜《》\n]+)《([^《》\n]*)》/g;
         let lastIndex = 0;
         let m: RegExpExecArray | null;
 
@@ -393,7 +393,7 @@ export class EditorElement {
                     .map(n => this.serializeNode(n))
                     .join('');
                 const rt = node.querySelector('rt')?.textContent ?? '';
-                return explicit ? `|${base}《${rt}》` : `${base}《${rt}》`;
+                return explicit ? `｜${base}《${rt}》` : `${base}《${rt}》`;
             }
             case 'SPAN': {
                 const tcy = node.getAttribute('data-tcy');
