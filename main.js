@@ -140,7 +140,7 @@ var EditorElement = class {
   // 》が入力されたときに直前のルビ記法を <ruby> 要素に変換する。
   // input（isComposing=false）および compositionend の後に呼ぶ。
   handleRubyCompletion() {
-    var _a, _b, _c;
+    var _a, _b;
     const sel = window.getSelection();
     if (!sel || sel.rangeCount === 0) return;
     const range = sel.getRangeAt(0);
@@ -156,27 +156,40 @@ var EditorElement = class {
       explicit = false;
     }
     if (!match) return;
-    const fullMatch = match[0];
     const base = match[1];
     const rt = match[2];
-    const matchStart = range.startOffset - fullMatch.length;
-    const before = textNode.textContent.slice(0, matchStart);
-    const after = textNode.textContent.slice(range.startOffset);
-    const rubyEl = this.createRubyEl(base, rt, explicit);
-    const parent = textNode.parentNode;
-    const afterNode = document.createTextNode(after);
-    parent.insertBefore(afterNode, (_c = textNode.nextSibling) != null ? _c : null);
-    parent.insertBefore(rubyEl, afterNode);
-    if (before) {
-      textNode.textContent = before;
-    } else {
-      parent.removeChild(textNode);
-    }
-    const newRange = document.createRange();
-    newRange.setStartAfter(rubyEl);
-    newRange.collapse(true);
-    sel.removeAllRanges();
-    sel.addRange(newRange);
+    const matchStart = range.startOffset - match[0].length;
+    this.replaceTextWithElement(
+      textNode,
+      matchStart,
+      range.startOffset,
+      this.createRubyEl(base, rt, explicit)
+    );
+  }
+  // ］が入力されたときに直前の縦中横記法を <span class="tcy"> 要素に変換する。
+  // input（isComposing=false）および compositionend の後に呼ぶ。
+  handleTcyCompletion() {
+    var _a, _b;
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return;
+    const range = sel.getRangeAt(0);
+    if (range.startContainer.nodeType !== Node.TEXT_NODE) return;
+    if (this.isInsideRuby(range.startContainer)) return;
+    const textNode = range.startContainer;
+    const textBefore = (_b = (_a = textNode.textContent) == null ? void 0 : _a.slice(0, range.startOffset)) != null ? _b : "";
+    if (!textBefore.endsWith("\uFF3D")) return;
+    const annotationMatch = textBefore.match(/［＃「([^「」\n]+)」は縦中横］$/);
+    if (!annotationMatch) return;
+    const tcyContent = annotationMatch[1];
+    const annotationStart = range.startOffset - annotationMatch[0].length;
+    if (!textBefore.slice(0, annotationStart).endsWith(tcyContent)) return;
+    const tcyStart = annotationStart - tcyContent.length;
+    this.replaceTextWithElement(
+      textNode,
+      tcyStart,
+      range.startOffset,
+      this.createTcyEl(tcyContent, "explicit")
+    );
   }
   applySettings(settings) {
     this.el.style.fontFamily = settings.fontFamily;
@@ -187,14 +200,28 @@ var EditorElement = class {
   focus() {
     this.el.focus();
   }
-  // ---- ルビパーサー（Aozora 記法 → innerHTML） ----
+  // ---- パーサー（Aozora 記法 → innerHTML） ----
   parseToHtml(text) {
-    const segments = this.splitByExplicitRuby(text);
-    const html = segments.map(
-      (seg) => seg.type === "ruby" ? seg.html : this.convertImplicitRuby(seg.text)
-    ).join("");
-    return html.replace(/\n/g, "<br>");
+    const result = this.applyParsers(text, [
+      (t) => this.splitByExplicitRuby(t),
+      (t) => this.splitByExplicitTcy(t),
+      (t) => this.splitByImplicitRuby(t),
+      (t) => this.splitByAutoTcy(t)
+    ]);
+    return result.replace(/\n/g, "<br>");
   }
+  // テキストにパーサーを順番に適用し、HTML 文字列を返す。
+  // 各パーサーは 'text' セグメントのみを処理し、'html' セグメントはそのまま通過する。
+  applyParsers(text, parsers) {
+    let segments = [{ type: "text", text }];
+    for (const parser of parsers) {
+      segments = segments.flatMap(
+        (seg) => seg.type === "text" ? parser(seg.text) : [seg]
+      );
+    }
+    return segments.map((seg) => seg.type === "html" ? seg.html : this.esc(seg.text)).join("");
+  }
+  // 明示ルビ |base《rt》 を分割する
   splitByExplicitRuby(text) {
     const result = [];
     const re = /\|([^|《》\n]+)《([^《》\n]*)》/g;
@@ -205,7 +232,7 @@ var EditorElement = class {
         result.push({ type: "text", text: text.slice(lastIndex, m.index) });
       }
       result.push({
-        type: "ruby",
+        type: "html",
         html: `<ruby data-ruby-explicit="true">${this.esc(m[1])}<rt>${this.esc(m[2])}</rt></ruby>`
       });
       lastIndex = re.lastIndex;
@@ -215,31 +242,83 @@ var EditorElement = class {
     }
     return result;
   }
-  convertImplicitRuby(text) {
+  // 明示縦中横 X［＃「X」は縦中横］ を分割する
+  splitByExplicitTcy(text) {
+    const result = [];
+    const re = /［＃「([^「」\n]+)」は縦中横］/g;
+    let lastIndex = 0;
+    let m;
+    while ((m = re.exec(text)) !== null) {
+      const tcyContent = m[1];
+      const annotationStart = m.index;
+      if (!text.slice(lastIndex, annotationStart).endsWith(tcyContent)) {
+        result.push({ type: "text", text: text.slice(lastIndex, re.lastIndex) });
+        lastIndex = re.lastIndex;
+        continue;
+      }
+      const tcyStart = annotationStart - tcyContent.length;
+      if (tcyStart > lastIndex) {
+        result.push({ type: "text", text: text.slice(lastIndex, tcyStart) });
+      }
+      result.push({
+        type: "html",
+        html: `<span data-tcy="explicit" class="tcy">${this.esc(tcyContent)}</span>`
+      });
+      lastIndex = re.lastIndex;
+    }
+    if (lastIndex < text.length) {
+      result.push({ type: "text", text: text.slice(lastIndex) });
+    }
+    return result;
+  }
+  // 省略ルビ kanji《rt》 を分割する
+  splitByImplicitRuby(text) {
     const re = new RegExp(`(${KANJI_RE_STR})\u300A([^\u300A\u300B\\n]*)\u300B`, "gu");
-    const parts = [];
+    const result = [];
     let lastIndex = 0;
     let m;
     while ((m = re.exec(text)) !== null) {
       if (m.index > lastIndex) {
-        parts.push(this.esc(text.slice(lastIndex, m.index)));
+        result.push({ type: "text", text: text.slice(lastIndex, m.index) });
       }
-      parts.push(
-        `<ruby data-ruby-explicit="false">${this.esc(m[1])}<rt>${this.esc(m[2])}</rt></ruby>`
-      );
+      result.push({
+        type: "html",
+        html: `<ruby data-ruby-explicit="false">${this.esc(m[1])}<rt>${this.esc(m[2])}</rt></ruby>`
+      });
       lastIndex = re.lastIndex;
     }
     if (lastIndex < text.length) {
-      parts.push(this.esc(text.slice(lastIndex)));
+      result.push({ type: "text", text: text.slice(lastIndex) });
     }
-    return parts.join("");
+    return result;
+  }
+  // 2〜4桁の連続半角数字を自動縦中横として分割する（表示専用・保存時は元テキストに戻す）
+  splitByAutoTcy(text) {
+    const re = /(?<![0-9])[0-9]{2,4}(?![0-9])/g;
+    const result = [];
+    let lastIndex = 0;
+    let m;
+    while ((m = re.exec(text)) !== null) {
+      if (m.index > lastIndex) {
+        result.push({ type: "text", text: text.slice(lastIndex, m.index) });
+      }
+      result.push({
+        type: "html",
+        html: `<span data-tcy="auto" class="tcy">${this.esc(m[0])}</span>`
+      });
+      lastIndex = re.lastIndex;
+    }
+    if (lastIndex < text.length) {
+      result.push({ type: "text", text: text.slice(lastIndex) });
+    }
+    return result;
   }
   esc(text) {
     return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   }
   // ---- DOM シリアライザ（innerHTML → Aozora 記法） ----
   serializeNode(node) {
-    var _a, _b, _c, _d;
+    var _a, _b, _c, _d, _e, _f;
     if (node.nodeType === Node.TEXT_NODE) {
       return (_a = node.textContent) != null ? _a : "";
     }
@@ -251,8 +330,19 @@ var EditorElement = class {
         const rt = (_c = (_b = node.querySelector("rt")) == null ? void 0 : _b.textContent) != null ? _c : "";
         return explicit ? `|${base}\u300A${rt}\u300B` : `${base}\u300A${rt}\u300B`;
       }
+      case "SPAN": {
+        const tcy = node.getAttribute("data-tcy");
+        if (tcy === "explicit") {
+          const content = (_d = node.textContent) != null ? _d : "";
+          return `${content}\uFF3B\uFF03\u300C${content}\u300D\u306F\u7E26\u4E2D\u6A2A\uFF3D`;
+        }
+        if (tcy === "auto") {
+          return (_e = node.textContent) != null ? _e : "";
+        }
+        return Array.from(node.childNodes).map((n) => this.serializeNode(n)).join("");
+      }
       case "BR":
-        if (node.parentElement !== this.el && ((_d = node.parentElement) == null ? void 0 : _d.tagName) === "DIV" && node === node.parentElement.lastChild) {
+        if (node.parentElement !== this.el && ((_f = node.parentElement) == null ? void 0 : _f.tagName) === "DIV" && node === node.parentElement.lastChild) {
           return "";
         }
         return "\n";
@@ -324,6 +414,27 @@ var EditorElement = class {
     }
     return false;
   }
+  // テキストノードの [matchStart, matchEnd) を newEl に置き換え、カーソルを newEl 直後に配置する
+  replaceTextWithElement(textNode, matchStart, matchEnd, newEl) {
+    var _a;
+    const before = textNode.textContent.slice(0, matchStart);
+    const after = textNode.textContent.slice(matchEnd);
+    const parent = textNode.parentNode;
+    const afterNode = document.createTextNode(after);
+    parent.insertBefore(afterNode, (_a = textNode.nextSibling) != null ? _a : null);
+    parent.insertBefore(newEl, afterNode);
+    if (before) {
+      textNode.textContent = before;
+    } else {
+      parent.removeChild(textNode);
+    }
+    const sel = window.getSelection();
+    const newRange = document.createRange();
+    newRange.setStartAfter(newEl);
+    newRange.collapse(true);
+    sel.removeAllRanges();
+    sel.addRange(newRange);
+  }
   createRubyEl(base, rt, explicit) {
     const rubyEl = document.createElement("ruby");
     rubyEl.setAttribute("data-ruby-explicit", String(explicit));
@@ -332,6 +443,13 @@ var EditorElement = class {
     rtEl.textContent = rt;
     rubyEl.appendChild(rtEl);
     return rubyEl;
+  }
+  createTcyEl(content, mode) {
+    const span = document.createElement("span");
+    span.setAttribute("data-tcy", mode);
+    span.className = "tcy";
+    span.textContent = content;
+    return span;
   }
 };
 
@@ -370,10 +488,12 @@ var VerticalWritingView = class extends import_obsidian.ItemView {
       syncCoordinator.onEditorChange();
       if (!e.isComposing) {
         editorEl.handleRubyCompletion();
+        editorEl.handleTcyCompletion();
       }
     });
     this.registerDomEvent(editorEl.el, "compositionend", () => {
       editorEl.handleRubyCompletion();
+      editorEl.handleTcyCompletion();
     });
     this.registerEvent(
       this.app.vault.on("modify", (file) => {

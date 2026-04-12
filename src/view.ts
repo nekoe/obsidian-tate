@@ -40,10 +40,12 @@ export class VerticalWritingView extends ItemView {
             syncCoordinator.onEditorChange();
             if (!(e as InputEvent).isComposing) {
                 editorEl.handleRubyCompletion();
+                editorEl.handleTcyCompletion();
             }
         });
         this.registerDomEvent(editorEl.el, 'compositionend', () => {
             editorEl.handleRubyCompletion();
+            editorEl.handleTcyCompletion();
         });
 
         this.registerEvent(
