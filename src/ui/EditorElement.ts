@@ -276,6 +276,16 @@ export class EditorElement {
         );
     }
 
+    // paste イベントハンドラ: リッチテキストを排除してプレーンテキストのみを挿入する
+    handlePaste(e: ClipboardEvent): void {
+        e.preventDefault();
+        const text = e.clipboardData?.getData('text/plain') ?? '';
+        if (!text) return;
+        // execCommand('insertText') はカーソル位置へのプレーンテキスト挿入・選択範囲の置換・
+        // アンドゥ履歴への追加を一括処理する（deprecated だが Electron では動作する）
+        document.execCommand('insertText', false, text);
+    }
+
     applySettings(settings: TatePluginSettings): void {
         this.el.style.fontFamily = settings.fontFamily;
         this.el.style.fontSize = `${settings.fontSize}px`;

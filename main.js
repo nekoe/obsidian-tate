@@ -319,6 +319,14 @@ var EditorElement = class {
       createElement(content)
     );
   }
+  // paste イベントハンドラ: リッチテキストを排除してプレーンテキストのみを挿入する
+  handlePaste(e) {
+    var _a, _b;
+    e.preventDefault();
+    const text = (_b = (_a = e.clipboardData) == null ? void 0 : _a.getData("text/plain")) != null ? _b : "";
+    if (!text) return;
+    document.execCommand("insertText", false, text);
+  }
   applySettings(settings) {
     this.el.style.fontFamily = settings.fontFamily;
     this.el.style.fontSize = `${settings.fontSize}px`;
@@ -688,6 +696,10 @@ var VerticalWritingView = class extends import_obsidian.ItemView {
       (content, preserveCursor) => editorEl.setValue(content, preserveCursor)
     );
     this.syncCoordinator = syncCoordinator;
+    this.registerDomEvent(editorEl.el, "paste", (e) => {
+      editorEl.handlePaste(e);
+      syncCoordinator.onEditorChange();
+    });
     this.registerDomEvent(editorEl.el, "input", (e) => {
       syncCoordinator.onEditorChange();
       if (!e.isComposing) {
