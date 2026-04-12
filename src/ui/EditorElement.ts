@@ -280,6 +280,7 @@ export class EditorElement {
         this.el.style.fontFamily = settings.fontFamily;
         this.el.style.fontSize = `${settings.fontSize}px`;
         this.el.toggleClass('tate-auto-indent', settings.autoIndent);
+        this.el.style.lineBreak = settings.lineBreak;
     }
 
     adjustWidth(): void { /* no-op: contenteditable div auto-sizes */ }

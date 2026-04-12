@@ -5,12 +5,14 @@ export interface TatePluginSettings {
     fontFamily: string;
     fontSize: number;
     autoIndent: boolean;
+    lineBreak: 'normal' | 'strict' | 'loose' | 'anywhere';
 }
 
 export const DEFAULT_SETTINGS: TatePluginSettings = {
     fontFamily: '"Hiragino Mincho ProN", "Yu Mincho", "YuMincho", "MS Mincho", serif',
     fontSize: 18,
     autoIndent: true,
+    lineBreak: 'normal',
 };
 
 export class TateSettingTab extends PluginSettingTab {
@@ -58,6 +60,21 @@ export class TateSettingTab extends PluginSettingTab {
                 .setValue(this.plugin.settings.autoIndent)
                 .onChange(async (value) => {
                     this.plugin.settings.autoIndent = value;
+                    await this.plugin.saveSettings();
+                    this.plugin.applySettingsToAllViews();
+                }));
+
+        new Setting(containerEl)
+            .setName('禁則処理')
+            .setDesc('行頭・行末に置けない文字のルールセット（CSS line-break プロパティ）')
+            .addDropdown(dropdown => dropdown
+                .addOption('normal',   'Normal   — 一般的な禁則ルール')
+                .addOption('strict',   'Strict   — 最も厳格（小書き仮名も行頭不可）')
+                .addOption('loose',    'Loose    — 新聞スタイル（改行を優先）')
+                .addOption('anywhere', 'Anywhere — 禁則なし（どこでも改行）')
+                .setValue(this.plugin.settings.lineBreak)
+                .onChange(async (value) => {
+                    this.plugin.settings.lineBreak = value as TatePluginSettings['lineBreak'];
                     await this.plugin.saveSettings();
                     this.plugin.applySettingsToAllViews();
                 }));

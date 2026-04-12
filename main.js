@@ -122,6 +122,8 @@ var EditorElement = class {
     this.expandedEl = null;
     // selectionchange ハンドラ内での DOM 操作中に再入しないためのガード
     this.isModifyingDom = false;
+    // コマンド実行時に使う選択範囲キャッシュ（コマンドパレット起動でフォーカスが外れた後も保持）
+    this.savedRange = null;
     this.el = container.createEl("div");
     this.el.addClass("tate-editor");
     this.el.setAttribute("contenteditable", "true");
@@ -133,6 +135,7 @@ var EditorElement = class {
   }
   setValue(content, preserveCursor) {
     this.expandedEl = null;
+    this.savedRange = null;
     if (this.getValue() === content) return;
     if (preserveCursor && document.activeElement === this.el) {
       const pos = this.getVisibleOffset();
@@ -145,6 +148,20 @@ var EditorElement = class {
   // ---- インライン展開/収束（selectionchange から呼ぶ） ----
   // カーソル移動のたびに呼ばれ、ruby/tcy 要素を展開・収束する
   handleSelectionChange() {
+    if (!this.isModifyingDom) {
+      const sc = window.getSelection();
+      if (sc && sc.rangeCount > 0) {
+        const rc = sc.getRangeAt(0);
+        if (!rc.collapsed && this.el.contains(rc.startContainer) && this.el.contains(rc.endContainer)) {
+          this.savedRange = {
+            startContainer: rc.startContainer,
+            startOffset: rc.startOffset,
+            endContainer: rc.endContainer,
+            endOffset: rc.endOffset
+          };
+        }
+      }
+    }
     if (this.isModifyingDom) return;
     const sel0 = window.getSelection();
     if (!this.expandedEl && (!sel0 || sel0.rangeCount === 0 || !this.el.contains(sel0.getRangeAt(0).startContainer))) return;
@@ -160,6 +177,7 @@ var EditorElement = class {
         const savedNode = range.startContainer;
         const savedOffset = range.startOffset;
         this.collapseEditing();
+        this.savedRange = null;
         if (savedNode.isConnected && this.el.contains(savedNode)) {
           try {
             const maxOffset = savedNode.nodeType === Node.TEXT_NODE ? savedNode.length : savedNode.childNodes.length;
@@ -196,7 +214,7 @@ var EditorElement = class {
     const textNode = range.startContainer;
     const textBefore = (_b = (_a = textNode.textContent) == null ? void 0 : _a.slice(0, range.startOffset)) != null ? _b : "";
     if (!textBefore.endsWith("\u300B")) return;
-    let match = textBefore.match(/\|([^|《》\n]+)《([^《》\n]*)》$/);
+    let match = textBefore.match(/[|｜]([^|｜《》\n]+)《([^《》\n]*)》$/);
     let explicit = true;
     if (!match) {
       match = textBefore.match(new RegExp(`(${KANJI_RE_STR})\u300A([^\u300A\u300B\\n]*)\u300B$`, "u"));
@@ -215,6 +233,70 @@ var EditorElement = class {
   }
   // ］が入力されたときに直前の縦中横記法を <span class="tcy"> 要素に変換する
   handleTcyCompletion() {
+    this.handleAnnotationCompletion("\uFF3D", /［＃「([^「」\n]+)」は縦中横］$/, (c) => this.createTcyEl(c));
+  }
+  // ---- コマンドパレットから呼ぶ選択ラップメソッド ----
+  // 選択テキストを tate-editing スパンとして展開し、カーソルを《》の間に置く
+  // カーソルがスパン外に出ると collapseEditing() が <ruby> 要素に収束する
+  wrapSelectionWithRuby() {
+    if (this.expandedEl) return false;
+    const r = this.savedRange;
+    if (!r || r.startContainer !== r.endContainer || r.startContainer.nodeType !== Node.TEXT_NODE) return false;
+    const textNode = r.startContainer;
+    const selectedText = textNode.textContent.slice(r.startOffset, r.endOffset);
+    if (!selectedText) return false;
+    const rawText = `\uFF5C${selectedText}\u300A\u300B`;
+    const span = document.createElement("span");
+    span.className = "tate-editing";
+    span.textContent = rawText;
+    this.isModifyingDom = true;
+    try {
+      this.replaceTextWithElement(textNode, r.startOffset, r.endOffset, span);
+      this.expandedEl = span;
+      const spanText = span.firstChild;
+      if (spanText) {
+        this.el.focus();
+        const sel = window.getSelection();
+        const range = document.createRange();
+        range.setStart(spanText, rawText.length - 1);
+        range.collapse(true);
+        sel.removeAllRanges();
+        sel.addRange(range);
+      }
+    } finally {
+      this.isModifyingDom = false;
+    }
+    this.savedRange = null;
+    return true;
+  }
+  // 選択テキストを縦中横要素に変換する
+  wrapSelectionWithTcy() {
+    return this.wrapSelectionWith((c) => this.createTcyEl(c));
+  }
+  // 選択テキストを傍点要素に変換する
+  wrapSelectionWithBouten() {
+    return this.wrapSelectionWith((c) => this.createBoutenEl(c));
+  }
+  // ］が入力されたときに直前の傍点記法を <span class="bouten"> 要素に変換する
+  handleBoutenCompletion() {
+    this.handleAnnotationCompletion("\uFF3D", /［＃「([^「」\n]+)」に傍点］$/, (c) => this.createBoutenEl(c));
+  }
+  // ---- 選択ラップ・アノテーション完了の共通ロジック ----
+  // tcy/bouten など要素置換型ラップの共通実装
+  wrapSelectionWith(createElement) {
+    if (this.expandedEl) return false;
+    const r = this.savedRange;
+    if (!r || r.startContainer !== r.endContainer || r.startContainer.nodeType !== Node.TEXT_NODE) return false;
+    const textNode = r.startContainer;
+    const selectedText = textNode.textContent.slice(r.startOffset, r.endOffset);
+    if (!selectedText) return false;
+    this.el.focus();
+    this.replaceTextWithElement(textNode, r.startOffset, r.endOffset, createElement(selectedText));
+    this.savedRange = null;
+    return true;
+  }
+  // tcy/bouten など終端文字で確定するライブ変換の共通実装
+  handleAnnotationCompletion(endChar, re, createElement) {
     var _a, _b;
     if (this.expandedEl) return;
     const sel = window.getSelection();
@@ -224,23 +306,24 @@ var EditorElement = class {
     if (this.isInsideRuby(range.startContainer)) return;
     const textNode = range.startContainer;
     const textBefore = (_b = (_a = textNode.textContent) == null ? void 0 : _a.slice(0, range.startOffset)) != null ? _b : "";
-    if (!textBefore.endsWith("\uFF3D")) return;
-    const annotationMatch = textBefore.match(/［＃「([^「」\n]+)」は縦中横］$/);
+    if (!textBefore.endsWith(endChar)) return;
+    const annotationMatch = textBefore.match(re);
     if (!annotationMatch) return;
-    const tcyContent = annotationMatch[1];
+    const content = annotationMatch[1];
     const annotationStart = range.startOffset - annotationMatch[0].length;
-    if (!textBefore.slice(0, annotationStart).endsWith(tcyContent)) return;
-    const tcyStart = annotationStart - tcyContent.length;
+    if (!textBefore.slice(0, annotationStart).endsWith(content)) return;
     this.replaceTextWithElement(
       textNode,
-      tcyStart,
+      annotationStart - content.length,
       range.startOffset,
-      this.createTcyEl(tcyContent)
+      createElement(content)
     );
   }
   applySettings(settings) {
     this.el.style.fontFamily = settings.fontFamily;
     this.el.style.fontSize = `${settings.fontSize}px`;
+    this.el.toggleClass("tate-auto-indent", settings.autoIndent);
+    this.el.style.lineBreak = settings.lineBreak;
   }
   adjustWidth() {
   }
@@ -254,6 +337,7 @@ var EditorElement = class {
     while (el && el !== this.el) {
       if (el.tagName === "RUBY") return el;
       if (el.tagName === "SPAN" && el.getAttribute("data-tcy") === "explicit") return el;
+      if (el.tagName === "SPAN" && el.getAttribute("data-bouten")) return el;
       el = el.parentElement;
     }
     return null;
@@ -293,7 +377,7 @@ var EditorElement = class {
     parent.removeChild(this.expandedEl);
     this.expandedEl = null;
     const tempDiv = document.createElement("div");
-    tempDiv.innerHTML = this.parseToHtml(rawText);
+    tempDiv.innerHTML = this.parseInlineToHtml(rawText);
     while (tempDiv.firstChild) {
       parent.insertBefore(tempDiv.firstChild, nextSibling);
     }
@@ -318,13 +402,19 @@ var EditorElement = class {
     }
   }
   // ---- パーサー（Aozora 記法 → innerHTML） ----
+  // ドキュメント全体用: 各段落を <div> で包む（text-indent を段落ごとに適用するため）
   parseToHtml(text) {
-    const result = this.applyParsers(text, [
+    if (!text) return "";
+    return text.split("\n").map((line) => `<div>${this.parseInlineToHtml(line) || "<br>"}</div>`).join("");
+  }
+  // インライン要素用: <div> で包まずAozora記法をHTML変換する（collapseEditing で使用）
+  parseInlineToHtml(text) {
+    return this.applyParsers(text, [
       (t) => this.splitByExplicitRuby(t),
       (t) => this.splitByExplicitTcy(t),
+      (t) => this.splitByExplicitBouten(t),
       (t) => this.splitByImplicitRuby(t)
     ]);
-    return result.replace(/\n/g, "<br>");
   }
   // テキストにパーサーを順番に適用し、HTML 文字列を返す
   applyParsers(text, parsers) {
@@ -336,10 +426,10 @@ var EditorElement = class {
     }
     return segments.map((seg) => seg.type === "html" ? seg.html : this.esc(seg.text)).join("");
   }
-  // 明示ルビ |base《rt》 を分割する
+  // 明示ルビ ｜base《rt》（または |base《rt》）を分割する
   splitByExplicitRuby(text) {
     const result = [];
-    const re = /\|([^|《》\n]+)《([^《》\n]*)》/g;
+    const re = /[|｜]([^|｜《》\n]+)《([^《》\n]*)》/g;
     let lastIndex = 0;
     let m;
     while ((m = re.exec(text)) !== null) {
@@ -359,26 +449,38 @@ var EditorElement = class {
   }
   // 明示縦中横 X［＃「X」は縦中横］ を分割する
   splitByExplicitTcy(text) {
+    return this.splitByAnnotation(
+      text,
+      /［＃「([^「」\n]+)」は縦中横］/g,
+      (c) => `<span data-tcy="explicit" class="tcy">${this.esc(c)}</span>`
+    );
+  }
+  // 傍点 base［＃「base」に傍点］ を分割する
+  splitByExplicitBouten(text) {
+    return this.splitByAnnotation(
+      text,
+      /［＃「([^「」\n]+)」に傍点］/g,
+      (c) => `<span data-bouten="sesame" class="bouten">${this.esc(c)}</span>`
+    );
+  }
+  // 前方参照型アノテーション記法「content［＃「content」...］」の共通分割ロジック
+  splitByAnnotation(text, re, buildHtml) {
     const result = [];
-    const re = /［＃「([^「」\n]+)」は縦中横］/g;
     let lastIndex = 0;
     let m;
     while ((m = re.exec(text)) !== null) {
-      const tcyContent = m[1];
+      const content = m[1];
       const annotationStart = m.index;
-      if (!text.slice(lastIndex, annotationStart).endsWith(tcyContent)) {
+      if (!text.slice(lastIndex, annotationStart).endsWith(content)) {
         result.push({ type: "text", text: text.slice(lastIndex, re.lastIndex) });
         lastIndex = re.lastIndex;
         continue;
       }
-      const tcyStart = annotationStart - tcyContent.length;
-      if (tcyStart > lastIndex) {
-        result.push({ type: "text", text: text.slice(lastIndex, tcyStart) });
+      const contentStart = annotationStart - content.length;
+      if (contentStart > lastIndex) {
+        result.push({ type: "text", text: text.slice(lastIndex, contentStart) });
       }
-      result.push({
-        type: "html",
-        html: `<span data-tcy="explicit" class="tcy">${this.esc(tcyContent)}</span>`
-      });
+      result.push({ type: "html", html: buildHtml(content) });
       lastIndex = re.lastIndex;
     }
     if (lastIndex < text.length) {
@@ -412,7 +514,7 @@ var EditorElement = class {
   }
   // ---- DOM シリアライザ（innerHTML → Aozora 記法） ----
   serializeNode(node) {
-    var _a, _b, _c, _d, _e;
+    var _a, _b, _c, _d, _e, _f;
     if (node.nodeType === Node.TEXT_NODE) {
       return (_a = node.textContent) != null ? _a : "";
     }
@@ -422,7 +524,7 @@ var EditorElement = class {
         const explicit = node.getAttribute("data-ruby-explicit") !== "false";
         const base = Array.from(node.childNodes).filter((n) => !(n instanceof HTMLElement && n.tagName === "RT")).map((n) => this.serializeNode(n)).join("");
         const rt = (_c = (_b = node.querySelector("rt")) == null ? void 0 : _b.textContent) != null ? _c : "";
-        return explicit ? `|${base}\u300A${rt}\u300B` : `${base}\u300A${rt}\u300B`;
+        return explicit ? `\uFF5C${base}\u300A${rt}\u300B` : `${base}\u300A${rt}\u300B`;
       }
       case "SPAN": {
         const tcy = node.getAttribute("data-tcy");
@@ -430,10 +532,14 @@ var EditorElement = class {
           const content = (_d = node.textContent) != null ? _d : "";
           return `${content}\uFF3B\uFF03\u300C${content}\u300D\u306F\u7E26\u4E2D\u6A2A\uFF3D`;
         }
+        if (node.getAttribute("data-bouten")) {
+          const content = (_e = node.textContent) != null ? _e : "";
+          return `${content}\uFF3B\uFF03\u300C${content}\u300D\u306B\u508D\u70B9\uFF3D`;
+        }
         return Array.from(node.childNodes).map((n) => this.serializeNode(n)).join("");
       }
       case "BR":
-        if (node.parentElement !== this.el && ((_e = node.parentElement) == null ? void 0 : _e.tagName) === "DIV" && node === node.parentElement.lastChild) {
+        if (node.parentElement !== this.el && ((_f = node.parentElement) == null ? void 0 : _f.tagName) === "DIV" && node === node.parentElement.lastChild) {
           return "";
         }
         return "\n";
@@ -542,6 +648,13 @@ var EditorElement = class {
     span.textContent = content;
     return span;
   }
+  createBoutenEl(content) {
+    const span = document.createElement("span");
+    span.setAttribute("data-bouten", "sesame");
+    span.className = "bouten";
+    span.textContent = content;
+    return span;
+  }
 };
 
 // src/view.ts
@@ -580,11 +693,13 @@ var VerticalWritingView = class extends import_obsidian.ItemView {
       if (!e.isComposing) {
         editorEl.handleRubyCompletion();
         editorEl.handleTcyCompletion();
+        editorEl.handleBoutenCompletion();
       }
     });
     this.registerDomEvent(editorEl.el, "compositionend", () => {
       editorEl.handleRubyCompletion();
       editorEl.handleTcyCompletion();
+      editorEl.handleBoutenCompletion();
     });
     this.registerDomEvent(document, "selectionchange", () => {
       editorEl.handleSelectionChange();
@@ -633,13 +748,33 @@ var VerticalWritingView = class extends import_obsidian.ItemView {
     var _a;
     (_a = this.editorEl) == null ? void 0 : _a.applySettings(settings);
   }
+  applyRuby() {
+    this.applyAnnotation((el) => el.wrapSelectionWithRuby());
+  }
+  applyTcy() {
+    this.applyAnnotation((el) => el.wrapSelectionWithTcy());
+  }
+  applyBouten() {
+    this.applyAnnotation((el) => el.wrapSelectionWithBouten());
+  }
+  applyAnnotation(wrap) {
+    var _a;
+    if (!this.editorEl) return;
+    if (!wrap(this.editorEl)) {
+      new import_obsidian.Notice("\u30C6\u30AD\u30B9\u30C8\u3092\u9078\u629E\u3057\u3066\u304F\u3060\u3055\u3044");
+    } else {
+      (_a = this.syncCoordinator) == null ? void 0 : _a.onEditorChange();
+    }
+  }
 };
 
 // src/settings.ts
 var import_obsidian2 = require("obsidian");
 var DEFAULT_SETTINGS = {
   fontFamily: '"Hiragino Mincho ProN", "Yu Mincho", "YuMincho", "MS Mincho", serif',
-  fontSize: 18
+  fontSize: 18,
+  autoIndent: true,
+  lineBreak: "normal"
 };
 var TateSettingTab = class extends import_obsidian2.PluginSettingTab {
   constructor(app, plugin) {
@@ -657,6 +792,16 @@ var TateSettingTab = class extends import_obsidian2.PluginSettingTab {
     }));
     new import_obsidian2.Setting(containerEl).setName("\u30D5\u30A9\u30F3\u30C8\u30B5\u30A4\u30BA (px)").setDesc("\u7E26\u66F8\u304D\u30D3\u30E5\u30FC\u306E\u30D5\u30A9\u30F3\u30C8\u30B5\u30A4\u30BA\uFF08\u30D4\u30AF\u30BB\u30EB\uFF09").addSlider((slider) => slider.setLimits(10, 48, 1).setValue(this.plugin.settings.fontSize).setDynamicTooltip().onChange(async (value) => {
       this.plugin.settings.fontSize = value;
+      await this.plugin.saveSettings();
+      this.plugin.applySettingsToAllViews();
+    }));
+    new import_obsidian2.Setting(containerEl).setName("\u81EA\u52D5\u5B57\u4E0B\u3052").setDesc("\u5404\u6BB5\u843D\u306E\u884C\u982D\u30921\u6587\u5B57\u5206\u30A4\u30F3\u30C7\u30F3\u30C8\u3059\u308B").addToggle((toggle) => toggle.setValue(this.plugin.settings.autoIndent).onChange(async (value) => {
+      this.plugin.settings.autoIndent = value;
+      await this.plugin.saveSettings();
+      this.plugin.applySettingsToAllViews();
+    }));
+    new import_obsidian2.Setting(containerEl).setName("\u7981\u5247\u51E6\u7406").setDesc("\u884C\u982D\u30FB\u884C\u672B\u306B\u7F6E\u3051\u306A\u3044\u6587\u5B57\u306E\u30EB\u30FC\u30EB\u30BB\u30C3\u30C8\uFF08CSS line-break \u30D7\u30ED\u30D1\u30C6\u30A3\uFF09").addDropdown((dropdown) => dropdown.addOption("normal", "Normal   \u2014 \u4E00\u822C\u7684\u306A\u7981\u5247\u30EB\u30FC\u30EB").addOption("strict", "Strict   \u2014 \u6700\u3082\u53B3\u683C\uFF08\u5C0F\u66F8\u304D\u4EEE\u540D\u3082\u884C\u982D\u4E0D\u53EF\uFF09").addOption("loose", "Loose    \u2014 \u65B0\u805E\u30B9\u30BF\u30A4\u30EB\uFF08\u6539\u884C\u3092\u512A\u5148\uFF09").addOption("anywhere", "Anywhere \u2014 \u7981\u5247\u306A\u3057\uFF08\u3069\u3053\u3067\u3082\u6539\u884C\uFF09").setValue(this.plugin.settings.lineBreak).onChange(async (value) => {
+      this.plugin.settings.lineBreak = value;
       await this.plugin.saveSettings();
       this.plugin.applySettingsToAllViews();
     }));
@@ -681,6 +826,21 @@ var TatePlugin = class extends import_obsidian3.Plugin {
       name: "Open vertical writing view",
       callback: () => this.activateView()
     });
+    this.addCommand({
+      id: "add-ruby",
+      name: "Ruby: \u9078\u629E\u30C6\u30AD\u30B9\u30C8\u306B\u30EB\u30D3\u3092\u8A2D\u5B9A",
+      callback: () => this.dispatchToView((v) => v.applyRuby())
+    });
+    this.addCommand({
+      id: "add-tcy",
+      name: "TCY: \u9078\u629E\u30C6\u30AD\u30B9\u30C8\u3092\u7E26\u4E2D\u6A2A\u306B\u3059\u308B",
+      callback: () => this.dispatchToView((v) => v.applyTcy())
+    });
+    this.addCommand({
+      id: "add-bouten",
+      name: "BT: \u9078\u629E\u30C6\u30AD\u30B9\u30C8\u306B\u508D\u70B9\u3092\u4ED8\u3051\u308B",
+      callback: () => this.dispatchToView((v) => v.applyBouten())
+    });
     this.addSettingTab(new TateSettingTab(this.app, this));
   }
   async loadSettings() {
@@ -695,6 +855,14 @@ var TatePlugin = class extends import_obsidian3.Plugin {
         leaf.view.applySettings(this.settings);
       }
     });
+  }
+  dispatchToView(action) {
+    const leaves = this.app.workspace.getLeavesOfType(TATE_VIEW_TYPE);
+    if (leaves.length === 0) {
+      new import_obsidian3.Notice("\u7E26\u66F8\u304D\u30D3\u30E5\u30FC\u304C\u958B\u3044\u3066\u3044\u307E\u305B\u3093");
+      return;
+    }
+    action(leaves[0].view);
   }
   async activateView() {
     const existing = this.app.workspace.getLeavesOfType(TATE_VIEW_TYPE);
