@@ -100,6 +100,7 @@ input / compositionend / paste イベントはすべて `this.registerDomEvent(e
 - **選択範囲キャッシュ**: `handleSelectionChange()` の先頭（`isModifyingDom` チェックより前）で、エディタ内に非 collapsed 選択があるとき `savedRange` フィールドに保存する。コマンドパレットを開くとフォーカスが離れるが、エディタ外の selectionchange ではキャッシュを**更新しない**（保持する）ことで、コマンド実行時に選択を復元できる
 - **ルビ**: `wrapSelectionWithRuby()` が `execInsertHtml()` で `<span class="tate-editing" data-ruby-new="1">｜text《》</span>` を挿入する。`data-ruby-new` 属性で挿入したスパンを `querySelector` で特定し（挿入後すぐ属性を除去）、`expandedEl` と `expandedElOriginalText` をセットしてインライン展開状態にする。ユーザーがルビ文字を入力後カーソルを外すと `collapseEditing()` が `execCommand('insertHTML')` で `<ruby>` 要素に収束する
 - **縦中横・傍点**: `wrapSelectionWith()` に共通化。`execInsertHtml()` で選択テキストを要素に置換する。挿入後は `data-wrap-new="1"` 一時属性で要素を特定し、カーソルを要素の**直後**に置く。カーソルが要素内にあると `selectionchange → expandForEditing()` が呼ばれ、Undo 時に DOM と Undo スタックが不整合になって "tcy 30 と普通の 30 が両方残る" バグが発生するため
+- **ライブ変換後のカーソル移動**: `handleRubyCompletion()` / `handleAnnotationCompletion()` でも同様に、`execInsertHtml()` 後に `data-new-el="1"` 一時属性で挿入要素を特定し、カーソルを要素の**直後**に置く。これがないと `execCommand` 後のカーソルが要素内に入り、直後の `selectionchange` で `expandForEditing()` が即座に発火して「`《》` が消えてルビ文字が平文のまま残る」ように見えてしまう
 - **エラー通知**: 選択なし・ビュー未開は `new Notice(...)` で通知。`editorEl` が null のときは `applyAnnotation()` が早期リターンする（誤メッセージを出さない）
 - **同期**: ラップ成功後に `view.ts` の `applyAnnotation()` が `syncCoordinator.onEditorChange()` を呼ぶ（`EditorElement` は `SyncCoordinator` を知らないため）
 
