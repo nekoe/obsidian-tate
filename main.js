@@ -306,9 +306,26 @@ var EditorElement = class {
     const textNode = r.startContainer;
     const selectedText = textNode.textContent.slice(r.startOffset, r.endOffset);
     if (!selectedText) return false;
+    const newEl = createElement(selectedText);
+    newEl.setAttribute("data-wrap-new", "1");
     this.isModifyingDom = true;
     try {
-      this.execInsertHtml(textNode, r.startOffset, r.endOffset, createElement(selectedText).outerHTML);
+      this.execInsertHtml(textNode, r.startOffset, r.endOffset, newEl.outerHTML);
+      const inserted = this.el.querySelector('[data-wrap-new="1"]');
+      if (!inserted) {
+        this.el.querySelectorAll("[data-wrap-new]").forEach(
+          (el) => el.removeAttribute("data-wrap-new")
+        );
+        return false;
+      }
+      inserted.removeAttribute("data-wrap-new");
+      this.el.focus();
+      const sel = window.getSelection();
+      const range = document.createRange();
+      range.setStartAfter(inserted);
+      range.collapse(true);
+      sel.removeAllRanges();
+      sel.addRange(range);
     } finally {
       this.isModifyingDom = false;
     }
@@ -406,6 +423,11 @@ var EditorElement = class {
   collapseEditing() {
     var _a;
     if (!this.expandedEl) return;
+    if (!this.expandedEl.isConnected) {
+      this.expandedEl = null;
+      this.expandedElOriginalText = null;
+      return;
+    }
     const rawText = (_a = this.expandedEl.textContent) != null ? _a : "";
     const hasChanged = this.expandedElOriginalText === null || rawText !== this.expandedElOriginalText;
     const parent = this.expandedEl.parentNode;

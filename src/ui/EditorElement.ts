@@ -259,11 +259,37 @@ export class EditorElement {
         const selectedText = textNode.textContent!.slice(r.startOffset, r.endOffset);
         if (!selectedText) return false;
 
+        // 挿入後に要素を特定するための一時属性を付与する
+        const newEl = createElement(selectedText);
+        newEl.setAttribute('data-wrap-new', '1');
+
         this.isModifyingDom = true;
         try {
             // el.focus() を execCommand より前に呼ぶと Undo スタックに余分なエントリが追加されるため
             // execInsertHtml() で selection 設定と execCommand を一体化する
-            this.execInsertHtml(textNode, r.startOffset, r.endOffset, createElement(selectedText).outerHTML);
+            this.execInsertHtml(textNode, r.startOffset, r.endOffset, newEl.outerHTML);
+
+            // 挿入した要素を特定して一時属性を除去する
+            const inserted = this.el.querySelector('[data-wrap-new="1"]') as HTMLElement | null;
+            if (!inserted) {
+                // execCommand が失敗した場合は残留属性をクリーンアップして終了
+                this.el.querySelectorAll('[data-wrap-new]').forEach(
+                    el => el.removeAttribute('data-wrap-new')
+                );
+                return false;
+            }
+            inserted.removeAttribute('data-wrap-new');
+
+            // カーソルを挿入要素の直後に置く
+            // カーソルが要素内にあると selectionchange → expandForEditing() が呼ばれ、
+            // Undo 時に DOM と Undo スタックが不整合になるため
+            this.el.focus(); // execCommand の後なので Undo スタックに影響しない
+            const sel = window.getSelection()!;
+            const range = document.createRange();
+            range.setStartAfter(inserted);
+            range.collapse(true);
+            sel.removeAllRanges();
+            sel.addRange(range);
         } finally {
             this.isModifyingDom = false;
         }
@@ -378,6 +404,13 @@ export class EditorElement {
     // 編集スパンを収束し、内容を再パースして元の位置に挿入する（カーソルは呼び出し元が処理）
     private collapseEditing(): void {
         if (!this.expandedEl) return;
+        // Undo などで expandedEl が DOM から取り除かれた場合は単純にクリアして終了
+        // （detached ノードに対して parentNode や selectNode を呼ぶと例外が発生するため）
+        if (!this.expandedEl.isConnected) {
+            this.expandedEl = null;
+            this.expandedElOriginalText = null;
+            return;
+        }
 
         const rawText = this.expandedEl.textContent ?? '';
         // 内容が変化した場合は execCommand('insertHTML') でブラウザの Undo スタックに記録する

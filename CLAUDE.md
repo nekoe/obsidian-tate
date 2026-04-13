@@ -85,6 +85,7 @@ input / compositionend / paste イベントはすべて `this.registerDomEvent(e
 - **展開**: カーソルが `<ruby>`・`<span data-tcy="explicit">`・`<span data-bouten>` に入ると `expandForEditing()` が要素を `<span class="tate-editing">` に置換し、Aozora 生テキストを表示する。このとき `expandedElOriginalText` に展開前のテキストを保存する（変化検出用）
 - **収束**: カーソルが外れると `collapseEditing()` が `parseInlineToHtml()` で再パースして元の要素に戻す。編集内容は反映される（`parseToHtml()` を使うと段落 `<div>` の中に `<div>` がネストするため禁止）
 - **収束と Undo スタック**: `collapseEditing()` は内容が変化した場合（`expandedElOriginalText` との比較）のみ `execCommand('insertHTML')` で収束する。変化なし（カーソルが通過しただけ）の場合は生 DOM 操作にして Undo スタックを汚染しない。`execCommand` は `input` イベントを発火するため、`handleRubyCompletion()` / `handleAnnotationCompletion()` の冒頭に `if (this.isModifyingDom) return` ガードを置いて再入をブロックすること
+- **`collapseEditing()` の detached ノード対策**: `collapseEditing()` の先頭で `expandedEl.isConnected` を確認し、false の場合は `expandedEl` / `expandedElOriginalText` をクリアして即リターンする。Undo で編集スパンが DOM から取り除かれたとき、detached ノードに `parentNode` / `selectNode` を呼ぶと例外が発生して `expandedEl = null` が実行されなくなるため（以降のコマンドが `if (this.expandedEl) return false` で常にブロックされる）
 - **カーソル位置**: `rawOffsetForExpand()` が ruby（base/rt それぞれ）・tcy・bouten のカーソル位置を raw テキスト上のオフセットに変換する（tcy/bouten はコンテンツが先頭にあるため `return offset` のみ）
 - **再入防止**: `isModifyingDom` フラグで DOM 操作中の `selectionchange` 再入をブロックする
 - **`setValue()` との競合防止**: `this.expandedEl = null` / `this.expandedElOriginalText = null` / `this.savedRange = null` は `getValue() === content` の早期リターン**より前**に実行すること（detach 済みノード参照を防ぐ）
@@ -96,7 +97,7 @@ input / compositionend / paste イベントはすべて `this.registerDomEvent(e
 
 - **選択範囲キャッシュ**: `handleSelectionChange()` の先頭（`isModifyingDom` チェックより前）で、エディタ内に非 collapsed 選択があるとき `savedRange` フィールドに保存する。コマンドパレットを開くとフォーカスが離れるが、エディタ外の selectionchange ではキャッシュを**更新しない**（保持する）ことで、コマンド実行時に選択を復元できる
 - **ルビ**: `wrapSelectionWithRuby()` が `execInsertHtml()` で `<span class="tate-editing" data-ruby-new="1">｜text《》</span>` を挿入する。`data-ruby-new` 属性で挿入したスパンを `querySelector` で特定し（挿入後すぐ属性を除去）、`expandedEl` と `expandedElOriginalText` をセットしてインライン展開状態にする。ユーザーがルビ文字を入力後カーソルを外すと `collapseEditing()` が `execCommand('insertHTML')` で `<ruby>` 要素に収束する
-- **縦中横・傍点**: `wrapSelectionWith()` に共通化。`execInsertHtml()` で選択テキストを要素に置換する（`el.focus()` を `execCommand` より前に呼ぶと Undo スタックに余分なエントリが追加されるため、`execInsertHtml()` で selection 設定と `execCommand` を一体化する）
+- **縦中横・傍点**: `wrapSelectionWith()` に共通化。`execInsertHtml()` で選択テキストを要素に置換する。挿入後は `data-wrap-new="1"` 一時属性で要素を特定し、カーソルを要素の**直後**に置く。カーソルが要素内にあると `selectionchange → expandForEditing()` が呼ばれ、Undo 時に DOM と Undo スタックが不整合になって "tcy 30 と普通の 30 が両方残る" バグが発生するため
 - **エラー通知**: 選択なし・ビュー未開は `new Notice(...)` で通知。`editorEl` が null のときは `applyAnnotation()` が早期リターンする（誤メッセージを出さない）
 - **同期**: ラップ成功後に `view.ts` の `applyAnnotation()` が `syncCoordinator.onEditorChange()` を呼ぶ（`EditorElement` は `SyncCoordinator` を知らないため）
 
