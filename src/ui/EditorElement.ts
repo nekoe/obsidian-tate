@@ -176,12 +176,23 @@ export class EditorElement {
 
         this.isModifyingDom = true;
         try {
-            this.execInsertHtml(
-                textNode,
-                matchStart,
-                range.startOffset,
-                this.createRubyEl(base, rt, explicit).outerHTML,
-            );
+            const rubyEl = this.createRubyEl(base, rt, explicit);
+            rubyEl.setAttribute('data-new-el', '1');
+            this.execInsertHtml(textNode, matchStart, range.startOffset, rubyEl.outerHTML);
+
+            // 挿入した要素を特定して一時属性を除去し、カーソルを要素の直後に置く
+            // カーソルが ruby 内にあると selectionchange → expandForEditing() が即座に発火するため
+            const inserted = this.el.querySelector('[data-new-el="1"]') as HTMLElement | null;
+            if (inserted) {
+                inserted.removeAttribute('data-new-el');
+                this.el.focus(); // execCommand の後なので Undo スタックに影響しない
+                const afterSel = window.getSelection()!;
+                const r = document.createRange();
+                r.setStartAfter(inserted);
+                r.collapse(true);
+                afterSel.removeAllRanges();
+                afterSel.addRange(r);
+            }
         } finally {
             this.isModifyingDom = false;
         }
@@ -339,12 +350,23 @@ export class EditorElement {
 
         this.isModifyingDom = true;
         try {
-            this.execInsertHtml(
-                textNode,
-                annotationStart - content.length,
-                range.startOffset,
-                createElement(content).outerHTML,
-            );
+            const newEl = createElement(content);
+            newEl.setAttribute('data-new-el', '1');
+            this.execInsertHtml(textNode, annotationStart - content.length, range.startOffset, newEl.outerHTML);
+
+            // 挿入した要素を特定して一時属性を除去し、カーソルを要素の直後に置く
+            // カーソルが要素内にあると selectionchange → expandForEditing() が即座に発火するため
+            const inserted = this.el.querySelector('[data-new-el="1"]') as HTMLElement | null;
+            if (inserted) {
+                inserted.removeAttribute('data-new-el');
+                this.el.focus(); // execCommand の後なので Undo スタックに影響しない
+                const afterSel = window.getSelection()!;
+                const r = document.createRange();
+                r.setStartAfter(inserted);
+                r.collapse(true);
+                afterSel.removeAllRanges();
+                afterSel.addRange(r);
+            }
         } finally {
             this.isModifyingDom = false;
         }

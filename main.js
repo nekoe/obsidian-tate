@@ -237,12 +237,20 @@ var EditorElement = class {
     const matchStart = range.startOffset - match[0].length;
     this.isModifyingDom = true;
     try {
-      this.execInsertHtml(
-        textNode,
-        matchStart,
-        range.startOffset,
-        this.createRubyEl(base, rt, explicit).outerHTML
-      );
+      const rubyEl = this.createRubyEl(base, rt, explicit);
+      rubyEl.setAttribute("data-new-el", "1");
+      this.execInsertHtml(textNode, matchStart, range.startOffset, rubyEl.outerHTML);
+      const inserted = this.el.querySelector('[data-new-el="1"]');
+      if (inserted) {
+        inserted.removeAttribute("data-new-el");
+        this.el.focus();
+        const afterSel = window.getSelection();
+        const r = document.createRange();
+        r.setStartAfter(inserted);
+        r.collapse(true);
+        afterSel.removeAllRanges();
+        afterSel.addRange(r);
+      }
     } finally {
       this.isModifyingDom = false;
     }
@@ -359,12 +367,20 @@ var EditorElement = class {
     if (!textBefore.slice(0, annotationStart).endsWith(content)) return;
     this.isModifyingDom = true;
     try {
-      this.execInsertHtml(
-        textNode,
-        annotationStart - content.length,
-        range.startOffset,
-        createElement(content).outerHTML
-      );
+      const newEl = createElement(content);
+      newEl.setAttribute("data-new-el", "1");
+      this.execInsertHtml(textNode, annotationStart - content.length, range.startOffset, newEl.outerHTML);
+      const inserted = this.el.querySelector('[data-new-el="1"]');
+      if (inserted) {
+        inserted.removeAttribute("data-new-el");
+        this.el.focus();
+        const afterSel = window.getSelection();
+        const r = document.createRange();
+        r.setStartAfter(inserted);
+        r.collapse(true);
+        afterSel.removeAllRanges();
+        afterSel.addRange(r);
+      }
     } finally {
       this.isModifyingDom = false;
     }
