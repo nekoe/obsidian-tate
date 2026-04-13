@@ -124,6 +124,35 @@ input / compositionend / paste イベントはすべて `this.registerDomEvent(e
 - **生DOM操作との使い分け**: `setValue()`（`innerHTML` 直接代入）・`expandForEditing()`（`replaceChild`）・行頭行末の `execInsertHtmlAtBoundary()` は Undo スタックに載せない
 - **`execCommand` は deprecated**: `insertHTML` は `insertText`（ペーストで使用中）と同様に deprecated だが、Electron では安定動作する
 
+### Undo/Redo の完全対応に向けた検討（未実装）
+
+行頭・行末の記法操作が Undo 不可な根本原因は、Chromium の `insertHTML` バグ回避のために直接 DOM 操作に切り替えていること。完全対応の選択肢：
+
+**A. 独自 Undo/Redo スタック（推奨、実装コスト大）**
+
+記法操作のエントリを自前のスタックで管理し、Ctrl+Z を横取りして適用する。
+
+```
+{ undo: () => { /* DOM を操作前に戻す */ }, redo: () => { /* 再適用 */ } }
+```
+
+独自スタックを採用した場合、`execCommand` を記法操作に使う理由がなくなるため、**行中・行頭・行末を問わず全ての記法操作を直接 DOM 操作に統一できる**。その結果：
+- `execInsertHtml` / `execInsertHtmlAtBoundary` の境界分岐が不要になる
+- `collapseEditing()` の `isAtBlockBoundary` 分岐が不要になる
+- `data-new-el` / `data-wrap-new` / `data-ruby-new` 経由の `querySelector` が不要になる（DOM 操作は挿入要素の参照を直接返せる）
+
+最大の課題は**通常入力（キー入力・ペースト）とのスタック整合**：
+- 通常入力はブラウザのネイティブ Undo スタックに積まれるため、2スタックを正しい順序でインターリーブさせる必要がある
+- 通常入力発生時に「ネイティブ Undo 境界」マーカーを独自スタックに記録し、Ctrl+Z 時にマーカーなら `document.execCommand('undo')` へ委譲、そうでなければ独自 Undo を実行する方式が一般的
+
+**B. Chromium バグを回避して execCommand を維持（リスクあり）**
+
+`execCommand('insertText', false, '\u200B')` でゼロ幅スペースを先に挿入して挿入点をブロック境界からずらし、本来の `execCommand('insertHTML')` を実行後にゼロ幅スペースを `execCommand('delete')` で除去する。同一 JS 実行コンテキスト内の連続する `execCommand` が1エントリとしてマージされる挙動を利用するが、仕様外の挙動のため壊れるリスクあり。
+
+**C. 現状維持（Undo 不可を許容）**
+
+行頭・行末への記法適用は比較的まれな操作であり、Undo できなくても手動削除は可能。現時点はこの状態。
+
 ### ペーストのプレーンテキスト化
 `contenteditable` div はデフォルトでクリップボードの `text/html` を優先してペーストするため、インライン展開スパンのスタイルや外部 HTML のスタイルが貼り付けられてしまう。`paste` イベントで `e.preventDefault()` した後、`e.clipboardData.getData('text/plain')` でプレーンテキストのみ取得し、`document.execCommand('insertText', false, text)` で挿入する。`execCommand('insertText')` は deprecated だが Electron では動作し、カーソル位置への挿入・選択範囲の置換・アンドゥ履歴への追加を一括処理できる。
 
