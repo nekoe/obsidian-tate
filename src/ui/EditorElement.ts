@@ -209,11 +209,10 @@ export class EditorElement {
     // カーソルがスパン外に出ると collapseEditing() が <ruby> 要素に収束する
     wrapSelectionWithRuby(): boolean {
         if (this.expandedEl) return false;
-        const r = this.savedRange;
-        if (!r || r.startContainer !== r.endContainer
-            || r.startContainer.nodeType !== Node.TEXT_NODE) return false;
-        const textNode = r.startContainer as Text;
-        const selectedText = textNode.textContent!.slice(r.startOffset, r.endOffset);
+        const resolved = this.resolveSelectionRange();
+        if (!resolved) return false;
+        const { textNode, startOffset, endOffset } = resolved;
+        const selectedText = textNode.textContent!.slice(startOffset, endOffset);
         if (!selectedText) return false;
 
         const rawText = `｜${selectedText}《》`;
@@ -222,9 +221,10 @@ export class EditorElement {
 
         this.isModifyingDom = true;
         try {
-            // el.focus() を execCommand より前に呼ぶと Undo スタックに余分なエントリが追加されるため
-            // execInsertHtml() で selection 設定と execCommand を一体化する
-            this.execInsertHtml(textNode, r.startOffset, r.endOffset, spanHtml);
+            // execCommand('insertHTML') はエディタにフォーカスがないと行頭・行末で正しく動作しないため
+            // execInsertHtml より前に focus() を呼ぶ（isModifyingDom=true で selectionchange を抑制済み）
+            this.el.focus();
+            this.execInsertHtml(textNode, startOffset, endOffset, spanHtml);
 
             const span = this.el.querySelector('[data-ruby-new="1"]') as HTMLSpanElement | null;
             if (!span) {
@@ -277,11 +277,10 @@ export class EditorElement {
     // tcy/bouten など要素置換型ラップの共通実装
     private wrapSelectionWith(createElement: (content: string) => HTMLElement): boolean {
         if (this.expandedEl) return false;
-        const r = this.savedRange;
-        if (!r || r.startContainer !== r.endContainer
-            || r.startContainer.nodeType !== Node.TEXT_NODE) return false;
-        const textNode = r.startContainer as Text;
-        const selectedText = textNode.textContent!.slice(r.startOffset, r.endOffset);
+        const resolved = this.resolveSelectionRange();
+        if (!resolved) return false;
+        const { textNode, startOffset, endOffset } = resolved;
+        const selectedText = textNode.textContent!.slice(startOffset, endOffset);
         if (!selectedText) return false;
 
         // 挿入後に要素を特定するための一時属性を付与する
@@ -290,9 +289,10 @@ export class EditorElement {
 
         this.isModifyingDom = true;
         try {
-            // el.focus() を execCommand より前に呼ぶと Undo スタックに余分なエントリが追加されるため
-            // execInsertHtml() で selection 設定と execCommand を一体化する
-            this.execInsertHtml(textNode, r.startOffset, r.endOffset, newEl.outerHTML);
+            // execCommand('insertHTML') はエディタにフォーカスがないと行頭・行末で正しく動作しないため
+            // execInsertHtml より前に focus() を呼ぶ（isModifyingDom=true で selectionchange を抑制済み）
+            this.el.focus();
+            this.execInsertHtml(textNode, startOffset, endOffset, newEl.outerHTML);
 
             // 挿入した要素を特定して一時属性を除去する
             const inserted = this.el.querySelector('[data-wrap-new="1"]') as HTMLElement | null;
@@ -814,6 +814,39 @@ export class EditorElement {
             parent = parent.parentElement;
         }
         return false;
+    }
+
+    // savedRange を正規化して { textNode, startOffset, endOffset } を返す。
+    // Chrome はブロック末尾（行末）で選択すると endContainer が親 <div> や <br> になることがある。
+    // その場合 textNode.length を endOffset として正規化し、行頭・行末の選択にも対応する。
+    private resolveSelectionRange(): { textNode: Text; startOffset: number; endOffset: number } | null {
+        const r = this.savedRange;
+        if (!r || r.startContainer.nodeType !== Node.TEXT_NODE) return null;
+        const textNode = r.startContainer as Text;
+
+        // 理想ケース: 同一テキストノード内の選択
+        if (r.endContainer === r.startContainer) {
+            if (r.startOffset === r.endOffset) return null; // 空選択
+            return { textNode, startOffset: r.startOffset, endOffset: r.endOffset };
+        }
+
+        // Chrome のブロック末尾選択: endContainer が親要素（<div>）の場合
+        const parent = textNode.parentNode;
+        if (!parent) return null;
+        if (r.endContainer === parent) {
+            const textNodeIdx = Array.from(parent.childNodes).indexOf(textNode);
+            if (textNodeIdx !== -1 && r.endOffset > textNodeIdx) {
+                return { textNode, startOffset: r.startOffset, endOffset: textNode.length };
+            }
+        }
+        // Chrome のブロック末尾選択: endContainer が同じ親の <br> 兄弟の場合
+        if (r.endContainer.nodeType === Node.ELEMENT_NODE &&
+            (r.endContainer as Element).tagName === 'BR' &&
+            r.endContainer.parentNode === parent) {
+            return { textNode, startOffset: r.startOffset, endOffset: textNode.length };
+        }
+
+        return null;
     }
 
     // テキストノードの [matchStart, matchEnd) を html で置き換える

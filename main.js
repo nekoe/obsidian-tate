@@ -264,16 +264,17 @@ var EditorElement = class {
   // カーソルがスパン外に出ると collapseEditing() が <ruby> 要素に収束する
   wrapSelectionWithRuby() {
     if (this.expandedEl) return false;
-    const r = this.savedRange;
-    if (!r || r.startContainer !== r.endContainer || r.startContainer.nodeType !== Node.TEXT_NODE) return false;
-    const textNode = r.startContainer;
-    const selectedText = textNode.textContent.slice(r.startOffset, r.endOffset);
+    const resolved = this.resolveSelectionRange();
+    if (!resolved) return false;
+    const { textNode, startOffset, endOffset } = resolved;
+    const selectedText = textNode.textContent.slice(startOffset, endOffset);
     if (!selectedText) return false;
     const rawText = `\uFF5C${selectedText}\u300A\u300B`;
     const spanHtml = `<span class="tate-editing" data-ruby-new="1">${this.esc(rawText)}</span>`;
     this.isModifyingDom = true;
     try {
-      this.execInsertHtml(textNode, r.startOffset, r.endOffset, spanHtml);
+      this.el.focus();
+      this.execInsertHtml(textNode, startOffset, endOffset, spanHtml);
       const span = this.el.querySelector('[data-ruby-new="1"]');
       if (!span) {
         this.el.querySelectorAll("[data-ruby-new]").forEach(
@@ -316,16 +317,17 @@ var EditorElement = class {
   // tcy/bouten など要素置換型ラップの共通実装
   wrapSelectionWith(createElement) {
     if (this.expandedEl) return false;
-    const r = this.savedRange;
-    if (!r || r.startContainer !== r.endContainer || r.startContainer.nodeType !== Node.TEXT_NODE) return false;
-    const textNode = r.startContainer;
-    const selectedText = textNode.textContent.slice(r.startOffset, r.endOffset);
+    const resolved = this.resolveSelectionRange();
+    if (!resolved) return false;
+    const { textNode, startOffset, endOffset } = resolved;
+    const selectedText = textNode.textContent.slice(startOffset, endOffset);
     if (!selectedText) return false;
     const newEl = createElement(selectedText);
     newEl.setAttribute("data-wrap-new", "1");
     this.isModifyingDom = true;
     try {
-      this.execInsertHtml(textNode, r.startOffset, r.endOffset, newEl.outerHTML);
+      this.el.focus();
+      this.execInsertHtml(textNode, startOffset, endOffset, newEl.outerHTML);
       const inserted = this.el.querySelector('[data-wrap-new="1"]');
       if (!inserted) {
         this.el.querySelectorAll("[data-wrap-new]").forEach(
@@ -738,6 +740,30 @@ var EditorElement = class {
       parent = parent.parentElement;
     }
     return false;
+  }
+  // savedRange を正規化して { textNode, startOffset, endOffset } を返す。
+  // Chrome はブロック末尾（行末）で選択すると endContainer が親 <div> や <br> になることがある。
+  // その場合 textNode.length を endOffset として正規化し、行頭・行末の選択にも対応する。
+  resolveSelectionRange() {
+    const r = this.savedRange;
+    if (!r || r.startContainer.nodeType !== Node.TEXT_NODE) return null;
+    const textNode = r.startContainer;
+    if (r.endContainer === r.startContainer) {
+      if (r.startOffset === r.endOffset) return null;
+      return { textNode, startOffset: r.startOffset, endOffset: r.endOffset };
+    }
+    const parent = textNode.parentNode;
+    if (!parent) return null;
+    if (r.endContainer === parent) {
+      const textNodeIdx = Array.from(parent.childNodes).indexOf(textNode);
+      if (textNodeIdx !== -1 && r.endOffset > textNodeIdx) {
+        return { textNode, startOffset: r.startOffset, endOffset: textNode.length };
+      }
+    }
+    if (r.endContainer.nodeType === Node.ELEMENT_NODE && r.endContainer.tagName === "BR" && r.endContainer.parentNode === parent) {
+      return { textNode, startOffset: r.startOffset, endOffset: textNode.length };
+    }
+    return null;
   }
   // テキストノードの [matchStart, matchEnd) を html で置き換える
   // execCommand('insertHTML') を使うことでブラウザの Undo スタックに記録される
