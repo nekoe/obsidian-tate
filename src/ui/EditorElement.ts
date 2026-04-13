@@ -59,6 +59,20 @@ export class EditorElement {
         // DOM操作外かつエディタ内に非collapsed選択があるときのみキャッシュを更新
         // （外れたときは保持することでコマンドパレット起動後も参照できる）
         if (!this.isModifyingDom) {
+            // expandedEl と DOM の tate-editing スパンを同期させる
+            // Undo が collapseEditing() の execCommand を取り消すと、DOM に editing スパンが
+            // 復活するが expandedEl は null のまま（孤立スパン）になる。
+            // また Chromium がノードを再生成した場合もオブジェクト参照がズレる。
+            // これらを検出して expandedEl を実態に合わせる。
+            if (!this.expandedEl || !this.expandedEl.isConnected) {
+                const actualSpan = this.el.querySelector('span.tate-editing') as HTMLSpanElement | null;
+                if (actualSpan !== this.expandedEl) {
+                    this.expandedEl = actualSpan;
+                    // 元テキスト不明のため null にして hasChanged = true にする
+                    this.expandedElOriginalText = null;
+                }
+            }
+
             const sc = window.getSelection();
             if (sc && sc.rangeCount > 0) {
                 const rc = sc.getRangeAt(0);
@@ -422,6 +436,9 @@ export class EditorElement {
         const nextSibling = this.expandedEl.nextSibling;
 
         if (hasChanged) {
+            // エディタ外クリック等でフォーカスが外れている場合でも execCommand が確実に
+            // 動作するようにフォーカスを戻す（execCommand はフォーカス中の contenteditable に作用する）
+            this.el.focus();
             const sel = window.getSelection()!;
             const r = document.createRange();
             r.selectNode(this.expandedEl);

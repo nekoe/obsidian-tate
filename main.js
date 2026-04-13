@@ -152,6 +152,13 @@ var EditorElement = class {
   // カーソル移動のたびに呼ばれ、ruby/tcy 要素を展開・収束する
   handleSelectionChange() {
     if (!this.isModifyingDom) {
+      if (!this.expandedEl || !this.expandedEl.isConnected) {
+        const actualSpan = this.el.querySelector("span.tate-editing");
+        if (actualSpan !== this.expandedEl) {
+          this.expandedEl = actualSpan;
+          this.expandedElOriginalText = null;
+        }
+      }
       const sc = window.getSelection();
       if (sc && sc.rangeCount > 0) {
         const rc = sc.getRangeAt(0);
@@ -433,6 +440,7 @@ var EditorElement = class {
     const parent = this.expandedEl.parentNode;
     const nextSibling = this.expandedEl.nextSibling;
     if (hasChanged) {
+      this.el.focus();
       const sel = window.getSelection();
       const r = document.createRange();
       r.selectNode(this.expandedEl);
