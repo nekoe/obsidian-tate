@@ -850,41 +850,61 @@ export class EditorElement {
     }
 
     // テキストノードの [matchStart, matchEnd) を html で置き換える
-    // execCommand('insertHTML') を使うことでブラウザの Undo スタックに記録される
+    // 行中（両端がテキストノード境界でない）場合は execCommand('insertHTML') でUndoスタックに記録する。
+    // 行頭（matchStart=0）または行末（matchEnd=textNode.length）の場合、Chromium が
+    // insertHTML をブロック境界として扱い要素を剥ぎ取るバグがあるため、直接DOM操作で代替する。
     private execInsertHtml(
         textNode: Text,
         matchStart: number,
         matchEnd: number,
         html: string,
     ): void {
-        const sel = window.getSelection()!;
-        const r = document.createRange();
-
-        // Chromium は行頭（matchStart=0）や行末（matchEnd=textNode.length）の境界位置で
-        // setStart/setEnd + insertHTML を呼ぶと、ブロック分割が起きて要素が新行に挿入されたり
-        // 消えたりする（<div> 内テキストノードの端を「ブロック境界」と判定するため）。
-        // setStartBefore / setEndAfter を使うと、範囲をテキストノード内オフセットでなく
-        // 「親要素内のノード位置」で表現するため、ブロック分割ロジックが回避される。
-        const inBlock = textNode.parentNode !== this.el;
-        const atStart = inBlock && matchStart === 0;
-        const atEnd   = inBlock && matchEnd === textNode.length;
-
-        if (atStart && atEnd) {
-            r.selectNode(textNode);
-        } else if (atStart) {
-            r.setStartBefore(textNode);
-            r.setEnd(textNode, matchEnd);
-        } else if (atEnd) {
-            r.setStart(textNode, matchStart);
-            r.setEndAfter(textNode);
-        } else {
-            r.setStart(textNode, matchStart);
-            r.setEnd(textNode, matchEnd);
+        if (textNode.parentNode !== this.el &&
+            (matchStart === 0 || matchEnd === textNode.length)) {
+            // ブロック境界ケース: 直接 DOM 操作（Undo スタックへの記録はされない）
+            this.execInsertHtmlAtBoundary(textNode, matchStart, matchEnd, html);
+            return;
         }
 
+        const sel = window.getSelection()!;
+        const r = document.createRange();
+        r.setStart(textNode, matchStart);
+        r.setEnd(textNode, matchEnd);
         sel.removeAllRanges();
         sel.addRange(r);
         document.execCommand('insertHTML', false, html);
+    }
+
+    // execCommand('insertHTML') のブロック境界バグを回避するための直接 DOM 操作代替
+    private execInsertHtmlAtBoundary(
+        textNode: Text,
+        matchStart: number,
+        matchEnd: number,
+        html: string,
+    ): void {
+        const parent = textNode.parentNode!;
+        const nextSibling = textNode.nextSibling;
+
+        const precedingText = textNode.textContent!.slice(0, matchStart);
+        const followingText = textNode.textContent!.slice(matchEnd);
+
+        // HTML をパースして挿入ノードを取得
+        const tempDiv = document.createElement('div');
+        tempDiv.innerHTML = html;
+        const newNodes = Array.from(tempDiv.childNodes);
+
+        parent.removeChild(textNode);
+
+        // 前方テキスト → 新ノード群 → 後方テキスト の順に挿入
+        if (precedingText) {
+            parent.insertBefore(document.createTextNode(precedingText), nextSibling);
+        }
+        for (const node of newNodes) {
+            parent.insertBefore(node, nextSibling);
+        }
+        if (followingText) {
+            parent.insertBefore(document.createTextNode(followingText), nextSibling);
+        }
     }
 
     // インライン編集後の収束時に、アノテーション「」内容がスパン内の前方テキストより

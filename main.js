@@ -766,28 +766,41 @@ var EditorElement = class {
     return null;
   }
   // テキストノードの [matchStart, matchEnd) を html で置き換える
-  // execCommand('insertHTML') を使うことでブラウザの Undo スタックに記録される
+  // 行中（両端がテキストノード境界でない）場合は execCommand('insertHTML') でUndoスタックに記録する。
+  // 行頭（matchStart=0）または行末（matchEnd=textNode.length）の場合、Chromium が
+  // insertHTML をブロック境界として扱い要素を剥ぎ取るバグがあるため、直接DOM操作で代替する。
   execInsertHtml(textNode, matchStart, matchEnd, html) {
+    if (textNode.parentNode !== this.el && (matchStart === 0 || matchEnd === textNode.length)) {
+      this.execInsertHtmlAtBoundary(textNode, matchStart, matchEnd, html);
+      return;
+    }
     const sel = window.getSelection();
     const r = document.createRange();
-    const inBlock = textNode.parentNode !== this.el;
-    const atStart = inBlock && matchStart === 0;
-    const atEnd = inBlock && matchEnd === textNode.length;
-    if (atStart && atEnd) {
-      r.selectNode(textNode);
-    } else if (atStart) {
-      r.setStartBefore(textNode);
-      r.setEnd(textNode, matchEnd);
-    } else if (atEnd) {
-      r.setStart(textNode, matchStart);
-      r.setEndAfter(textNode);
-    } else {
-      r.setStart(textNode, matchStart);
-      r.setEnd(textNode, matchEnd);
-    }
+    r.setStart(textNode, matchStart);
+    r.setEnd(textNode, matchEnd);
     sel.removeAllRanges();
     sel.addRange(r);
     document.execCommand("insertHTML", false, html);
+  }
+  // execCommand('insertHTML') のブロック境界バグを回避するための直接 DOM 操作代替
+  execInsertHtmlAtBoundary(textNode, matchStart, matchEnd, html) {
+    const parent = textNode.parentNode;
+    const nextSibling = textNode.nextSibling;
+    const precedingText = textNode.textContent.slice(0, matchStart);
+    const followingText = textNode.textContent.slice(matchEnd);
+    const tempDiv = document.createElement("div");
+    tempDiv.innerHTML = html;
+    const newNodes = Array.from(tempDiv.childNodes);
+    parent.removeChild(textNode);
+    if (precedingText) {
+      parent.insertBefore(document.createTextNode(precedingText), nextSibling);
+    }
+    for (const node of newNodes) {
+      parent.insertBefore(node, nextSibling);
+    }
+    if (followingText) {
+      parent.insertBefore(document.createTextNode(followingText), nextSibling);
+    }
   }
   // インライン編集後の収束時に、アノテーション「」内容がスパン内の前方テキストより
   // 長い場合に直前テキストノードから取り込むべき文字列を返す。
