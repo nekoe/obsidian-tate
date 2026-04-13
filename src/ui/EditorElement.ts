@@ -448,7 +448,7 @@ export class EditorElement {
             return;
         }
 
-        const rawText = this.expandedEl.textContent ?? '';
+        let rawText = this.expandedEl.textContent ?? '';
         // 内容が変化した場合は execCommand('insertHTML') でブラウザの Undo スタックに記録する
         // 変化なし（カーソルが通過しただけ）の場合は生 DOM 操作で Undo スタックを汚染しない
         const hasChanged = this.expandedElOriginalText === null
@@ -458,12 +458,37 @@ export class EditorElement {
         const nextSibling = this.expandedEl.nextSibling;
 
         if (hasChanged) {
+            // 寛容モード補正: アノテーション「」内容がスパン内の前方テキストより長い場合、
+            // 不足分の文字をスパン直前のテキストノードから取り込む
+            // 例: 前のテキスト「1」+ スパン「30[#「130」縦中横]」→ rawText を「130[#...]」に補正
+            let precedingTextNode: Text | null = null;
+            let precedingChars = '';
+            const extraChars = this.getExtraCharsFromAnnotation(rawText);
+            if (extraChars.length > 0) {
+                const prev = this.expandedEl.previousSibling;
+                if (prev && prev.nodeType === Node.TEXT_NODE) {
+                    const prevText = prev as Text;
+                    if ((prevText.textContent ?? '').endsWith(extraChars)) {
+                        precedingTextNode = prevText;
+                        precedingChars = extraChars;
+                        rawText = precedingChars + rawText;
+                    }
+                }
+            }
+
             // エディタ外クリック等でフォーカスが外れている場合でも execCommand が確実に
             // 動作するようにフォーカスを戻す（execCommand はフォーカス中の contenteditable に作用する）
             this.el.focus();
             const sel = window.getSelection()!;
             const r = document.createRange();
-            r.selectNode(this.expandedEl);
+            if (precedingTextNode) {
+                // 直前テキストの末尾 precedingChars 分も選択に含め、execCommand で一括置換する
+                // これにより Undo スタックに「前テキスト削除 + 新要素挿入」が1エントリとして記録される
+                r.setStart(precedingTextNode, precedingTextNode.length - precedingChars.length);
+                r.setEndAfter(this.expandedEl);
+            } else {
+                r.selectNode(this.expandedEl);
+            }
             sel.removeAllRanges();
             sel.addRange(r);
             const spanRef = this.expandedEl;
@@ -479,6 +504,11 @@ export class EditorElement {
             if (spanRef.isConnected) {
                 const spanParent = spanRef.parentNode!;
                 const spanNext = spanRef.nextSibling;
+                // 前のテキストノードから取り込んだ文字を削除
+                if (precedingTextNode && precedingTextNode.isConnected) {
+                    precedingTextNode.textContent = (precedingTextNode.textContent ?? '')
+                        .slice(0, -precedingChars.length);
+                }
                 spanParent.removeChild(spanRef);
                 const tempDiv = document.createElement('div');
                 tempDiv.innerHTML = html;
@@ -824,6 +854,28 @@ export class EditorElement {
         sel.removeAllRanges();
         sel.addRange(r);
         document.execCommand('insertHTML', false, html);
+    }
+
+    // インライン編集後の収束時に、アノテーション「」内容がスパン内の前方テキストより
+    // 長い場合に直前テキストノードから取り込むべき文字列を返す。
+    // 例: rawText = '30[#「130」縦中横]' → '1' を返す（content.length=3 > leadingLen=2 → 差分=1文字）
+    // 一致する場合（正常アノテーション）は '' を返す。
+    private getExtraCharsFromAnnotation(rawText: string): string {
+        const patterns = [
+            /［＃「([^「」\n]+)」は縦中横］/,
+            /［＃「([^「」\n]+)」に傍点］/,
+        ];
+        for (const re of patterns) {
+            const m = rawText.match(re);
+            if (!m || m.index === undefined) continue;
+            const content = m[1];
+            const leadingText = rawText.slice(0, m.index);
+            if (!leadingText.endsWith(content) && content.length > leadingText.length) {
+                const extraCount = content.length - leadingText.length;
+                return content.slice(0, extraCount);
+            }
+        }
+        return '';
     }
 
     private createRubyEl(base: string, rt: string, explicit: boolean): HTMLElement {

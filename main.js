@@ -444,22 +444,41 @@ var EditorElement = class {
   }
   // 編集スパンを収束し、内容を再パースして元の位置に挿入する（カーソルは呼び出し元が処理）
   collapseEditing() {
-    var _a;
+    var _a, _b, _c;
     if (!this.expandedEl) return;
     if (!this.expandedEl.isConnected) {
       this.expandedEl = null;
       this.expandedElOriginalText = null;
       return;
     }
-    const rawText = (_a = this.expandedEl.textContent) != null ? _a : "";
+    let rawText = (_a = this.expandedEl.textContent) != null ? _a : "";
     const hasChanged = this.expandedElOriginalText === null || rawText !== this.expandedElOriginalText;
     const parent = this.expandedEl.parentNode;
     const nextSibling = this.expandedEl.nextSibling;
     if (hasChanged) {
+      let precedingTextNode = null;
+      let precedingChars = "";
+      const extraChars = this.getExtraCharsFromAnnotation(rawText);
+      if (extraChars.length > 0) {
+        const prev = this.expandedEl.previousSibling;
+        if (prev && prev.nodeType === Node.TEXT_NODE) {
+          const prevText = prev;
+          if (((_b = prevText.textContent) != null ? _b : "").endsWith(extraChars)) {
+            precedingTextNode = prevText;
+            precedingChars = extraChars;
+            rawText = precedingChars + rawText;
+          }
+        }
+      }
       this.el.focus();
       const sel = window.getSelection();
       const r = document.createRange();
-      r.selectNode(this.expandedEl);
+      if (precedingTextNode) {
+        r.setStart(precedingTextNode, precedingTextNode.length - precedingChars.length);
+        r.setEndAfter(this.expandedEl);
+      } else {
+        r.selectNode(this.expandedEl);
+      }
       sel.removeAllRanges();
       sel.addRange(r);
       const spanRef = this.expandedEl;
@@ -470,6 +489,9 @@ var EditorElement = class {
       if (spanRef.isConnected) {
         const spanParent = spanRef.parentNode;
         const spanNext = spanRef.nextSibling;
+        if (precedingTextNode && precedingTextNode.isConnected) {
+          precedingTextNode.textContent = ((_c = precedingTextNode.textContent) != null ? _c : "").slice(0, -precedingChars.length);
+        }
         spanParent.removeChild(spanRef);
         const tempDiv = document.createElement("div");
         tempDiv.innerHTML = html;
@@ -743,6 +765,27 @@ var EditorElement = class {
     sel.removeAllRanges();
     sel.addRange(r);
     document.execCommand("insertHTML", false, html);
+  }
+  // インライン編集後の収束時に、アノテーション「」内容がスパン内の前方テキストより
+  // 長い場合に直前テキストノードから取り込むべき文字列を返す。
+  // 例: rawText = '30[#「130」縦中横]' → '1' を返す（content.length=3 > leadingLen=2 → 差分=1文字）
+  // 一致する場合（正常アノテーション）は '' を返す。
+  getExtraCharsFromAnnotation(rawText) {
+    const patterns = [
+      /［＃「([^「」\n]+)」は縦中横］/,
+      /［＃「([^「」\n]+)」に傍点］/
+    ];
+    for (const re of patterns) {
+      const m = rawText.match(re);
+      if (!m || m.index === void 0) continue;
+      const content = m[1];
+      const leadingText = rawText.slice(0, m.index);
+      if (!leadingText.endsWith(content) && content.length > leadingText.length) {
+        const extraCount = content.length - leadingText.length;
+        return content.slice(0, extraCount);
+      }
+    }
+    return "";
   }
   createRubyEl(base, rt, explicit) {
     const rubyEl = document.createElement("ruby");
