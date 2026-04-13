@@ -770,8 +770,21 @@ var EditorElement = class {
   execInsertHtml(textNode, matchStart, matchEnd, html) {
     const sel = window.getSelection();
     const r = document.createRange();
-    r.setStart(textNode, matchStart);
-    r.setEnd(textNode, matchEnd);
+    const inBlock = textNode.parentNode !== this.el;
+    const atStart = inBlock && matchStart === 0;
+    const atEnd = inBlock && matchEnd === textNode.length;
+    if (atStart && atEnd) {
+      r.selectNode(textNode);
+    } else if (atStart) {
+      r.setStartBefore(textNode);
+      r.setEnd(textNode, matchEnd);
+    } else if (atEnd) {
+      r.setStart(textNode, matchStart);
+      r.setEndAfter(textNode);
+    } else {
+      r.setStart(textNode, matchStart);
+      r.setEnd(textNode, matchEnd);
+    }
     sel.removeAllRanges();
     sel.addRange(r);
     document.execCommand("insertHTML", false, html);

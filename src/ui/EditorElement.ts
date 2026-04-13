@@ -859,8 +859,29 @@ export class EditorElement {
     ): void {
         const sel = window.getSelection()!;
         const r = document.createRange();
-        r.setStart(textNode, matchStart);
-        r.setEnd(textNode, matchEnd);
+
+        // Chromium は行頭（matchStart=0）や行末（matchEnd=textNode.length）の境界位置で
+        // setStart/setEnd + insertHTML を呼ぶと、ブロック分割が起きて要素が新行に挿入されたり
+        // 消えたりする（<div> 内テキストノードの端を「ブロック境界」と判定するため）。
+        // setStartBefore / setEndAfter を使うと、範囲をテキストノード内オフセットでなく
+        // 「親要素内のノード位置」で表現するため、ブロック分割ロジックが回避される。
+        const inBlock = textNode.parentNode !== this.el;
+        const atStart = inBlock && matchStart === 0;
+        const atEnd   = inBlock && matchEnd === textNode.length;
+
+        if (atStart && atEnd) {
+            r.selectNode(textNode);
+        } else if (atStart) {
+            r.setStartBefore(textNode);
+            r.setEnd(textNode, matchEnd);
+        } else if (atEnd) {
+            r.setStart(textNode, matchStart);
+            r.setEndAfter(textNode);
+        } else {
+            r.setStart(textNode, matchStart);
+            r.setEnd(textNode, matchEnd);
+        }
+
         sel.removeAllRanges();
         sel.addRange(r);
         document.execCommand('insertHTML', false, html);
