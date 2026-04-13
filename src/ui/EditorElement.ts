@@ -466,10 +466,24 @@ export class EditorElement {
             r.selectNode(this.expandedEl);
             sel.removeAllRanges();
             sel.addRange(r);
+            const spanRef = this.expandedEl;
             this.expandedEl = null;
             this.expandedElOriginalText = null;
             // parseInlineToHtml を使う（parseToHtml は <div> で包むため段落 <div> 内でネストする）
-            document.execCommand('insertHTML', false, this.parseInlineToHtml(rawText));
+            const html = this.parseInlineToHtml(rawText);
+            document.execCommand('insertHTML', false, html);
+            // execCommand が失敗してスパンが DOM に残っている場合は生 DOM 操作でフォールバック
+            // （フォーカスが外れた状態などで execCommand が失敗しても確実に収束させるため）
+            if (spanRef.isConnected) {
+                const spanParent = spanRef.parentNode!;
+                const spanNext = spanRef.nextSibling;
+                spanParent.removeChild(spanRef);
+                const tempDiv = document.createElement('div');
+                tempDiv.innerHTML = html;
+                while (tempDiv.firstChild) {
+                    spanParent.insertBefore(tempDiv.firstChild, spanNext);
+                }
+            }
         } else {
             parent.removeChild(this.expandedEl);
             this.expandedEl = null;

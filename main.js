@@ -462,9 +462,21 @@ var EditorElement = class {
       r.selectNode(this.expandedEl);
       sel.removeAllRanges();
       sel.addRange(r);
+      const spanRef = this.expandedEl;
       this.expandedEl = null;
       this.expandedElOriginalText = null;
-      document.execCommand("insertHTML", false, this.parseInlineToHtml(rawText));
+      const html = this.parseInlineToHtml(rawText);
+      document.execCommand("insertHTML", false, html);
+      if (spanRef.isConnected) {
+        const spanParent = spanRef.parentNode;
+        const spanNext = spanRef.nextSibling;
+        spanParent.removeChild(spanRef);
+        const tempDiv = document.createElement("div");
+        tempDiv.innerHTML = html;
+        while (tempDiv.firstChild) {
+          spanParent.insertBefore(tempDiv.firstChild, spanNext);
+        }
+      }
     } else {
       parent.removeChild(this.expandedEl);
       this.expandedEl = null;
