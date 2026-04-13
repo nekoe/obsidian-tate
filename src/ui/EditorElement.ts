@@ -14,6 +14,8 @@ export class EditorElement {
     private expandedEl: HTMLSpanElement | null = null;
     // selectionchange ハンドラ内での DOM 操作中に再入しないためのガード
     private isModifyingDom = false;
+    // expandForEditing 時のシリアライズ済みテキスト（collapseEditing での変化検出用）
+    private expandedElOriginalText: string | null = null;
     // コマンド実行時に使う選択範囲キャッシュ（コマンドパレット起動でフォーカスが外れた後も保持）
     private savedRange: {
         startContainer: Node; startOffset: number;
@@ -37,6 +39,7 @@ export class EditorElement {
     setValue(content: string, preserveCursor: boolean): void {
         // 外部更新時は展開状態・選択キャッシュをリセット（早期リターンより先に実行）
         this.expandedEl = null;
+        this.expandedElOriginalText = null;
         this.savedRange = null;
         if (this.getValue() === content) return;
 
@@ -129,8 +132,9 @@ export class EditorElement {
 
     // 》が入力されたときに直前のルビ記法を <ruby> 要素に変換する
     handleRubyCompletion(): void {
-        // 展開中は生テキスト編集中なのでライブ変換しない
+        // 展開中、または DOM 操作中（execCommand の再入）はスキップ
         if (this.expandedEl) return;
+        if (this.isModifyingDom) return;
 
         const sel = window.getSelection();
         if (!sel || sel.rangeCount === 0) return;
@@ -156,12 +160,17 @@ export class EditorElement {
         const rt = match[2];
         const matchStart = range.startOffset - match[0].length;
 
-        this.replaceTextWithElement(
-            textNode,
-            matchStart,
-            range.startOffset,
-            this.createRubyEl(base, rt, explicit),
-        );
+        this.isModifyingDom = true;
+        try {
+            this.execInsertHtml(
+                textNode,
+                matchStart,
+                range.startOffset,
+                this.createRubyEl(base, rt, explicit).outerHTML,
+            );
+        } finally {
+            this.isModifyingDom = false;
+        }
     }
 
     // ］が入力されたときに直前の縦中横記法を <span class="tcy"> 要素に変換する
@@ -183,19 +192,31 @@ export class EditorElement {
         if (!selectedText) return false;
 
         const rawText = `｜${selectedText}《》`;
-        const span = document.createElement('span');
-        span.className = 'tate-editing';
-        span.textContent = rawText;
+        // data-ruby-new 属性で挿入後のスパンを特定する（execCommand 後に querySelector で取得）
+        const spanHtml = `<span class="tate-editing" data-ruby-new="1">${this.esc(rawText)}</span>`;
 
         this.isModifyingDom = true;
         try {
-            this.replaceTextWithElement(textNode, r.startOffset, r.endOffset, span);
+            this.el.focus();
+            if (!this.restoreSelection()) return false;
+            // execCommand('insertHTML') でブラウザの Undo スタックに記録する
+            document.execCommand('insertHTML', false, spanHtml);
+
+            const span = this.el.querySelector('[data-ruby-new="1"]') as HTMLSpanElement | null;
+            if (!span) {
+                // 残留属性をクリーンアップしてから抜ける
+                this.el.querySelectorAll('[data-ruby-new]').forEach(
+                    el => el.removeAttribute('data-ruby-new')
+                );
+                return false;
+            }
+            span.removeAttribute('data-ruby-new');
             this.expandedEl = span;
+            this.expandedElOriginalText = rawText;
 
             // カーソルを《と》の間（rawText.length - 1 = 》の直前）に設定
             const spanText = span.firstChild as Text | null;
             if (spanText) {
-                this.el.focus();
                 const sel = window.getSelection()!;
                 const range = document.createRange();
                 range.setStart(spanText, rawText.length - 1);
@@ -238,10 +259,35 @@ export class EditorElement {
         const selectedText = textNode.textContent!.slice(r.startOffset, r.endOffset);
         if (!selectedText) return false;
 
-        this.el.focus();
-        this.replaceTextWithElement(textNode, r.startOffset, r.endOffset, createElement(selectedText));
+        this.isModifyingDom = true;
+        try {
+            this.el.focus();
+            if (!this.restoreSelection()) return false;
+            // execCommand('insertHTML') でブラウザの Undo スタックに記録する
+            document.execCommand('insertHTML', false, createElement(selectedText).outerHTML);
+        } finally {
+            this.isModifyingDom = false;
+        }
         this.savedRange = null;
         return true;
+    }
+
+    // savedRange をブラウザの Selection に復元する（コマンド実行前に呼ぶ）
+    private restoreSelection(): boolean {
+        const r = this.savedRange;
+        if (!r) return false;
+        const sel = window.getSelection();
+        if (!sel) return false;
+        try {
+            const range = document.createRange();
+            range.setStart(r.startContainer, r.startOffset);
+            range.setEnd(r.endContainer, r.endOffset);
+            sel.removeAllRanges();
+            sel.addRange(range);
+            return true;
+        } catch {
+            return false;
+        }
     }
 
     // tcy/bouten など終端文字で確定するライブ変換の共通実装
@@ -250,7 +296,9 @@ export class EditorElement {
         re: RegExp,
         createElement: (content: string) => HTMLElement,
     ): void {
+        // 展開中、または DOM 操作中（execCommand の再入）はスキップ
         if (this.expandedEl) return;
+        if (this.isModifyingDom) return;
         const sel = window.getSelection();
         if (!sel || sel.rangeCount === 0) return;
         const range = sel.getRangeAt(0);
@@ -268,12 +316,17 @@ export class EditorElement {
         const annotationStart = range.startOffset - annotationMatch[0].length;
         if (!textBefore.slice(0, annotationStart).endsWith(content)) return;
 
-        this.replaceTextWithElement(
-            textNode,
-            annotationStart - content.length,
-            range.startOffset,
-            createElement(content),
-        );
+        this.isModifyingDom = true;
+        try {
+            this.execInsertHtml(
+                textNode,
+                annotationStart - content.length,
+                range.startOffset,
+                createElement(content).outerHTML,
+            );
+        } finally {
+            this.isModifyingDom = false;
+        }
     }
 
     // paste イベントハンドラ: リッチテキストを排除してプレーンテキストのみを挿入する
@@ -326,6 +379,7 @@ export class EditorElement {
 
         target.parentNode!.replaceChild(span, target);
         this.expandedEl = span;
+        this.expandedElOriginalText = rawText; // collapseEditing での変化検出用
 
         const textNode = span.firstChild as Text | null;
         if (textNode) {
@@ -345,18 +399,34 @@ export class EditorElement {
         if (!this.expandedEl) return;
 
         const rawText = this.expandedEl.textContent ?? '';
+        // 内容が変化した場合は execCommand('insertHTML') でブラウザの Undo スタックに記録する
+        // 変化なし（カーソルが通過しただけ）の場合は生 DOM 操作で Undo スタックを汚染しない
+        const hasChanged = this.expandedElOriginalText === null
+            || rawText !== this.expandedElOriginalText;
+
         const parent = this.expandedEl.parentNode!;
         const nextSibling = this.expandedEl.nextSibling;
 
-        parent.removeChild(this.expandedEl);
-        this.expandedEl = null;
+        if (hasChanged) {
+            const sel = window.getSelection()!;
+            const r = document.createRange();
+            r.selectNode(this.expandedEl);
+            sel.removeAllRanges();
+            sel.addRange(r);
+            this.expandedEl = null;
+            this.expandedElOriginalText = null;
+            // parseInlineToHtml を使う（parseToHtml は <div> で包むため段落 <div> 内でネストする）
+            document.execCommand('insertHTML', false, this.parseInlineToHtml(rawText));
+        } else {
+            parent.removeChild(this.expandedEl);
+            this.expandedEl = null;
+            this.expandedElOriginalText = null;
 
-        const tempDiv = document.createElement('div');
-        // parseInlineToHtml を使う（parseToHtml は <div> で包むため、段落 <div> 内で
-        // ネストした <div> が生成されてしまう）
-        tempDiv.innerHTML = this.parseInlineToHtml(rawText);
-        while (tempDiv.firstChild) {
-            parent.insertBefore(tempDiv.firstChild, nextSibling);
+            const tempDiv = document.createElement('div');
+            tempDiv.innerHTML = this.parseInlineToHtml(rawText);
+            while (tempDiv.firstChild) {
+                parent.insertBefore(tempDiv.firstChild, nextSibling);
+            }
         }
     }
 
@@ -649,32 +719,21 @@ export class EditorElement {
         return false;
     }
 
-    // テキストノードの [matchStart, matchEnd) を newEl に置き換え、カーソルを newEl 直後に配置する
-    private replaceTextWithElement(
+    // テキストノードの [matchStart, matchEnd) を html で置き換える
+    // execCommand('insertHTML') を使うことでブラウザの Undo スタックに記録される
+    private execInsertHtml(
         textNode: Text,
         matchStart: number,
         matchEnd: number,
-        newEl: HTMLElement,
+        html: string,
     ): void {
-        const before = textNode.textContent!.slice(0, matchStart);
-        const after = textNode.textContent!.slice(matchEnd);
-        const parent = textNode.parentNode!;
-        const afterNode = document.createTextNode(after);
-
-        parent.insertBefore(afterNode, textNode.nextSibling ?? null);
-        parent.insertBefore(newEl, afterNode);
-        if (before) {
-            textNode.textContent = before;
-        } else {
-            parent.removeChild(textNode);
-        }
-
         const sel = window.getSelection()!;
-        const newRange = document.createRange();
-        newRange.setStartAfter(newEl);
-        newRange.collapse(true);
+        const r = document.createRange();
+        r.setStart(textNode, matchStart);
+        r.setEnd(textNode, matchEnd);
         sel.removeAllRanges();
-        sel.addRange(newRange);
+        sel.addRange(r);
+        document.execCommand('insertHTML', false, html);
     }
 
     private createRubyEl(base: string, rt: string, explicit: boolean): HTMLElement {

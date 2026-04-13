@@ -77,16 +77,17 @@ input / compositionend / paste イベントはすべて `this.registerDomEvent(e
 
 **ルビ区切り文字 `｜` の表示制御**: シリアライズは全角 `｜` で統一し、収束時は `<ruby>` 要素内なので不可視。インライン展開時の生テキストとしてのみ可視になる。
 
-**ライブ変換**: `》`/`］` 入力時に `handleRubyCompletion()` / `handleTcyCompletion()` / `handleBoutenCompletion()` がDOMを直接書き換える。IME対応のため `input`（`isComposing=false`）と `compositionend` の両方で呼ぶ。DOM操作（テキストノード分割→要素挿入→カーソル配置）は `replaceTextWithElement()` に共通化。`handleTcyCompletion` と `handleBoutenCompletion` は `handleAnnotationCompletion()` に共通化。展開中（`expandedEl` が非 null）はライブ変換を行わない。
+**ライブ変換**: `》`/`］` 入力時に `handleRubyCompletion()` / `handleTcyCompletion()` / `handleBoutenCompletion()` が記法を要素に変換する。IME対応のため `input`（`isComposing=false`）と `compositionend` の両方で呼ぶ。テキスト範囲の選択 + `execCommand('insertHTML')` による置換は `execInsertHtml()` に共通化（Undo スタックへの記録も兼ねる）。`handleTcyCompletion` と `handleBoutenCompletion` は `handleAnnotationCompletion()` に共通化。展開中（`expandedEl` が非 null）または DOM 操作中（`isModifyingDom` が true）はライブ変換を行わない（`execCommand` の再入防止）。
 
 ### インライン展開（Obsidian Markdown エディタ風）
 `document` の `selectionchange` イベントを `registerDomEvent(document, 'selectionchange', ...)` で登録し、カーソル位置に応じて ruby/tcy/bouten 要素をその場で展開・収束する。
 
-- **展開**: カーソルが `<ruby>`・`<span data-tcy="explicit">`・`<span data-bouten>` に入ると `expandForEditing()` が要素を `<span class="tate-editing">` に置換し、Aozora 生テキストを表示する
+- **展開**: カーソルが `<ruby>`・`<span data-tcy="explicit">`・`<span data-bouten>` に入ると `expandForEditing()` が要素を `<span class="tate-editing">` に置換し、Aozora 生テキストを表示する。このとき `expandedElOriginalText` に展開前のテキストを保存する（変化検出用）
 - **収束**: カーソルが外れると `collapseEditing()` が `parseInlineToHtml()` で再パースして元の要素に戻す。編集内容は反映される（`parseToHtml()` を使うと段落 `<div>` の中に `<div>` がネストするため禁止）
+- **収束と Undo スタック**: `collapseEditing()` は内容が変化した場合（`expandedElOriginalText` との比較）のみ `execCommand('insertHTML')` で収束する。変化なし（カーソルが通過しただけ）の場合は生 DOM 操作にして Undo スタックを汚染しない。`execCommand` は `input` イベントを発火するため、`handleRubyCompletion()` / `handleAnnotationCompletion()` の冒頭に `if (this.isModifyingDom) return` ガードを置いて再入をブロックすること
 - **カーソル位置**: `rawOffsetForExpand()` が ruby（base/rt それぞれ）・tcy・bouten のカーソル位置を raw テキスト上のオフセットに変換する（tcy/bouten はコンテンツが先頭にあるため `return offset` のみ）
 - **再入防止**: `isModifyingDom` フラグで DOM 操作中の `selectionchange` 再入をブロックする
-- **`setValue()` との競合防止**: `this.expandedEl = null` と `this.savedRange = null` は `getValue() === content` の早期リターン**より前**に実行すること（detach 済みノード参照を防ぐ）
+- **`setValue()` との競合防止**: `this.expandedEl = null` / `this.expandedElOriginalText = null` / `this.savedRange = null` は `getValue() === content` の早期リターン**より前**に実行すること（detach 済みノード参照を防ぐ）
 - **`collapseEditing()` 後の `savedRange` クリア**: `collapseEditing()` は DOM を再構築するため、その直後に `this.savedRange = null` を実行して stale ノード参照を破棄する
 - **複数ビュー対策**: `handleSelectionChange()` 先頭で `expandedEl` が null かつカーソルがエディタ外の場合は即リターンする
 
@@ -94,13 +95,25 @@ input / compositionend / paste イベントはすべて `this.registerDomEvent(e
 `add-ruby` / `add-tcy` / `add-bouten` コマンドで選択テキストに記法を適用できる。
 
 - **選択範囲キャッシュ**: `handleSelectionChange()` の先頭（`isModifyingDom` チェックより前）で、エディタ内に非 collapsed 選択があるとき `savedRange` フィールドに保存する。コマンドパレットを開くとフォーカスが離れるが、エディタ外の selectionchange ではキャッシュを**更新しない**（保持する）ことで、コマンド実行時に選択を復元できる
-- **ルビ**: `wrapSelectionWithRuby()` が選択テキストを `｜text《》` とした `<span class="tate-editing">` スパンとして挿入し、`expandedEl` をセットしてインライン展開状態にする。ユーザーがルビ文字を入力後カーソルを外すと `collapseEditing()` が `<ruby>` 要素に収束する
-- **縦中横・傍点**: `wrapSelectionWith()` に共通化。`savedRange` の選択テキストを `replaceTextWithElement()` で要素に置換する
+- **ルビ**: `wrapSelectionWithRuby()` が `restoreSelection()` で選択を復元した後、`execCommand('insertHTML')` で `<span class="tate-editing" data-ruby-new="1">｜text《》</span>` を挿入する。`data-ruby-new` 属性で挿入したスパンを `querySelector` で特定し（挿入後すぐ属性を除去）、`expandedEl` と `expandedElOriginalText` をセットしてインライン展開状態にする。ユーザーがルビ文字を入力後カーソルを外すと `collapseEditing()` が `execCommand('insertHTML')` で `<ruby>` 要素に収束する
+- **縦中横・傍点**: `wrapSelectionWith()` に共通化。`restoreSelection()` で選択を復元してから `execCommand('insertHTML')` で要素を挿入する
+- **`restoreSelection()`**: `savedRange` をブラウザの `Selection` に復元するヘルパー。コマンドパレット起動でフォーカスが外れた後もキャッシュされた範囲を復元できる。失敗（stale ノード参照など）は `false` を返す
 - **エラー通知**: 選択なし・ビュー未開は `new Notice(...)` で通知。`editorEl` が null のときは `applyAnnotation()` が早期リターンする（誤メッセージを出さない）
 - **同期**: ラップ成功後に `view.ts` の `applyAnnotation()` が `syncCoordinator.onEditorChange()` を呼ぶ（`EditorElement` は `SyncCoordinator` を知らないため）
 
 ### ファイル切り替えの検知
 `file-open` ワークスペースイベントを使う（`active-leaf-change` より正確）。縦書きビュー自身がアクティブになっても `file-open` は発火しないため、表示中のファイルが意図せずリセットされない。
+
+### Undo/Redo 対応
+記法適用操作（ライブ変換・コマンド）はすべて `document.execCommand('insertHTML')` 経由でブラウザの Undo スタックに記録する。これにより通常入力（キーボード）・ペーストと同一スタックで自然に共存し、ブラウザが Redo（Cmd+Shift+Z）も自動提供する。
+
+- **`execInsertHtml(textNode, start, end, html)`**: テキストノードの `[start, end)` を選択してから `execCommand('insertHTML')` で置換するヘルパー。ライブ変換と収束の共通処理
+- **Undo の粒度**:
+  - コマンド（tcy/bouten）: 1回のUndoで選択テキストに戻る
+  - コマンド（ルビ）: Undoでルビ文字入力を1文字ずつ戻し、最後にコマンド実行前のテキストに戻る
+  - ライブ変換（`》`/`］`）: 1回のUndoで変換前のAozora生テキストに戻る
+- **生DOM操作との使い分け**: `setValue()`（`innerHTML` 直接代入）と `expandForEditing()`（`replaceChild`）は Undo スタックに載せない。これらは外部変更やカーソル通過など、ユーザー操作の記録対象でないため
+- **`execCommand` は deprecated**: `insertHTML` は `insertText`（ペーストで使用中）と同様に deprecated だが、Electron では安定動作する
 
 ### ペーストのプレーンテキスト化
 `contenteditable` div はデフォルトでクリップボードの `text/html` を優先してペーストするため、インライン展開スパンのスタイルや外部 HTML のスタイルが貼り付けられてしまう。`paste` イベントで `e.preventDefault()` した後、`e.clipboardData.getData('text/plain')` でプレーンテキストのみ取得し、`document.execCommand('insertText', false, text)` で挿入する。`execCommand('insertText')` は deprecated だが Electron では動作し、カーソル位置への挿入・選択範囲の置換・アンドゥ履歴への追加を一括処理できる。

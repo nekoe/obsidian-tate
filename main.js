@@ -122,6 +122,8 @@ var EditorElement = class {
     this.expandedEl = null;
     // selectionchange ハンドラ内での DOM 操作中に再入しないためのガード
     this.isModifyingDom = false;
+    // expandForEditing 時のシリアライズ済みテキスト（collapseEditing での変化検出用）
+    this.expandedElOriginalText = null;
     // コマンド実行時に使う選択範囲キャッシュ（コマンドパレット起動でフォーカスが外れた後も保持）
     this.savedRange = null;
     this.el = container.createEl("div");
@@ -135,6 +137,7 @@ var EditorElement = class {
   }
   setValue(content, preserveCursor) {
     this.expandedEl = null;
+    this.expandedElOriginalText = null;
     this.savedRange = null;
     if (this.getValue() === content) return;
     if (preserveCursor && document.activeElement === this.el) {
@@ -206,6 +209,7 @@ var EditorElement = class {
   handleRubyCompletion() {
     var _a, _b;
     if (this.expandedEl) return;
+    if (this.isModifyingDom) return;
     const sel = window.getSelection();
     if (!sel || sel.rangeCount === 0) return;
     const range = sel.getRangeAt(0);
@@ -224,12 +228,17 @@ var EditorElement = class {
     const base = match[1];
     const rt = match[2];
     const matchStart = range.startOffset - match[0].length;
-    this.replaceTextWithElement(
-      textNode,
-      matchStart,
-      range.startOffset,
-      this.createRubyEl(base, rt, explicit)
-    );
+    this.isModifyingDom = true;
+    try {
+      this.execInsertHtml(
+        textNode,
+        matchStart,
+        range.startOffset,
+        this.createRubyEl(base, rt, explicit).outerHTML
+      );
+    } finally {
+      this.isModifyingDom = false;
+    }
   }
   // ］が入力されたときに直前の縦中横記法を <span class="tcy"> 要素に変換する
   handleTcyCompletion() {
@@ -246,16 +255,24 @@ var EditorElement = class {
     const selectedText = textNode.textContent.slice(r.startOffset, r.endOffset);
     if (!selectedText) return false;
     const rawText = `\uFF5C${selectedText}\u300A\u300B`;
-    const span = document.createElement("span");
-    span.className = "tate-editing";
-    span.textContent = rawText;
+    const spanHtml = `<span class="tate-editing" data-ruby-new="1">${this.esc(rawText)}</span>`;
     this.isModifyingDom = true;
     try {
-      this.replaceTextWithElement(textNode, r.startOffset, r.endOffset, span);
+      this.el.focus();
+      if (!this.restoreSelection()) return false;
+      document.execCommand("insertHTML", false, spanHtml);
+      const span = this.el.querySelector('[data-ruby-new="1"]');
+      if (!span) {
+        this.el.querySelectorAll("[data-ruby-new]").forEach(
+          (el) => el.removeAttribute("data-ruby-new")
+        );
+        return false;
+      }
+      span.removeAttribute("data-ruby-new");
       this.expandedEl = span;
+      this.expandedElOriginalText = rawText;
       const spanText = span.firstChild;
       if (spanText) {
-        this.el.focus();
         const sel = window.getSelection();
         const range = document.createRange();
         range.setStart(spanText, rawText.length - 1);
@@ -290,15 +307,39 @@ var EditorElement = class {
     const textNode = r.startContainer;
     const selectedText = textNode.textContent.slice(r.startOffset, r.endOffset);
     if (!selectedText) return false;
-    this.el.focus();
-    this.replaceTextWithElement(textNode, r.startOffset, r.endOffset, createElement(selectedText));
+    this.isModifyingDom = true;
+    try {
+      this.el.focus();
+      if (!this.restoreSelection()) return false;
+      document.execCommand("insertHTML", false, createElement(selectedText).outerHTML);
+    } finally {
+      this.isModifyingDom = false;
+    }
     this.savedRange = null;
     return true;
+  }
+  // savedRange をブラウザの Selection に復元する（コマンド実行前に呼ぶ）
+  restoreSelection() {
+    const r = this.savedRange;
+    if (!r) return false;
+    const sel = window.getSelection();
+    if (!sel) return false;
+    try {
+      const range = document.createRange();
+      range.setStart(r.startContainer, r.startOffset);
+      range.setEnd(r.endContainer, r.endOffset);
+      sel.removeAllRanges();
+      sel.addRange(range);
+      return true;
+    } catch (e) {
+      return false;
+    }
   }
   // tcy/bouten など終端文字で確定するライブ変換の共通実装
   handleAnnotationCompletion(endChar, re, createElement) {
     var _a, _b;
     if (this.expandedEl) return;
+    if (this.isModifyingDom) return;
     const sel = window.getSelection();
     if (!sel || sel.rangeCount === 0) return;
     const range = sel.getRangeAt(0);
@@ -312,12 +353,17 @@ var EditorElement = class {
     const content = annotationMatch[1];
     const annotationStart = range.startOffset - annotationMatch[0].length;
     if (!textBefore.slice(0, annotationStart).endsWith(content)) return;
-    this.replaceTextWithElement(
-      textNode,
-      annotationStart - content.length,
-      range.startOffset,
-      createElement(content)
-    );
+    this.isModifyingDom = true;
+    try {
+      this.execInsertHtml(
+        textNode,
+        annotationStart - content.length,
+        range.startOffset,
+        createElement(content).outerHTML
+      );
+    } finally {
+      this.isModifyingDom = false;
+    }
   }
   // paste イベントハンドラ: リッチテキストを排除してプレーンテキストのみを挿入する
   handlePaste(e) {
@@ -363,6 +409,7 @@ var EditorElement = class {
     span.textContent = rawText;
     target.parentNode.replaceChild(span, target);
     this.expandedEl = span;
+    this.expandedElOriginalText = rawText;
     const textNode = span.firstChild;
     if (textNode) {
       const sel = window.getSelection();
@@ -380,14 +427,27 @@ var EditorElement = class {
     var _a;
     if (!this.expandedEl) return;
     const rawText = (_a = this.expandedEl.textContent) != null ? _a : "";
+    const hasChanged = this.expandedElOriginalText === null || rawText !== this.expandedElOriginalText;
     const parent = this.expandedEl.parentNode;
     const nextSibling = this.expandedEl.nextSibling;
-    parent.removeChild(this.expandedEl);
-    this.expandedEl = null;
-    const tempDiv = document.createElement("div");
-    tempDiv.innerHTML = this.parseInlineToHtml(rawText);
-    while (tempDiv.firstChild) {
-      parent.insertBefore(tempDiv.firstChild, nextSibling);
+    if (hasChanged) {
+      const sel = window.getSelection();
+      const r = document.createRange();
+      r.selectNode(this.expandedEl);
+      sel.removeAllRanges();
+      sel.addRange(r);
+      this.expandedEl = null;
+      this.expandedElOriginalText = null;
+      document.execCommand("insertHTML", false, this.parseInlineToHtml(rawText));
+    } else {
+      parent.removeChild(this.expandedEl);
+      this.expandedEl = null;
+      this.expandedElOriginalText = null;
+      const tempDiv = document.createElement("div");
+      tempDiv.innerHTML = this.parseInlineToHtml(rawText);
+      while (tempDiv.firstChild) {
+        parent.insertBefore(tempDiv.firstChild, nextSibling);
+      }
     }
   }
   // 要素内のカーソル位置を raw テキスト上の文字オフセットに変換する
@@ -619,26 +679,16 @@ var EditorElement = class {
     }
     return false;
   }
-  // テキストノードの [matchStart, matchEnd) を newEl に置き換え、カーソルを newEl 直後に配置する
-  replaceTextWithElement(textNode, matchStart, matchEnd, newEl) {
-    var _a;
-    const before = textNode.textContent.slice(0, matchStart);
-    const after = textNode.textContent.slice(matchEnd);
-    const parent = textNode.parentNode;
-    const afterNode = document.createTextNode(after);
-    parent.insertBefore(afterNode, (_a = textNode.nextSibling) != null ? _a : null);
-    parent.insertBefore(newEl, afterNode);
-    if (before) {
-      textNode.textContent = before;
-    } else {
-      parent.removeChild(textNode);
-    }
+  // テキストノードの [matchStart, matchEnd) を html で置き換える
+  // execCommand('insertHTML') を使うことでブラウザの Undo スタックに記録される
+  execInsertHtml(textNode, matchStart, matchEnd, html) {
     const sel = window.getSelection();
-    const newRange = document.createRange();
-    newRange.setStartAfter(newEl);
-    newRange.collapse(true);
+    const r = document.createRange();
+    r.setStart(textNode, matchStart);
+    r.setEnd(textNode, matchEnd);
     sel.removeAllRanges();
-    sel.addRange(newRange);
+    sel.addRange(r);
+    document.execCommand("insertHTML", false, html);
   }
   createRubyEl(base, rt, explicit) {
     const rubyEl = document.createElement("ruby");
