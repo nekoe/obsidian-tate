@@ -197,10 +197,9 @@ export class EditorElement {
 
         this.isModifyingDom = true;
         try {
-            this.el.focus();
-            if (!this.restoreSelection()) return false;
-            // execCommand('insertHTML') でブラウザの Undo スタックに記録する
-            document.execCommand('insertHTML', false, spanHtml);
+            // el.focus() を execCommand より前に呼ぶと Undo スタックに余分なエントリが追加されるため
+            // execInsertHtml() で selection 設定と execCommand を一体化する
+            this.execInsertHtml(textNode, r.startOffset, r.endOffset, spanHtml);
 
             const span = this.el.querySelector('[data-ruby-new="1"]') as HTMLSpanElement | null;
             if (!span) {
@@ -217,6 +216,7 @@ export class EditorElement {
             // カーソルを《と》の間（rawText.length - 1 = 》の直前）に設定
             const spanText = span.firstChild as Text | null;
             if (spanText) {
+                this.el.focus(); // execCommand の後でフォーカスを与える（Undo スタックに影響しない）
                 const sel = window.getSelection()!;
                 const range = document.createRange();
                 range.setStart(spanText, rawText.length - 1);
@@ -261,33 +261,14 @@ export class EditorElement {
 
         this.isModifyingDom = true;
         try {
-            this.el.focus();
-            if (!this.restoreSelection()) return false;
-            // execCommand('insertHTML') でブラウザの Undo スタックに記録する
-            document.execCommand('insertHTML', false, createElement(selectedText).outerHTML);
+            // el.focus() を execCommand より前に呼ぶと Undo スタックに余分なエントリが追加されるため
+            // execInsertHtml() で selection 設定と execCommand を一体化する
+            this.execInsertHtml(textNode, r.startOffset, r.endOffset, createElement(selectedText).outerHTML);
         } finally {
             this.isModifyingDom = false;
         }
         this.savedRange = null;
         return true;
-    }
-
-    // savedRange をブラウザの Selection に復元する（コマンド実行前に呼ぶ）
-    private restoreSelection(): boolean {
-        const r = this.savedRange;
-        if (!r) return false;
-        const sel = window.getSelection();
-        if (!sel) return false;
-        try {
-            const range = document.createRange();
-            range.setStart(r.startContainer, r.startOffset);
-            range.setEnd(r.endContainer, r.endOffset);
-            sel.removeAllRanges();
-            sel.addRange(range);
-            return true;
-        } catch {
-            return false;
-        }
     }
 
     // tcy/bouten など終端文字で確定するライブ変換の共通実装

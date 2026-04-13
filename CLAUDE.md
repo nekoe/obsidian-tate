@@ -95,9 +95,8 @@ input / compositionend / paste イベントはすべて `this.registerDomEvent(e
 `add-ruby` / `add-tcy` / `add-bouten` コマンドで選択テキストに記法を適用できる。
 
 - **選択範囲キャッシュ**: `handleSelectionChange()` の先頭（`isModifyingDom` チェックより前）で、エディタ内に非 collapsed 選択があるとき `savedRange` フィールドに保存する。コマンドパレットを開くとフォーカスが離れるが、エディタ外の selectionchange ではキャッシュを**更新しない**（保持する）ことで、コマンド実行時に選択を復元できる
-- **ルビ**: `wrapSelectionWithRuby()` が `restoreSelection()` で選択を復元した後、`execCommand('insertHTML')` で `<span class="tate-editing" data-ruby-new="1">｜text《》</span>` を挿入する。`data-ruby-new` 属性で挿入したスパンを `querySelector` で特定し（挿入後すぐ属性を除去）、`expandedEl` と `expandedElOriginalText` をセットしてインライン展開状態にする。ユーザーがルビ文字を入力後カーソルを外すと `collapseEditing()` が `execCommand('insertHTML')` で `<ruby>` 要素に収束する
-- **縦中横・傍点**: `wrapSelectionWith()` に共通化。`restoreSelection()` で選択を復元してから `execCommand('insertHTML')` で要素を挿入する
-- **`restoreSelection()`**: `savedRange` をブラウザの `Selection` に復元するヘルパー。コマンドパレット起動でフォーカスが外れた後もキャッシュされた範囲を復元できる。失敗（stale ノード参照など）は `false` を返す
+- **ルビ**: `wrapSelectionWithRuby()` が `execInsertHtml()` で `<span class="tate-editing" data-ruby-new="1">｜text《》</span>` を挿入する。`data-ruby-new` 属性で挿入したスパンを `querySelector` で特定し（挿入後すぐ属性を除去）、`expandedEl` と `expandedElOriginalText` をセットしてインライン展開状態にする。ユーザーがルビ文字を入力後カーソルを外すと `collapseEditing()` が `execCommand('insertHTML')` で `<ruby>` 要素に収束する
+- **縦中横・傍点**: `wrapSelectionWith()` に共通化。`execInsertHtml()` で選択テキストを要素に置換する（`el.focus()` を `execCommand` より前に呼ぶと Undo スタックに余分なエントリが追加されるため、`execInsertHtml()` で selection 設定と `execCommand` を一体化する）
 - **エラー通知**: 選択なし・ビュー未開は `new Notice(...)` で通知。`editorEl` が null のときは `applyAnnotation()` が早期リターンする（誤メッセージを出さない）
 - **同期**: ラップ成功後に `view.ts` の `applyAnnotation()` が `syncCoordinator.onEditorChange()` を呼ぶ（`EditorElement` は `SyncCoordinator` を知らないため）
 

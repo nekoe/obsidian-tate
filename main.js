@@ -258,9 +258,7 @@ var EditorElement = class {
     const spanHtml = `<span class="tate-editing" data-ruby-new="1">${this.esc(rawText)}</span>`;
     this.isModifyingDom = true;
     try {
-      this.el.focus();
-      if (!this.restoreSelection()) return false;
-      document.execCommand("insertHTML", false, spanHtml);
+      this.execInsertHtml(textNode, r.startOffset, r.endOffset, spanHtml);
       const span = this.el.querySelector('[data-ruby-new="1"]');
       if (!span) {
         this.el.querySelectorAll("[data-ruby-new]").forEach(
@@ -273,6 +271,7 @@ var EditorElement = class {
       this.expandedElOriginalText = rawText;
       const spanText = span.firstChild;
       if (spanText) {
+        this.el.focus();
         const sel = window.getSelection();
         const range = document.createRange();
         range.setStart(spanText, rawText.length - 1);
@@ -309,31 +308,12 @@ var EditorElement = class {
     if (!selectedText) return false;
     this.isModifyingDom = true;
     try {
-      this.el.focus();
-      if (!this.restoreSelection()) return false;
-      document.execCommand("insertHTML", false, createElement(selectedText).outerHTML);
+      this.execInsertHtml(textNode, r.startOffset, r.endOffset, createElement(selectedText).outerHTML);
     } finally {
       this.isModifyingDom = false;
     }
     this.savedRange = null;
     return true;
-  }
-  // savedRange をブラウザの Selection に復元する（コマンド実行前に呼ぶ）
-  restoreSelection() {
-    const r = this.savedRange;
-    if (!r) return false;
-    const sel = window.getSelection();
-    if (!sel) return false;
-    try {
-      const range = document.createRange();
-      range.setStart(r.startContainer, r.startOffset);
-      range.setEnd(r.endContainer, r.endOffset);
-      sel.removeAllRanges();
-      sel.addRange(range);
-      return true;
-    } catch (e) {
-      return false;
-    }
   }
   // tcy/bouten など終端文字で確定するライブ変換の共通実装
   handleAnnotationCompletion(endChar, re, createElement) {
