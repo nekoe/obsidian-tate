@@ -57,7 +57,7 @@ input / compositionend / paste イベントはすべて `this.registerDomEvent(e
 
 `parseToHtml()` と `parseInlineToHtml()` の2層構造になっている:
 - `parseToHtml(text)`: `setValue()` 用。テキストを `\n` で分割し、各段落を `<div>` で包む（字下げのため）。空文字の場合は `''` を返して `:empty::before` プレースホルダーを有効にする
-- `parseInlineToHtml(text, lenient?)`: `collapseEditing()` 用。`<div>` で包まずインライン記法のみ変換する。`lenient=true`（収束時）のとき `splitByAnnotation()` が不正アノテーションでも「」内容で要素を生成する（詳細はインライン展開セクション参照）
+- `parseInlineToHtml(text)`: `collapseEditing()` 用。`<div>` で包まずインライン記法のみ変換する
 
 `applyParsers()` が `ParseSegment[]`（`text` / `html` の union型）を順番に変換する。優先順位:
 
@@ -85,6 +85,7 @@ input / compositionend / paste イベントはすべて `this.registerDomEvent(e
 - **展開**: カーソルが `<ruby>`・`<span data-tcy="explicit">`・`<span data-bouten>` に入ると `expandForEditing()` が要素を `<span class="tate-editing">` に置換し、Aozora 生テキストを表示する。このとき `expandedElOriginalText` に展開前のテキストを保存する（変化検出用）
 - **収束**: カーソルが外れると `collapseEditing()` が `parseInlineToHtml()` で再パースして元の要素に戻す。編集内容は反映される（`parseToHtml()` を使うと段落 `<div>` の中に `<div>` がネストするため禁止）
 - **収束と Undo スタック**: `collapseEditing()` は内容が変化した場合（`expandedElOriginalText` との比較）のみ `execCommand('insertHTML')` で収束する。変化なし（カーソルが通過しただけ）の場合は生 DOM 操作にして Undo スタックを汚染しない。`execCommand` は `input` イベントを発火するため、`handleRubyCompletion()` / `handleAnnotationCompletion()` の冒頭に `if (this.isModifyingDom) return` ガードを置いて再入をブロックすること
+- **`collapseEditing()` のブロック境界対策**: `hasChanged` パスで、スパンが行頭（`previousSibling === null`）または行末（`nextSibling === null` もしくは次が `<br>`）にある場合は `execCommand` が `<ruby>` 等のインライン要素をストリップして平文にするバグがあるため、直接 DOM 操作で収束する（Undo スタックへの記録はされない）。`isAtBlockBoundary` 判定で分岐する
 - **`collapseEditing()` hasChanged パスの execCommand フォールバック**: `execCommand('insertHTML')` の後に `spanRef.isConnected` を確認し、true（= execCommand が失敗してスパンが DOM に残っている）の場合は生 DOM 操作で強制収束する。フォーカス喪失などで execCommand が失敗しても確実にスパンが除去される
 - **`collapseEditing()` の前方テキスト取り込み**: `getExtraCharsFromAnnotation()` が「」内容とスパン内前方テキストを比較し、「」内容が長い場合（例: content=`130`, leading=`30` → 差分=`1`文字）は直前テキストノードの末尾から一致する文字を取り込む。選択範囲を「直前テキスト末尾 N 文字 + 編集スパン全体」に拡張して `execCommand` で一括置換することで Undo も正しく動作する（例: テキスト `A1` + tcy `30` → 「30」→「130」編集 → テキスト `A` + tcy `130`）。`splitByAnnotation()` は厳密モードのみで動作し、前方テキスト取り込み後は前方テキストとアノテーション内容が必ず一致するため lenient モードは不要
 - **`collapseEditing()` の detached ノード対策**: `collapseEditing()` の先頭で `expandedEl.isConnected` を確認し、false の場合は `expandedEl` / `expandedElOriginalText` をクリアして即リターンする。Undo で編集スパンが DOM から取り除かれたとき、detached ノードに `parentNode` / `selectNode` を呼ぶと例外が発生して `expandedEl = null` が実行されなくなるため（以降のコマンドが `if (this.expandedEl) return false` で常にブロックされる）
@@ -100,7 +101,7 @@ input / compositionend / paste イベントはすべて `this.registerDomEvent(e
 `add-ruby` / `add-tcy` / `add-bouten` コマンドで選択テキストに記法を適用できる。
 
 - **選択範囲キャッシュ**: `handleSelectionChange()` の先頭（`isModifyingDom` チェックより前）で、エディタ内に非 collapsed 選択があるとき `savedRange` フィールドに保存する。コマンドパレットを開くとフォーカスが離れるが、エディタ外の selectionchange ではキャッシュを**更新しない**（保持する）ことで、コマンド実行時に選択を復元できる
-- **ルビ**: `wrapSelectionWithRuby()` が `execInsertHtml()` で `<span class="tate-editing" data-ruby-new="1">｜text《》</span>` を挿入する。`data-ruby-new` 属性で挿入したスパンを `querySelector` で特定し（挿入後すぐ属性を除去）、`expandedEl` と `expandedElOriginalText` をセットしてインライン展開状態にする。ユーザーがルビ文字を入力後カーソルを外すと `collapseEditing()` が `execCommand('insertHTML')` で `<ruby>` 要素に収束する
+- **ルビ**: `wrapSelectionWithRuby()` が `execInsertHtml()` で `<span class="tate-editing" data-ruby-new="1">｜text《》</span>` を挿入する。`data-ruby-new` 属性で挿入したスパンを `querySelector` で特定し（挿入後すぐ属性を除去）、`expandedEl` と `expandedElOriginalText` をセットしてインライン展開状態にする。ユーザーがルビ文字を入力後カーソルを外すと `collapseEditing()` が `<ruby>` 要素に収束する（行中は `execCommand`、行頭・行末は直接 DOM 操作）
 - **縦中横・傍点**: `wrapSelectionWith()` に共通化。`execInsertHtml()` で選択テキストを要素に置換する。挿入後は `data-wrap-new="1"` 一時属性で要素を特定し、カーソルを要素の**直後**に置く。カーソルが要素内にあると `selectionchange → expandForEditing()` が呼ばれ、Undo 時に DOM と Undo スタックが不整合になって "tcy 30 と普通の 30 が両方残る" バグが発生するため
 - **ライブ変換後のカーソル移動**: `handleRubyCompletion()` / `handleAnnotationCompletion()` でも同様に、`execInsertHtml()` 後に `data-new-el="1"` 一時属性で挿入要素を特定し、カーソルを要素の**直後**に置く。これがないと `execCommand` 後のカーソルが要素内に入り、直後の `selectionchange` で `expandForEditing()` が即座に発火して「`《》` が消えてルビ文字が平文のまま残る」ように見えてしまう
 - **エラー通知**: 選択なし・ビュー未開は `new Notice(...)` で通知。`editorEl` が null のときは `applyAnnotation()` が早期リターンする（誤メッセージを出さない）
@@ -112,12 +113,15 @@ input / compositionend / paste イベントはすべて `this.registerDomEvent(e
 ### Undo/Redo 対応
 記法適用操作（ライブ変換・コマンド）はすべて `document.execCommand('insertHTML')` 経由でブラウザの Undo スタックに記録する。これにより通常入力（キーボード）・ペーストと同一スタックで自然に共存し、ブラウザが Redo（Cmd+Shift+Z）も自動提供する。
 
-- **`execInsertHtml(textNode, start, end, html)`**: テキストノードの `[start, end)` を選択してから `execCommand('insertHTML')` で置換するヘルパー。ライブ変換と収束の共通処理
+- **`execInsertHtml(textNode, start, end, html)`**: テキストノードの `[start, end)` を選択してから `execCommand('insertHTML')` で置換するヘルパー。ライブ変換と挿入の共通処理。ただし div 内テキストノードの行頭（`start=0`）または行末（`end=textNode.length`）の場合、Chromium が `insertHTML` をブロック境界として扱い要素を剥ぎ取るバグがあるため、`execInsertHtmlAtBoundary()` で直接 DOM 操作に切り替える（Undo スタックへの記録なし）
 - **Undo の粒度**:
-  - コマンド（tcy/bouten）: 1回のUndoで選択テキストに戻る
-  - コマンド（ルビ）: Undoでルビ文字入力を1文字ずつ戻し、最後にコマンド実行前のテキストに戻る
-  - ライブ変換（`》`/`］`）: 1回のUndoで変換前のAozora生テキストに戻る
-- **生DOM操作との使い分け**: `setValue()`（`innerHTML` 直接代入）と `expandForEditing()`（`replaceChild`）は Undo スタックに載せない。これらは外部変更やカーソル通過など、ユーザー操作の記録対象でないため
+  - コマンド（tcy/bouten）行中: 1回のUndoで選択テキストに戻る
+  - コマンド（tcy/bouten）行頭・行末: Undo 不可（直接 DOM 操作のため）
+  - コマンド（ルビ）行中: Undoでルビ文字入力を1文字ずつ戻し、最後にコマンド実行前のテキストに戻る
+  - コマンド（ルビ）行頭・行末: Undo 不可（挿入・収束ともに直接 DOM 操作のため）
+  - ライブ変換（`》`/`］`）行中: 1回のUndoで変換前のAozora生テキストに戻る
+  - ライブ変換（`》`/`］`）行頭・行末: Undo 不可（直接 DOM 操作のため）
+- **生DOM操作との使い分け**: `setValue()`（`innerHTML` 直接代入）・`expandForEditing()`（`replaceChild`）・行頭行末の `execInsertHtmlAtBoundary()` は Undo スタックに載せない
 - **`execCommand` は deprecated**: `insertHTML` は `insertText`（ペーストで使用中）と同様に deprecated だが、Electron では安定動作する
 
 ### ペーストのプレーンテキスト化
