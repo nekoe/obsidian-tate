@@ -57,7 +57,7 @@ input / compositionend / paste イベントはすべて `this.registerDomEvent(e
 
 `parseToHtml()` と `parseInlineToHtml()` の2層構造になっている:
 - `parseToHtml(text)`: `setValue()` 用。テキストを `\n` で分割し、各段落を `<div>` で包む（字下げのため）。空文字の場合は `''` を返して `:empty::before` プレースホルダーを有効にする
-- `parseInlineToHtml(text)`: `collapseEditing()` 用。`<div>` で包まずインライン記法のみ変換する。段落 `<div>` の内側で収束処理を行う際に呼ぶ（`parseToHtml()` を使うと `<div>` がネストしてしまう）
+- `parseInlineToHtml(text, lenient?)`: `collapseEditing()` 用。`<div>` で包まずインライン記法のみ変換する。`lenient=true`（収束時）のとき `splitByAnnotation()` が不正アノテーションでも「」内容で要素を生成する（詳細はインライン展開セクション参照）
 
 `applyParsers()` が `ParseSegment[]`（`text` / `html` の union型）を順番に変換する。優先順位:
 
@@ -85,6 +85,9 @@ input / compositionend / paste イベントはすべて `this.registerDomEvent(e
 - **展開**: カーソルが `<ruby>`・`<span data-tcy="explicit">`・`<span data-bouten>` に入ると `expandForEditing()` が要素を `<span class="tate-editing">` に置換し、Aozora 生テキストを表示する。このとき `expandedElOriginalText` に展開前のテキストを保存する（変化検出用）
 - **収束**: カーソルが外れると `collapseEditing()` が `parseInlineToHtml()` で再パースして元の要素に戻す。編集内容は反映される（`parseToHtml()` を使うと段落 `<div>` の中に `<div>` がネストするため禁止）
 - **収束と Undo スタック**: `collapseEditing()` は内容が変化した場合（`expandedElOriginalText` との比較）のみ `execCommand('insertHTML')` で収束する。変化なし（カーソルが通過しただけ）の場合は生 DOM 操作にして Undo スタックを汚染しない。`execCommand` は `input` イベントを発火するため、`handleRubyCompletion()` / `handleAnnotationCompletion()` の冒頭に `if (this.isModifyingDom) return` ガードを置いて再入をブロックすること
+- **`collapseEditing()` hasChanged パスの execCommand フォールバック**: `execCommand('insertHTML')` の後に `spanRef.isConnected` を確認し、true（= execCommand が失敗してスパンが DOM に残っている）の場合は生 DOM 操作で強制収束する。フォーカス喪失などで execCommand が失敗しても確実にスパンが除去される
+- **`collapseEditing()` の lenient パース**: `parseInlineToHtml(rawText, true)` を使う。`lenient=true` のとき `splitByAnnotation()` は前方コンテンツが「」内容と一致しない不正アノテーションでも「」内容で要素を生成する（`lenient=false` の厳密モードはファイル全体パース用）。これにより「30」→「130」のように「」のみ変更した場合でも tcy/bouten が適用される
+- **`collapseEditing()` の前方テキスト取り込み**: `getExtraCharsFromAnnotation()` が「」内容とスパン内前方テキストを比較し、「」内容が長い場合（例: content=`130`, leading=`30` → 差分=`1`文字）は直前テキストノードの末尾から一致する文字を取り込む。選択範囲を「直前テキスト末尾 N 文字 + 編集スパン全体」に拡張して `execCommand` で一括置換することで Undo も正しく動作する（例: テキスト `A1` + tcy `30` → 「30」→「130」編集 → テキスト `A` + tcy `130`）
 - **`collapseEditing()` の detached ノード対策**: `collapseEditing()` の先頭で `expandedEl.isConnected` を確認し、false の場合は `expandedEl` / `expandedElOriginalText` をクリアして即リターンする。Undo で編集スパンが DOM から取り除かれたとき、detached ノードに `parentNode` / `selectNode` を呼ぶと例外が発生して `expandedEl = null` が実行されなくなるため（以降のコマンドが `if (this.expandedEl) return false` で常にブロックされる）
 - **孤立スパン（orphan span）の検出と再追跡**: `handleSelectionChange()` の `!isModifyingDom` ブロック先頭で `expandedEl` が null または detached のとき `this.el.querySelector('span.tate-editing')` を実行して DOM の実態と同期する。Undo が `collapseEditing()` の `execCommand` を取り消すと editing スパンが DOM に復活するが `expandedEl = null` のまま（孤立スパン）になるため。再追跡後 `expandedElOriginalText = null` にして `hasChanged = true` とすることで確実に収束させる
 - **`collapseEditing()` hasChanged パスのフォーカス保証**: `execCommand('insertHTML')` の前に `this.el.focus()` を呼ぶ。editor 外クリック（サイドバーなど）で editor がフォーカスを失っているとき `execCommand` が失敗してスパンが収束されなくなるため
