@@ -476,42 +476,71 @@ export class EditorElement {
                 }
             }
 
-            // エディタ外クリック等でフォーカスが外れている場合でも execCommand が確実に
-            // 動作するようにフォーカスを戻す（execCommand はフォーカス中の contenteditable に作用する）
-            this.el.focus();
-            const sel = window.getSelection()!;
-            const r = document.createRange();
-            if (precedingTextNode) {
-                // 直前テキストの末尾 precedingChars 分も選択に含め、execCommand で一括置換する
-                // これにより Undo スタックに「前テキスト削除 + 新要素挿入」が1エントリとして記録される
-                r.setStart(precedingTextNode, precedingTextNode.length - precedingChars.length);
-                r.setEndAfter(this.expandedEl);
-            } else {
-                r.selectNode(this.expandedEl);
-            }
-            sel.removeAllRanges();
-            sel.addRange(r);
-            const spanRef = this.expandedEl;
-            this.expandedEl = null;
-            this.expandedElOriginalText = null;
             // parseToHtml は使わない（<div> で包むため段落 <div> 内でネストする）
             const html = this.parseInlineToHtml(rawText);
-            document.execCommand('insertHTML', false, html);
-            // execCommand が失敗してスパンが DOM に残っている場合は生 DOM 操作でフォールバック
-            // （フォーカスが外れた状態などで execCommand が失敗しても確実に収束させるため）
-            if (spanRef.isConnected) {
-                const spanParent = spanRef.parentNode!;
-                const spanNext = spanRef.nextSibling;
+
+            // ブロック境界（行頭・行末）でのスパンは execCommand('insertHTML') が
+            // <ruby> 等のインライン要素をストリップして平文にするバグがあるため、
+            // 直接 DOM 操作で収束する（Undo スタックへの記録はされない）
+            const spanParentEl = this.expandedEl.parentNode!;
+            const spanNextEl = this.expandedEl.nextSibling;
+            const isAtBlockBoundary = spanParentEl !== this.el && (
+                this.expandedEl.previousSibling === null ||
+                this.expandedEl.nextSibling === null ||
+                (this.expandedEl.nextSibling.nodeType === Node.ELEMENT_NODE &&
+                 (this.expandedEl.nextSibling as Element).tagName === 'BR')
+            );
+
+            if (isAtBlockBoundary) {
                 // 前のテキストノードから取り込んだ文字を削除
                 if (precedingTextNode && precedingTextNode.isConnected) {
                     precedingTextNode.textContent = (precedingTextNode.textContent ?? '')
                         .slice(0, -precedingChars.length);
                 }
-                spanParent.removeChild(spanRef);
+                spanParentEl.removeChild(this.expandedEl);
+                this.expandedEl = null;
+                this.expandedElOriginalText = null;
                 const tempDiv = document.createElement('div');
                 tempDiv.innerHTML = html;
                 while (tempDiv.firstChild) {
-                    spanParent.insertBefore(tempDiv.firstChild, spanNext);
+                    spanParentEl.insertBefore(tempDiv.firstChild, spanNextEl);
+                }
+            } else {
+                // エディタ外クリック等でフォーカスが外れている場合でも execCommand が確実に
+                // 動作するようにフォーカスを戻す（execCommand はフォーカス中の contenteditable に作用する）
+                this.el.focus();
+                const sel = window.getSelection()!;
+                const r = document.createRange();
+                if (precedingTextNode) {
+                    // 直前テキストの末尾 precedingChars 分も選択に含め、execCommand で一括置換する
+                    // これにより Undo スタックに「前テキスト削除 + 新要素挿入」が1エントリとして記録される
+                    r.setStart(precedingTextNode, precedingTextNode.length - precedingChars.length);
+                    r.setEndAfter(this.expandedEl);
+                } else {
+                    r.selectNode(this.expandedEl);
+                }
+                sel.removeAllRanges();
+                sel.addRange(r);
+                const spanRef = this.expandedEl;
+                this.expandedEl = null;
+                this.expandedElOriginalText = null;
+                document.execCommand('insertHTML', false, html);
+                // execCommand が失敗してスパンが DOM に残っている場合は生 DOM 操作でフォールバック
+                // （フォーカスが外れた状態などで execCommand が失敗しても確実に収束させるため）
+                if (spanRef.isConnected) {
+                    const spanParent = spanRef.parentNode!;
+                    const spanNext = spanRef.nextSibling;
+                    // 前のテキストノードから取り込んだ文字を削除
+                    if (precedingTextNode && precedingTextNode.isConnected) {
+                        precedingTextNode.textContent = (precedingTextNode.textContent ?? '')
+                            .slice(0, -precedingChars.length);
+                    }
+                    spanParent.removeChild(spanRef);
+                    const tempDiv = document.createElement('div');
+                    tempDiv.innerHTML = html;
+                    while (tempDiv.firstChild) {
+                        spanParent.insertBefore(tempDiv.firstChild, spanNext);
+                    }
                 }
             }
         } else {

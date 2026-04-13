@@ -446,7 +446,7 @@ var EditorElement = class {
   }
   // 編集スパンを収束し、内容を再パースして元の位置に挿入する（カーソルは呼び出し元が処理）
   collapseEditing() {
-    var _a, _b, _c;
+    var _a, _b, _c, _d;
     if (!this.expandedEl) return;
     if (!this.expandedEl.isConnected) {
       this.expandedEl = null;
@@ -472,33 +472,50 @@ var EditorElement = class {
           }
         }
       }
-      this.el.focus();
-      const sel = window.getSelection();
-      const r = document.createRange();
-      if (precedingTextNode) {
-        r.setStart(precedingTextNode, precedingTextNode.length - precedingChars.length);
-        r.setEndAfter(this.expandedEl);
-      } else {
-        r.selectNode(this.expandedEl);
-      }
-      sel.removeAllRanges();
-      sel.addRange(r);
-      const spanRef = this.expandedEl;
-      this.expandedEl = null;
-      this.expandedElOriginalText = null;
       const html = this.parseInlineToHtml(rawText);
-      document.execCommand("insertHTML", false, html);
-      if (spanRef.isConnected) {
-        const spanParent = spanRef.parentNode;
-        const spanNext = spanRef.nextSibling;
+      const spanParentEl = this.expandedEl.parentNode;
+      const spanNextEl = this.expandedEl.nextSibling;
+      const isAtBlockBoundary = spanParentEl !== this.el && (this.expandedEl.previousSibling === null || this.expandedEl.nextSibling === null || this.expandedEl.nextSibling.nodeType === Node.ELEMENT_NODE && this.expandedEl.nextSibling.tagName === "BR");
+      if (isAtBlockBoundary) {
         if (precedingTextNode && precedingTextNode.isConnected) {
           precedingTextNode.textContent = ((_c = precedingTextNode.textContent) != null ? _c : "").slice(0, -precedingChars.length);
         }
-        spanParent.removeChild(spanRef);
+        spanParentEl.removeChild(this.expandedEl);
+        this.expandedEl = null;
+        this.expandedElOriginalText = null;
         const tempDiv = document.createElement("div");
         tempDiv.innerHTML = html;
         while (tempDiv.firstChild) {
-          spanParent.insertBefore(tempDiv.firstChild, spanNext);
+          spanParentEl.insertBefore(tempDiv.firstChild, spanNextEl);
+        }
+      } else {
+        this.el.focus();
+        const sel = window.getSelection();
+        const r = document.createRange();
+        if (precedingTextNode) {
+          r.setStart(precedingTextNode, precedingTextNode.length - precedingChars.length);
+          r.setEndAfter(this.expandedEl);
+        } else {
+          r.selectNode(this.expandedEl);
+        }
+        sel.removeAllRanges();
+        sel.addRange(r);
+        const spanRef = this.expandedEl;
+        this.expandedEl = null;
+        this.expandedElOriginalText = null;
+        document.execCommand("insertHTML", false, html);
+        if (spanRef.isConnected) {
+          const spanParent = spanRef.parentNode;
+          const spanNext = spanRef.nextSibling;
+          if (precedingTextNode && precedingTextNode.isConnected) {
+            precedingTextNode.textContent = ((_d = precedingTextNode.textContent) != null ? _d : "").slice(0, -precedingChars.length);
+          }
+          spanParent.removeChild(spanRef);
+          const tempDiv = document.createElement("div");
+          tempDiv.innerHTML = html;
+          while (tempDiv.firstChild) {
+            spanParent.insertBefore(tempDiv.firstChild, spanNext);
+          }
         }
       }
     } else {
