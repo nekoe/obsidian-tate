@@ -494,10 +494,8 @@ export class EditorElement {
             const spanRef = this.expandedEl;
             this.expandedEl = null;
             this.expandedElOriginalText = null;
-            // parseInlineToHtml を lenient=true で呼ぶ:
-            //   「」内容だけ変更した不正アノテーションでも要素を生成する
             // parseToHtml は使わない（<div> で包むため段落 <div> 内でネストする）
-            const html = this.parseInlineToHtml(rawText, true);
+            const html = this.parseInlineToHtml(rawText);
             document.execCommand('insertHTML', false, html);
             // execCommand が失敗してスパンが DOM に残っている場合は生 DOM 操作でフォールバック
             // （フォーカスが外れた状態などで execCommand が失敗しても確実に収束させるため）
@@ -522,7 +520,7 @@ export class EditorElement {
             this.expandedElOriginalText = null;
 
             const tempDiv = document.createElement('div');
-            tempDiv.innerHTML = this.parseInlineToHtml(rawText, true);
+            tempDiv.innerHTML = this.parseInlineToHtml(rawText);
             while (tempDiv.firstChild) {
                 parent.insertBefore(tempDiv.firstChild, nextSibling);
             }
@@ -565,13 +563,11 @@ export class EditorElement {
     }
 
     // インライン要素用: <div> で包まずAozora記法をHTML変換する（collapseEditing で使用）
-    // lenient=true のとき、前方コンテンツが「」内容と一致しない不正なアノテーションでも
-    // 「」内容を使って要素を生成する（インライン編集で「」のみ変更した場合に対応）
-    private parseInlineToHtml(text: string, lenient = false): string {
+    private parseInlineToHtml(text: string): string {
         return this.applyParsers(text, [
             t => this.splitByExplicitRuby(t),
-            t => this.splitByExplicitTcy(t, lenient),
-            t => this.splitByExplicitBouten(t, lenient),
+            t => this.splitByExplicitTcy(t),
+            t => this.splitByExplicitBouten(t),
             t => this.splitByImplicitRuby(t),
         ]);
     }
@@ -616,34 +612,28 @@ export class EditorElement {
     }
 
     // 明示縦中横 X［＃「X」は縦中横］ を分割する
-    private splitByExplicitTcy(text: string, lenient = false): ParseSegment[] {
+    private splitByExplicitTcy(text: string): ParseSegment[] {
         return this.splitByAnnotation(
             text,
             /［＃「([^「」\n]+)」は縦中横］/g,
             c => `<span data-tcy="explicit" class="tcy">${this.esc(c)}</span>`,
-            lenient,
         );
     }
 
     // 傍点 base［＃「base」に傍点］ を分割する
-    private splitByExplicitBouten(text: string, lenient = false): ParseSegment[] {
+    private splitByExplicitBouten(text: string): ParseSegment[] {
         return this.splitByAnnotation(
             text,
             /［＃「([^「」\n]+)」に傍点］/g,
             c => `<span data-bouten="sesame" class="bouten">${this.esc(c)}</span>`,
-            lenient,
         );
     }
 
     // 前方参照型アノテーション記法「content［＃「content」...］」の共通分割ロジック
-    // lenient=true のとき、前方コンテンツが「」内容と一致しない不正アノテーションでも
-    // 「」内容で要素を生成する。前方コンテンツのうち content.length 文字分を捨て、
-    // それより前のテキストは保持する（インライン編集で「」のみ変更した場合に対応）。
     private splitByAnnotation(
         text: string,
         re: RegExp,
         buildHtml: (content: string) => string,
-        lenient = false,
     ): ParseSegment[] {
         const result: ParseSegment[] = [];
         let lastIndex = 0;
@@ -653,22 +643,9 @@ export class EditorElement {
             const content = m[1];
             const annotationStart = m.index;
 
-            // 注記の直前が content で終わっていなければ無効
+            // 注記の直前が content で終わっていなければ無効: マッチ全体を平文として出力
             if (!text.slice(lastIndex, annotationStart).endsWith(content)) {
-                if (!lenient) {
-                    // 厳密モード: マッチ全体を平文として出力
-                    result.push({ type: 'text', text: text.slice(lastIndex, re.lastIndex) });
-                    lastIndex = re.lastIndex;
-                    continue;
-                }
-                // 寛容モード: 「」内容で要素を生成し、前方の余剰テキストを保持する
-                // annotationStart より content.length 文字前から annotation 直前までが
-                // 「古いスコープ」に相当するので捨てる。それ以前のテキストは残す。
-                const discardStart = Math.max(lastIndex, annotationStart - content.length);
-                if (discardStart > lastIndex) {
-                    result.push({ type: 'text', text: text.slice(lastIndex, discardStart) });
-                }
-                result.push({ type: 'html', html: buildHtml(content) });
+                result.push({ type: 'text', text: text.slice(lastIndex, re.lastIndex) });
                 lastIndex = re.lastIndex;
                 continue;
             }

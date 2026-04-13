@@ -484,7 +484,7 @@ var EditorElement = class {
       const spanRef = this.expandedEl;
       this.expandedEl = null;
       this.expandedElOriginalText = null;
-      const html = this.parseInlineToHtml(rawText, true);
+      const html = this.parseInlineToHtml(rawText);
       document.execCommand("insertHTML", false, html);
       if (spanRef.isConnected) {
         const spanParent = spanRef.parentNode;
@@ -504,7 +504,7 @@ var EditorElement = class {
       this.expandedEl = null;
       this.expandedElOriginalText = null;
       const tempDiv = document.createElement("div");
-      tempDiv.innerHTML = this.parseInlineToHtml(rawText, true);
+      tempDiv.innerHTML = this.parseInlineToHtml(rawText);
       while (tempDiv.firstChild) {
         parent.insertBefore(tempDiv.firstChild, nextSibling);
       }
@@ -536,13 +536,11 @@ var EditorElement = class {
     return text.split("\n").map((line) => `<div>${this.parseInlineToHtml(line) || "<br>"}</div>`).join("");
   }
   // インライン要素用: <div> で包まずAozora記法をHTML変換する（collapseEditing で使用）
-  // lenient=true のとき、前方コンテンツが「」内容と一致しない不正なアノテーションでも
-  // 「」内容を使って要素を生成する（インライン編集で「」のみ変更した場合に対応）
-  parseInlineToHtml(text, lenient = false) {
+  parseInlineToHtml(text) {
     return this.applyParsers(text, [
       (t) => this.splitByExplicitRuby(t),
-      (t) => this.splitByExplicitTcy(t, lenient),
-      (t) => this.splitByExplicitBouten(t, lenient),
+      (t) => this.splitByExplicitTcy(t),
+      (t) => this.splitByExplicitBouten(t),
       (t) => this.splitByImplicitRuby(t)
     ]);
   }
@@ -578,28 +576,23 @@ var EditorElement = class {
     return result;
   }
   // 明示縦中横 X［＃「X」は縦中横］ を分割する
-  splitByExplicitTcy(text, lenient = false) {
+  splitByExplicitTcy(text) {
     return this.splitByAnnotation(
       text,
       /［＃「([^「」\n]+)」は縦中横］/g,
-      (c) => `<span data-tcy="explicit" class="tcy">${this.esc(c)}</span>`,
-      lenient
+      (c) => `<span data-tcy="explicit" class="tcy">${this.esc(c)}</span>`
     );
   }
   // 傍点 base［＃「base」に傍点］ を分割する
-  splitByExplicitBouten(text, lenient = false) {
+  splitByExplicitBouten(text) {
     return this.splitByAnnotation(
       text,
       /［＃「([^「」\n]+)」に傍点］/g,
-      (c) => `<span data-bouten="sesame" class="bouten">${this.esc(c)}</span>`,
-      lenient
+      (c) => `<span data-bouten="sesame" class="bouten">${this.esc(c)}</span>`
     );
   }
   // 前方参照型アノテーション記法「content［＃「content」...］」の共通分割ロジック
-  // lenient=true のとき、前方コンテンツが「」内容と一致しない不正アノテーションでも
-  // 「」内容で要素を生成する。前方コンテンツのうち content.length 文字分を捨て、
-  // それより前のテキストは保持する（インライン編集で「」のみ変更した場合に対応）。
-  splitByAnnotation(text, re, buildHtml, lenient = false) {
+  splitByAnnotation(text, re, buildHtml) {
     const result = [];
     let lastIndex = 0;
     let m;
@@ -607,16 +600,7 @@ var EditorElement = class {
       const content = m[1];
       const annotationStart = m.index;
       if (!text.slice(lastIndex, annotationStart).endsWith(content)) {
-        if (!lenient) {
-          result.push({ type: "text", text: text.slice(lastIndex, re.lastIndex) });
-          lastIndex = re.lastIndex;
-          continue;
-        }
-        const discardStart = Math.max(lastIndex, annotationStart - content.length);
-        if (discardStart > lastIndex) {
-          result.push({ type: "text", text: text.slice(lastIndex, discardStart) });
-        }
-        result.push({ type: "html", html: buildHtml(content) });
+        result.push({ type: "text", text: text.slice(lastIndex, re.lastIndex) });
         lastIndex = re.lastIndex;
         continue;
       }
