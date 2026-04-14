@@ -1,4 +1,5 @@
 import { TatePluginSettings } from '../settings';
+import { UndoManager } from './UndoManager';
 
 // 省略形式で自動検出する漢字の Unicode 範囲
 // CJK Unified Ideographs (U+4E00–U+9FFF) + Extension A (U+3400–U+4DBF) + 繰り返し記号
@@ -21,6 +22,17 @@ export class EditorElement {
         startContainer: Node; startOffset: number;
         endContainer: Node; endOffset: number;
     } | null = null;
+    // 独自 Undo/Redo スタック
+    private undoManager = new UndoManager();
+    // Undo/Redo 操作中のフラグ（native マーカー重複追加・ライブ変換の再入を防ぐ）
+    private isUndoRedoing = false;
+    // wrapSelectionWithRuby が設定する「collapseEditing 時に記録する annotation undo の事前情報」
+    // cursor-triggered な expand/collapse には設定されない（Undo スタックに積まない）
+    private pendingAnnotationUndo: {
+        parentEl: HTMLElement;
+        beforeHTML: string;
+        beforeCursor: number;
+    } | null = null;
 
     constructor(container: HTMLElement) {
         this.el = container.createEl('div');
@@ -41,6 +53,9 @@ export class EditorElement {
         this.expandedEl = null;
         this.expandedElOriginalText = null;
         this.savedRange = null;
+        this.pendingAnnotationUndo = null;
+        // ファイル切り替え（preserveCursor=false）時は Undo/Redo スタックをクリア
+        if (!preserveCursor) this.undoManager.clear();
         if (this.getValue() === content) return;
 
         if (preserveCursor && document.activeElement === this.el) {
@@ -60,10 +75,8 @@ export class EditorElement {
         // （外れたときは保持することでコマンドパレット起動後も参照できる）
         if (!this.isModifyingDom) {
             // expandedEl と DOM の tate-editing スパンを同期させる
-            // Undo が collapseEditing() の execCommand を取り消すと、DOM に editing スパンが
-            // 復活するが expandedEl は null のまま（孤立スパン）になる。
-            // また Chromium がノードを再生成した場合もオブジェクト参照がズレる。
-            // これらを検出して expandedEl を実態に合わせる。
+            // Chromium がノードを再生成した場合などオブジェクト参照がズレることがある。
+            // また予期せぬ理由で孤立スパンが生じた場合も DOM の実態に合わせる。
             if (!this.expandedEl || !this.expandedEl.isConnected) {
                 const actualSpan = this.el.querySelector('span.tate-editing') as HTMLSpanElement | null;
                 if (actualSpan !== this.expandedEl) {
@@ -177,22 +190,14 @@ export class EditorElement {
         this.isModifyingDom = true;
         try {
             const rubyEl = this.createRubyEl(base, rt, explicit);
-            rubyEl.setAttribute('data-new-el', '1');
-            this.execInsertHtml(textNode, matchStart, range.startOffset, rubyEl.outerHTML);
+            const { element: inserted, commitUndo } = this.insertAnnotationElement(
+                textNode, matchStart, range.startOffset, rubyEl,
+            );
 
-            // 挿入した要素を特定して一時属性を除去し、カーソルを要素の直後に置く
+            // カーソルを要素の直後に置く
             // カーソルが ruby 内にあると selectionchange → expandForEditing() が即座に発火するため
-            const inserted = this.el.querySelector('[data-new-el="1"]') as HTMLElement | null;
-            if (inserted) {
-                inserted.removeAttribute('data-new-el');
-                this.el.focus(); // execCommand の後なので Undo スタックに影響しない
-                const afterSel = window.getSelection()!;
-                const r = document.createRange();
-                r.setStartAfter(inserted);
-                r.collapse(true);
-                afterSel.removeAllRanges();
-                afterSel.addRange(r);
-            }
+            this.setCursorAfter(inserted);
+            commitUndo(); // afterCursor をキャプチャして annotation エントリを記録
         } finally {
             this.isModifyingDom = false;
         }
@@ -216,38 +221,39 @@ export class EditorElement {
         if (!selectedText) return false;
 
         const rawText = `｜${selectedText}《》`;
-        // data-ruby-new 属性で挿入後のスパンを特定する（execCommand 後に querySelector で取得）
-        const spanHtml = `<span class="tate-editing" data-ruby-new="1">${this.esc(rawText)}</span>`;
+        const span = document.createElement('span');
+        span.className = 'tate-editing';
+        span.textContent = rawText;
+
+        const parentEl = textNode.parentNode as HTMLElement;
+        const beforeHTML = parentEl.innerHTML;
+        const beforeCursor = this.getVisibleOffset();
 
         this.isModifyingDom = true;
         try {
-            // execCommand('insertHTML') はエディタにフォーカスがないと行頭・行末で正しく動作しないため
-            // execInsertHtml より前に focus() を呼ぶ（isModifyingDom=true で selectionchange を抑制済み）
-            this.el.focus();
-            this.execInsertHtml(textNode, startOffset, endOffset, spanHtml);
+            // 直接 DOM 操作でスパンを挿入（行頭・行末・行中の区別なし）
+            const precedingText = textNode.textContent!.slice(0, startOffset);
+            const followingText = textNode.textContent!.slice(endOffset);
+            const next = textNode.nextSibling;
+            parentEl.removeChild(textNode);
+            if (precedingText) parentEl.insertBefore(document.createTextNode(precedingText), next);
+            parentEl.insertBefore(span, next);
+            if (followingText) parentEl.insertBefore(document.createTextNode(followingText), next);
 
-            const span = this.el.querySelector('[data-ruby-new="1"]') as HTMLSpanElement | null;
-            if (!span) {
-                // 残留属性をクリーンアップしてから抜ける
-                this.el.querySelectorAll('[data-ruby-new]').forEach(
-                    el => el.removeAttribute('data-ruby-new')
-                );
-                return false;
-            }
-            span.removeAttribute('data-ruby-new');
             this.expandedEl = span;
             this.expandedElOriginalText = rawText;
+            // collapseEditing 時に annotation undo エントリを記録するための事前情報
+            this.pendingAnnotationUndo = { parentEl, beforeHTML, beforeCursor };
 
             // カーソルを《と》の間（rawText.length - 1 = 》の直前）に設定
             const spanText = span.firstChild as Text | null;
             if (spanText) {
-                this.el.focus(); // execCommand の後でフォーカスを与える（Undo スタックに影響しない）
                 const sel = window.getSelection()!;
-                const range = document.createRange();
-                range.setStart(spanText, rawText.length - 1);
-                range.collapse(true);
+                const r = document.createRange();
+                r.setStart(spanText, rawText.length - 1);
+                r.collapse(true);
                 sel.removeAllRanges();
-                sel.addRange(range);
+                sel.addRange(r);
             }
         } finally {
             this.isModifyingDom = false;
@@ -283,38 +289,18 @@ export class EditorElement {
         const selectedText = textNode.textContent!.slice(startOffset, endOffset);
         if (!selectedText) return false;
 
-        // 挿入後に要素を特定するための一時属性を付与する
         const newEl = createElement(selectedText);
-        newEl.setAttribute('data-wrap-new', '1');
 
         this.isModifyingDom = true;
         try {
-            // execCommand('insertHTML') はエディタにフォーカスがないと行頭・行末で正しく動作しないため
-            // execInsertHtml より前に focus() を呼ぶ（isModifyingDom=true で selectionchange を抑制済み）
-            this.el.focus();
-            this.execInsertHtml(textNode, startOffset, endOffset, newEl.outerHTML);
-
-            // 挿入した要素を特定して一時属性を除去する
-            const inserted = this.el.querySelector('[data-wrap-new="1"]') as HTMLElement | null;
-            if (!inserted) {
-                // execCommand が失敗した場合は残留属性をクリーンアップして終了
-                this.el.querySelectorAll('[data-wrap-new]').forEach(
-                    el => el.removeAttribute('data-wrap-new')
-                );
-                return false;
-            }
-            inserted.removeAttribute('data-wrap-new');
+            const { element: inserted, commitUndo } = this.insertAnnotationElement(
+                textNode, startOffset, endOffset, newEl,
+            );
 
             // カーソルを挿入要素の直後に置く
-            // カーソルが要素内にあると selectionchange → expandForEditing() が呼ばれ、
-            // Undo 時に DOM と Undo スタックが不整合になるため
-            this.el.focus(); // execCommand の後なので Undo スタックに影響しない
-            const sel = window.getSelection()!;
-            const range = document.createRange();
-            range.setStartAfter(inserted);
-            range.collapse(true);
-            sel.removeAllRanges();
-            sel.addRange(range);
+            // カーソルが要素内にあると selectionchange → expandForEditing() が呼ばれるため
+            this.setCursorAfter(inserted);
+            commitUndo(); // afterCursor をキャプチャして annotation エントリを記録
         } finally {
             this.isModifyingDom = false;
         }
@@ -351,22 +337,14 @@ export class EditorElement {
         this.isModifyingDom = true;
         try {
             const newEl = createElement(content);
-            newEl.setAttribute('data-new-el', '1');
-            this.execInsertHtml(textNode, annotationStart - content.length, range.startOffset, newEl.outerHTML);
+            const { element: inserted, commitUndo } = this.insertAnnotationElement(
+                textNode, annotationStart - content.length, range.startOffset, newEl,
+            );
 
-            // 挿入した要素を特定して一時属性を除去し、カーソルを要素の直後に置く
+            // カーソルを要素の直後に置く
             // カーソルが要素内にあると selectionchange → expandForEditing() が即座に発火するため
-            const inserted = this.el.querySelector('[data-new-el="1"]') as HTMLElement | null;
-            if (inserted) {
-                inserted.removeAttribute('data-new-el');
-                this.el.focus(); // execCommand の後なので Undo スタックに影響しない
-                const afterSel = window.getSelection()!;
-                const r = document.createRange();
-                r.setStartAfter(inserted);
-                r.collapse(true);
-                afterSel.removeAllRanges();
-                afterSel.addRange(r);
-            }
+            this.setCursorAfter(inserted);
+            commitUndo(); // afterCursor をキャプチャして annotation エントリを記録
         } finally {
             this.isModifyingDom = false;
         }
@@ -438,35 +416,37 @@ export class EditorElement {
     }
 
     // 編集スパンを収束し、内容を再パースして元の位置に挿入する（カーソルは呼び出し元が処理）
+    // pendingAnnotationUndo が設定されている場合（wrapSelectionWithRuby 由来）は
+    // 収束後の最終状態を annotation undo エントリとして記録する。
+    // cursor-triggered な expand/collapse は pendingAnnotationUndo が null のため記録しない。
     private collapseEditing(): void {
         if (!this.expandedEl) return;
-        // Undo などで expandedEl が DOM から取り除かれた場合は単純にクリアして終了
-        // （detached ノードに対して parentNode や selectNode を呼ぶと例外が発生するため）
+        // detached ノードは単純にクリアして終了
+        // （parentNode / selectNode を呼ぶと例外が発生するため）
         if (!this.expandedEl.isConnected) {
             this.expandedEl = null;
             this.expandedElOriginalText = null;
+            this.pendingAnnotationUndo = null;
             return;
         }
 
         let rawText = this.expandedEl.textContent ?? '';
-        // 内容が変化した場合は execCommand('insertHTML') でブラウザの Undo スタックに記録する
-        // 変化なし（カーソルが通過しただけ）の場合は生 DOM 操作で Undo スタックを汚染しない
         const hasChanged = this.expandedElOriginalText === null
             || rawText !== this.expandedElOriginalText;
 
         const parent = this.expandedEl.parentNode!;
         const nextSibling = this.expandedEl.nextSibling;
 
+        // 前方テキスト取り込み補正（hasChanged の場合のみ意味あり）
+        // アノテーション「」内容がスパン内の前方テキストより長い場合、
+        // 不足分の文字をスパン直前のテキストノードから取り込む
+        let precedingTextNode: Text | null = null;
+        let precedingChars = '';
         if (hasChanged) {
-            // 寛容モード補正: アノテーション「」内容がスパン内の前方テキストより長い場合、
-            // 不足分の文字をスパン直前のテキストノードから取り込む
-            // 例: 前のテキスト「1」+ スパン「30[#「130」縦中横]」→ rawText を「130[#...]」に補正
-            let precedingTextNode: Text | null = null;
-            let precedingChars = '';
             const extraChars = this.getExtraCharsFromAnnotation(rawText);
             if (extraChars.length > 0) {
                 const prev = this.expandedEl.previousSibling;
-                if (prev && prev.nodeType === Node.TEXT_NODE) {
+                if (prev?.nodeType === Node.TEXT_NODE) {
                     const prevText = prev as Text;
                     if ((prevText.textContent ?? '').endsWith(extraChars)) {
                         precedingTextNode = prevText;
@@ -475,85 +455,54 @@ export class EditorElement {
                     }
                 }
             }
-
-            // parseToHtml は使わない（<div> で包むため段落 <div> 内でネストする）
-            const html = this.parseInlineToHtml(rawText);
-
-            // ブロック境界（行頭・行末）でのスパンは execCommand('insertHTML') が
-            // <ruby> 等のインライン要素をストリップして平文にするバグがあるため、
-            // 直接 DOM 操作で収束する（Undo スタックへの記録はされない）
-            const spanParentEl = this.expandedEl.parentNode!;
-            const spanNextEl = this.expandedEl.nextSibling;
-            const isAtBlockBoundary = spanParentEl !== this.el && (
-                this.expandedEl.previousSibling === null ||
-                this.expandedEl.nextSibling === null ||
-                (this.expandedEl.nextSibling.nodeType === Node.ELEMENT_NODE &&
-                 (this.expandedEl.nextSibling as Element).tagName === 'BR')
-            );
-
-            if (isAtBlockBoundary) {
-                // 前のテキストノードから取り込んだ文字を削除
-                if (precedingTextNode && precedingTextNode.isConnected) {
-                    precedingTextNode.textContent = (precedingTextNode.textContent ?? '')
-                        .slice(0, -precedingChars.length);
-                }
-                spanParentEl.removeChild(this.expandedEl);
-                this.expandedEl = null;
-                this.expandedElOriginalText = null;
-                const tempDiv = document.createElement('div');
-                tempDiv.innerHTML = html;
-                while (tempDiv.firstChild) {
-                    spanParentEl.insertBefore(tempDiv.firstChild, spanNextEl);
-                }
-            } else {
-                // エディタ外クリック等でフォーカスが外れている場合でも execCommand が確実に
-                // 動作するようにフォーカスを戻す（execCommand はフォーカス中の contenteditable に作用する）
-                this.el.focus();
-                const sel = window.getSelection()!;
-                const r = document.createRange();
-                if (precedingTextNode) {
-                    // 直前テキストの末尾 precedingChars 分も選択に含め、execCommand で一括置換する
-                    // これにより Undo スタックに「前テキスト削除 + 新要素挿入」が1エントリとして記録される
-                    r.setStart(precedingTextNode, precedingTextNode.length - precedingChars.length);
-                    r.setEndAfter(this.expandedEl);
-                } else {
-                    r.selectNode(this.expandedEl);
-                }
-                sel.removeAllRanges();
-                sel.addRange(r);
-                const spanRef = this.expandedEl;
-                this.expandedEl = null;
-                this.expandedElOriginalText = null;
-                document.execCommand('insertHTML', false, html);
-                // execCommand が失敗してスパンが DOM に残っている場合は生 DOM 操作でフォールバック
-                // （フォーカスが外れた状態などで execCommand が失敗しても確実に収束させるため）
-                if (spanRef.isConnected) {
-                    const spanParent = spanRef.parentNode!;
-                    const spanNext = spanRef.nextSibling;
-                    // 前のテキストノードから取り込んだ文字を削除
-                    if (precedingTextNode && precedingTextNode.isConnected) {
-                        precedingTextNode.textContent = (precedingTextNode.textContent ?? '')
-                            .slice(0, -precedingChars.length);
-                    }
-                    spanParent.removeChild(spanRef);
-                    const tempDiv = document.createElement('div');
-                    tempDiv.innerHTML = html;
-                    while (tempDiv.firstChild) {
-                        spanParent.insertBefore(tempDiv.firstChild, spanNext);
-                    }
-                }
-            }
-        } else {
-            parent.removeChild(this.expandedEl);
-            this.expandedEl = null;
-            this.expandedElOriginalText = null;
-
-            const tempDiv = document.createElement('div');
-            tempDiv.innerHTML = this.parseInlineToHtml(rawText);
-            while (tempDiv.firstChild) {
-                parent.insertBefore(tempDiv.firstChild, nextSibling);
-            }
         }
+
+        // parseToHtml は使わない（<div> で包むため段落 <div> 内でネストする）
+        const html = this.parseInlineToHtml(rawText);
+
+        // 前方テキストから取り込んだ分を削除
+        if (precedingTextNode?.isConnected) {
+            precedingTextNode.textContent = (precedingTextNode.textContent ?? '')
+                .slice(0, -precedingChars.length);
+        }
+
+        // 直接 DOM 操作（行頭・行末・行中の区別なし）
+        parent.removeChild(this.expandedEl);
+        this.expandedEl = null;
+        this.expandedElOriginalText = null;
+        const tempDiv = document.createElement('div');
+        tempDiv.innerHTML = html;
+        while (tempDiv.firstChild) {
+            parent.insertBefore(tempDiv.firstChild, nextSibling);
+        }
+
+        // wrapSelectionWithRuby 由来の場合: 最終 DOM 状態を annotation undo エントリとして記録
+        // isUndoRedoing=true（undo() 内から呼ばれた場合）は記録しない
+        if (this.pendingAnnotationUndo && !this.isUndoRedoing) {
+            const { parentEl, beforeHTML, beforeCursor } = this.pendingAnnotationUndo;
+            // afterCursor: 最後に挿入したノードの直後にカーソルを置いて計測
+            const lastInserted = nextSibling ? nextSibling.previousSibling : parent.lastChild;
+            let afterCursor = beforeCursor;
+            if (lastInserted) {
+                try {
+                    const sel = window.getSelection();
+                    if (sel) {
+                        const r = document.createRange();
+                        r.setStartAfter(lastInserted);
+                        r.collapse(true);
+                        sel.removeAllRanges();
+                        sel.addRange(r);
+                        afterCursor = this.getVisibleOffset();
+                    }
+                } catch { /* ignore */ }
+            }
+            const afterHTML = parentEl.innerHTML;
+            this.undoManager.pushAnnotation(
+                () => { parentEl.innerHTML = beforeHTML; this.setVisibleOffset(beforeCursor); },
+                () => { parentEl.innerHTML = afterHTML; this.setVisibleOffset(afterCursor); },
+            );
+        }
+        this.pendingAnnotationUndo = null;
     }
 
     // 要素内のカーソル位置を raw テキスト上の文字オフセットに変換する
@@ -878,62 +827,126 @@ export class EditorElement {
         return null;
     }
 
-    // テキストノードの [matchStart, matchEnd) を html で置き換える
-    // 行中（両端がテキストノード境界でない）場合は execCommand('insertHTML') でUndoスタックに記録する。
-    // 行頭（matchStart=0）または行末（matchEnd=textNode.length）の場合、Chromium が
-    // insertHTML をブロック境界として扱い要素を剥ぎ取るバグがあるため、直接DOM操作で代替する。
-    private execInsertHtml(
+    // テキストノードの [matchStart, matchEnd) を element で置き換える直接 DOM 操作。
+    // 行頭・行末・行中の区別なく常に直接 DOM 操作で統一する（execCommand 不使用）。
+    // { element, commitUndo } を返す。呼び出し元がカーソルを設定した後に commitUndo() を呼ぶと
+    // 操作前後の段落 innerHTML と cursor offset を annotation undo エントリとして記録する。
+    private insertAnnotationElement(
         textNode: Text,
         matchStart: number,
         matchEnd: number,
-        html: string,
-    ): void {
-        if (textNode.parentNode !== this.el &&
-            (matchStart === 0 || matchEnd === textNode.length)) {
-            // ブロック境界ケース: 直接 DOM 操作（Undo スタックへの記録はされない）
-            this.execInsertHtmlAtBoundary(textNode, matchStart, matchEnd, html);
-            return;
-        }
+        element: HTMLElement,
+    ): { element: HTMLElement; commitUndo: () => void } {
+        const parentEl = textNode.parentNode as HTMLElement;
+        const beforeHTML = parentEl.innerHTML;
+        const beforeCursor = this.getVisibleOffset();
 
-        const sel = window.getSelection()!;
-        const r = document.createRange();
-        r.setStart(textNode, matchStart);
-        r.setEnd(textNode, matchEnd);
-        sel.removeAllRanges();
-        sel.addRange(r);
-        document.execCommand('insertHTML', false, html);
-    }
-
-    // execCommand('insertHTML') のブロック境界バグを回避するための直接 DOM 操作代替
-    private execInsertHtmlAtBoundary(
-        textNode: Text,
-        matchStart: number,
-        matchEnd: number,
-        html: string,
-    ): void {
-        const parent = textNode.parentNode!;
-        const nextSibling = textNode.nextSibling;
-
+        // テキストノードを分割して要素を挿入
         const precedingText = textNode.textContent!.slice(0, matchStart);
         const followingText = textNode.textContent!.slice(matchEnd);
+        const next = textNode.nextSibling;
+        parentEl.removeChild(textNode);
+        if (precedingText) parentEl.insertBefore(document.createTextNode(precedingText), next);
+        parentEl.insertBefore(element, next);
+        if (followingText) parentEl.insertBefore(document.createTextNode(followingText), next);
 
-        // HTML をパースして挿入ノードを取得
-        const tempDiv = document.createElement('div');
-        tempDiv.innerHTML = html;
-        const newNodes = Array.from(tempDiv.childNodes);
+        return {
+            element,
+            // カーソル設定後に呼ぶ。そのとき afterCursor をキャプチャして annotation エントリを積む。
+            commitUndo: () => {
+                if (this.isUndoRedoing) return;
+                const afterHTML = parentEl.innerHTML;
+                const afterCursor = this.getVisibleOffset();
+                this.undoManager.pushAnnotation(
+                    () => { parentEl.innerHTML = beforeHTML; this.setVisibleOffset(beforeCursor); },
+                    () => { parentEl.innerHTML = afterHTML; this.setVisibleOffset(afterCursor); },
+                );
+            },
+        };
+    }
 
-        parent.removeChild(textNode);
+    // input イベントからネイティブ Undo マーカーを積む（view.ts から呼ぶ）
+    // 展開中スパンがある間はネイティブマーカーを積まない（collapseEditing 後に参照が失効するため）
+    // Undo/Redo 操作中も積まない（execCommand('undo') が発火する input を無視するため）
+    pushNativeMarker(): void {
+        if (this.isUndoRedoing) return;
+        if (this.expandedEl) return;
+        this.undoManager.pushNativeMarker();
+    }
 
-        // 前方テキスト → 新ノード群 → 後方テキスト の順に挿入
-        if (precedingText) {
-            parent.insertBefore(document.createTextNode(precedingText), nextSibling);
+    // Ctrl+Z に対応する Undo 操作（view.ts から呼ぶ）
+    // 展開中スパンがあれば先に収束してから Undo を実行する。
+    // 戻り値: DOM が変化した場合 true（呼び出し元が onEditorChange() を呼ぶ目安）
+    undo(): boolean {
+        // isUndoRedoing を先頭でセットして collapseEditing 内の pendingAnnotationUndo 処理を抑制する。
+        // これにより Redo スタックが不必要にクリアされるのを防ぐ。
+        this.isUndoRedoing = true;
+        this.isModifyingDom = true;
+        try {
+            this.collapseEditingIfExpanded();
+            if (!this.undoManager.canUndo) {
+                // カスタムスタックが空でもネイティブ Undo に委譲する。
+                // 連続テキスト入力は dedup で 1 マーカーにまとまるため、
+                // 最初の Ctrl+Z でマーカーが消えた後も入力が残っている場合がある。
+                document.execCommand('undo');
+                return true;
+            }
+            const entry = this.undoManager.undo();
+            if (!entry) return false;
+            if (entry.kind === 'native') {
+                document.execCommand('undo');
+            }
+            return true;
+        } finally {
+            this.isModifyingDom = false;
+            this.isUndoRedoing = false;
         }
-        for (const node of newNodes) {
-            parent.insertBefore(node, nextSibling);
+    }
+
+    // Ctrl+Shift+Z に対応する Redo 操作（view.ts から呼ぶ）
+    // 展開中スパンがあれば先に収束してから Redo を実行する。
+    // 戻り値: DOM が変化した場合 true
+    redo(): boolean {
+        this.isUndoRedoing = true;
+        this.isModifyingDom = true;
+        try {
+            this.collapseEditingIfExpanded();
+            if (!this.undoManager.canRedo) {
+                // カスタムスタックが空でもネイティブ Redo に委譲する。
+                document.execCommand('redo');
+                return true;
+            }
+            const entry = this.undoManager.redo();
+            if (!entry) return false;
+            if (entry.kind === 'native') {
+                document.execCommand('redo');
+            }
+            return true;
+        } finally {
+            this.isModifyingDom = false;
+            this.isUndoRedoing = false;
         }
-        if (followingText) {
-            parent.insertBefore(document.createTextNode(followingText), nextSibling);
-        }
+    }
+
+    // 展開中スパンがあれば収束する。undo()/redo() の冒頭から呼ぶ前提で
+    // isModifyingDom と isUndoRedoing は呼び出し元が設定済みであること。
+    private collapseEditingIfExpanded(): void {
+        if (!this.expandedEl?.isConnected) return;
+        this.collapseEditing();
+        this.savedRange = null;
+    }
+
+    // カーソルを node の直後に移動する。
+    // ライブ変換・コマンドで要素を挿入した直後に呼び、カーソルが要素内に入って
+    // selectionchange → expandForEditing() が即発火するのを防ぐ。
+    private setCursorAfter(node: Node): void {
+        const sel = window.getSelection();
+        if (!sel) return;
+        const r = document.createRange();
+        r.setStartAfter(node);
+        r.collapse(true);
+        sel.removeAllRanges();
+        sel.addRange(r);
     }
 
     // インライン編集後の収束時に、アノテーション「」内容がスパン内の前方テキストより

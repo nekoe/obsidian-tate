@@ -42,6 +42,7 @@ export class VerticalWritingView extends ItemView {
         });
         this.registerDomEvent(editorEl.el, 'input', (e: Event) => {
             syncCoordinator.onEditorChange();
+            editorEl.pushNativeMarker(); // キー入力・IME確定をネイティブ Undo マーカーとして記録
             if (!(e as InputEvent).isComposing) {
                 editorEl.handleRubyCompletion();
                 editorEl.handleTcyCompletion();
@@ -55,6 +56,14 @@ export class VerticalWritingView extends ItemView {
         });
         this.registerDomEvent(document, 'selectionchange', () => {
             editorEl.handleSelectionChange();
+        });
+        this.registerDomEvent(editorEl.el, 'keydown', (e: KeyboardEvent) => {
+            // Ctrl+Z / Cmd+Z: Undo、Ctrl+Shift+Z / Cmd+Shift+Z: Redo
+            if ((e.metaKey || e.ctrlKey) && !e.altKey && e.key === 'z') {
+                e.preventDefault();
+                const changed = e.shiftKey ? editorEl.redo() : editorEl.undo();
+                if (changed) syncCoordinator.onEditorChange();
+            }
         });
 
         this.registerEvent(

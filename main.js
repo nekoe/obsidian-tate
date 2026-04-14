@@ -114,6 +114,76 @@ var SyncCoordinator = class {
   }
 };
 
+// src/ui/UndoManager.ts
+var UndoManager = class {
+  constructor() {
+    this.undoStack = [];
+    this.redoStack = [];
+  }
+  /** 記法操作エントリを積む（Redo スタックはクリア） */
+  pushAnnotation(undo, redo) {
+    this.undoStack.push({ kind: "annotation", undo, redo });
+    this.redoStack = [];
+  }
+  /**
+   * ネイティブ Undo マーカーを積む。
+   * 直前がすでに native なら重複スキップ。Redo スタックはクリア。
+   */
+  pushNativeMarker() {
+    const top = this.undoStack[this.undoStack.length - 1];
+    if ((top == null ? void 0 : top.kind) === "native") return;
+    this.undoStack.push({ kind: "native" });
+    this.redoStack = [];
+  }
+  /**
+   * Undo 操作。エントリを 1 つ取り出して返す。
+   * - annotation: entry.undo() を実行して Redo スタックへ移す
+   * - native: Redo スタックにマーカーを積む（execCommand 委譲は呼び出し元が行う）
+   * - 空: null を返す
+   */
+  undo() {
+    var _a;
+    const entry = (_a = this.undoStack.pop()) != null ? _a : null;
+    if (!entry) return null;
+    if (entry.kind === "annotation") {
+      entry.undo();
+      this.redoStack.push(entry);
+    } else {
+      this.redoStack.push({ kind: "native" });
+    }
+    return entry;
+  }
+  /**
+   * Redo 操作。エントリを 1 つ取り出して返す。
+   * - annotation: entry.redo() を実行して Undo スタックへ移す
+   * - native: Undo スタックにマーカーを積む（execCommand 委譲は呼び出し元が行う）
+   * - 空: null を返す
+   */
+  redo() {
+    var _a;
+    const entry = (_a = this.redoStack.pop()) != null ? _a : null;
+    if (!entry) return null;
+    if (entry.kind === "annotation") {
+      entry.redo();
+      this.undoStack.push(entry);
+    } else {
+      this.undoStack.push({ kind: "native" });
+    }
+    return entry;
+  }
+  /** スタックをクリア（ファイル切り替え時など） */
+  clear() {
+    this.undoStack = [];
+    this.redoStack = [];
+  }
+  get canUndo() {
+    return this.undoStack.length > 0;
+  }
+  get canRedo() {
+    return this.redoStack.length > 0;
+  }
+};
+
 // src/ui/EditorElement.ts
 var KANJI_RE_STR = "[\u4E00-\u9FFF\u3400-\u4DBF\u{20000}-\u{2A6DF}\u3005\u3006\u3024]+";
 var EditorElement = class {
@@ -126,6 +196,13 @@ var EditorElement = class {
     this.expandedElOriginalText = null;
     // コマンド実行時に使う選択範囲キャッシュ（コマンドパレット起動でフォーカスが外れた後も保持）
     this.savedRange = null;
+    // 独自 Undo/Redo スタック
+    this.undoManager = new UndoManager();
+    // Undo/Redo 操作中のフラグ（native マーカー重複追加・ライブ変換の再入を防ぐ）
+    this.isUndoRedoing = false;
+    // wrapSelectionWithRuby が設定する「collapseEditing 時に記録する annotation undo の事前情報」
+    // cursor-triggered な expand/collapse には設定されない（Undo スタックに積まない）
+    this.pendingAnnotationUndo = null;
     this.el = container.createEl("div");
     this.el.addClass("tate-editor");
     this.el.setAttribute("contenteditable", "true");
@@ -139,6 +216,8 @@ var EditorElement = class {
     this.expandedEl = null;
     this.expandedElOriginalText = null;
     this.savedRange = null;
+    this.pendingAnnotationUndo = null;
+    if (!preserveCursor) this.undoManager.clear();
     if (this.getValue() === content) return;
     if (preserveCursor && document.activeElement === this.el) {
       const pos = this.getVisibleOffset();
@@ -238,19 +317,14 @@ var EditorElement = class {
     this.isModifyingDom = true;
     try {
       const rubyEl = this.createRubyEl(base, rt, explicit);
-      rubyEl.setAttribute("data-new-el", "1");
-      this.execInsertHtml(textNode, matchStart, range.startOffset, rubyEl.outerHTML);
-      const inserted = this.el.querySelector('[data-new-el="1"]');
-      if (inserted) {
-        inserted.removeAttribute("data-new-el");
-        this.el.focus();
-        const afterSel = window.getSelection();
-        const r = document.createRange();
-        r.setStartAfter(inserted);
-        r.collapse(true);
-        afterSel.removeAllRanges();
-        afterSel.addRange(r);
-      }
+      const { element: inserted, commitUndo } = this.insertAnnotationElement(
+        textNode,
+        matchStart,
+        range.startOffset,
+        rubyEl
+      );
+      this.setCursorAfter(inserted);
+      commitUndo();
     } finally {
       this.isModifyingDom = false;
     }
@@ -270,30 +344,32 @@ var EditorElement = class {
     const selectedText = textNode.textContent.slice(startOffset, endOffset);
     if (!selectedText) return false;
     const rawText = `\uFF5C${selectedText}\u300A\u300B`;
-    const spanHtml = `<span class="tate-editing" data-ruby-new="1">${this.esc(rawText)}</span>`;
+    const span = document.createElement("span");
+    span.className = "tate-editing";
+    span.textContent = rawText;
+    const parentEl = textNode.parentNode;
+    const beforeHTML = parentEl.innerHTML;
+    const beforeCursor = this.getVisibleOffset();
     this.isModifyingDom = true;
     try {
-      this.el.focus();
-      this.execInsertHtml(textNode, startOffset, endOffset, spanHtml);
-      const span = this.el.querySelector('[data-ruby-new="1"]');
-      if (!span) {
-        this.el.querySelectorAll("[data-ruby-new]").forEach(
-          (el) => el.removeAttribute("data-ruby-new")
-        );
-        return false;
-      }
-      span.removeAttribute("data-ruby-new");
+      const precedingText = textNode.textContent.slice(0, startOffset);
+      const followingText = textNode.textContent.slice(endOffset);
+      const next = textNode.nextSibling;
+      parentEl.removeChild(textNode);
+      if (precedingText) parentEl.insertBefore(document.createTextNode(precedingText), next);
+      parentEl.insertBefore(span, next);
+      if (followingText) parentEl.insertBefore(document.createTextNode(followingText), next);
       this.expandedEl = span;
       this.expandedElOriginalText = rawText;
+      this.pendingAnnotationUndo = { parentEl, beforeHTML, beforeCursor };
       const spanText = span.firstChild;
       if (spanText) {
-        this.el.focus();
         const sel = window.getSelection();
-        const range = document.createRange();
-        range.setStart(spanText, rawText.length - 1);
-        range.collapse(true);
+        const r = document.createRange();
+        r.setStart(spanText, rawText.length - 1);
+        r.collapse(true);
         sel.removeAllRanges();
-        sel.addRange(range);
+        sel.addRange(r);
       }
     } finally {
       this.isModifyingDom = false;
@@ -323,26 +399,16 @@ var EditorElement = class {
     const selectedText = textNode.textContent.slice(startOffset, endOffset);
     if (!selectedText) return false;
     const newEl = createElement(selectedText);
-    newEl.setAttribute("data-wrap-new", "1");
     this.isModifyingDom = true;
     try {
-      this.el.focus();
-      this.execInsertHtml(textNode, startOffset, endOffset, newEl.outerHTML);
-      const inserted = this.el.querySelector('[data-wrap-new="1"]');
-      if (!inserted) {
-        this.el.querySelectorAll("[data-wrap-new]").forEach(
-          (el) => el.removeAttribute("data-wrap-new")
-        );
-        return false;
-      }
-      inserted.removeAttribute("data-wrap-new");
-      this.el.focus();
-      const sel = window.getSelection();
-      const range = document.createRange();
-      range.setStartAfter(inserted);
-      range.collapse(true);
-      sel.removeAllRanges();
-      sel.addRange(range);
+      const { element: inserted, commitUndo } = this.insertAnnotationElement(
+        textNode,
+        startOffset,
+        endOffset,
+        newEl
+      );
+      this.setCursorAfter(inserted);
+      commitUndo();
     } finally {
       this.isModifyingDom = false;
     }
@@ -370,19 +436,14 @@ var EditorElement = class {
     this.isModifyingDom = true;
     try {
       const newEl = createElement(content);
-      newEl.setAttribute("data-new-el", "1");
-      this.execInsertHtml(textNode, annotationStart - content.length, range.startOffset, newEl.outerHTML);
-      const inserted = this.el.querySelector('[data-new-el="1"]');
-      if (inserted) {
-        inserted.removeAttribute("data-new-el");
-        this.el.focus();
-        const afterSel = window.getSelection();
-        const r = document.createRange();
-        r.setStartAfter(inserted);
-        r.collapse(true);
-        afterSel.removeAllRanges();
-        afterSel.addRange(r);
-      }
+      const { element: inserted, commitUndo } = this.insertAnnotationElement(
+        textNode,
+        annotationStart - content.length,
+        range.startOffset,
+        newEl
+      );
+      this.setCursorAfter(inserted);
+      commitUndo();
     } finally {
       this.isModifyingDom = false;
     }
@@ -445,25 +506,29 @@ var EditorElement = class {
     }
   }
   // 編集スパンを収束し、内容を再パースして元の位置に挿入する（カーソルは呼び出し元が処理）
+  // pendingAnnotationUndo が設定されている場合（wrapSelectionWithRuby 由来）は
+  // 収束後の最終状態を annotation undo エントリとして記録する。
+  // cursor-triggered な expand/collapse は pendingAnnotationUndo が null のため記録しない。
   collapseEditing() {
-    var _a, _b, _c, _d;
+    var _a, _b, _c;
     if (!this.expandedEl) return;
     if (!this.expandedEl.isConnected) {
       this.expandedEl = null;
       this.expandedElOriginalText = null;
+      this.pendingAnnotationUndo = null;
       return;
     }
     let rawText = (_a = this.expandedEl.textContent) != null ? _a : "";
     const hasChanged = this.expandedElOriginalText === null || rawText !== this.expandedElOriginalText;
     const parent = this.expandedEl.parentNode;
     const nextSibling = this.expandedEl.nextSibling;
+    let precedingTextNode = null;
+    let precedingChars = "";
     if (hasChanged) {
-      let precedingTextNode = null;
-      let precedingChars = "";
       const extraChars = this.getExtraCharsFromAnnotation(rawText);
       if (extraChars.length > 0) {
         const prev = this.expandedEl.previousSibling;
-        if (prev && prev.nodeType === Node.TEXT_NODE) {
+        if ((prev == null ? void 0 : prev.nodeType) === Node.TEXT_NODE) {
           const prevText = prev;
           if (((_b = prevText.textContent) != null ? _b : "").endsWith(extraChars)) {
             precedingTextNode = prevText;
@@ -472,62 +537,50 @@ var EditorElement = class {
           }
         }
       }
-      const html = this.parseInlineToHtml(rawText);
-      const spanParentEl = this.expandedEl.parentNode;
-      const spanNextEl = this.expandedEl.nextSibling;
-      const isAtBlockBoundary = spanParentEl !== this.el && (this.expandedEl.previousSibling === null || this.expandedEl.nextSibling === null || this.expandedEl.nextSibling.nodeType === Node.ELEMENT_NODE && this.expandedEl.nextSibling.tagName === "BR");
-      if (isAtBlockBoundary) {
-        if (precedingTextNode && precedingTextNode.isConnected) {
-          precedingTextNode.textContent = ((_c = precedingTextNode.textContent) != null ? _c : "").slice(0, -precedingChars.length);
-        }
-        spanParentEl.removeChild(this.expandedEl);
-        this.expandedEl = null;
-        this.expandedElOriginalText = null;
-        const tempDiv = document.createElement("div");
-        tempDiv.innerHTML = html;
-        while (tempDiv.firstChild) {
-          spanParentEl.insertBefore(tempDiv.firstChild, spanNextEl);
-        }
-      } else {
-        this.el.focus();
-        const sel = window.getSelection();
-        const r = document.createRange();
-        if (precedingTextNode) {
-          r.setStart(precedingTextNode, precedingTextNode.length - precedingChars.length);
-          r.setEndAfter(this.expandedEl);
-        } else {
-          r.selectNode(this.expandedEl);
-        }
-        sel.removeAllRanges();
-        sel.addRange(r);
-        const spanRef = this.expandedEl;
-        this.expandedEl = null;
-        this.expandedElOriginalText = null;
-        document.execCommand("insertHTML", false, html);
-        if (spanRef.isConnected) {
-          const spanParent = spanRef.parentNode;
-          const spanNext = spanRef.nextSibling;
-          if (precedingTextNode && precedingTextNode.isConnected) {
-            precedingTextNode.textContent = ((_d = precedingTextNode.textContent) != null ? _d : "").slice(0, -precedingChars.length);
-          }
-          spanParent.removeChild(spanRef);
-          const tempDiv = document.createElement("div");
-          tempDiv.innerHTML = html;
-          while (tempDiv.firstChild) {
-            spanParent.insertBefore(tempDiv.firstChild, spanNext);
-          }
-        }
-      }
-    } else {
-      parent.removeChild(this.expandedEl);
-      this.expandedEl = null;
-      this.expandedElOriginalText = null;
-      const tempDiv = document.createElement("div");
-      tempDiv.innerHTML = this.parseInlineToHtml(rawText);
-      while (tempDiv.firstChild) {
-        parent.insertBefore(tempDiv.firstChild, nextSibling);
-      }
     }
+    const html = this.parseInlineToHtml(rawText);
+    if (precedingTextNode == null ? void 0 : precedingTextNode.isConnected) {
+      precedingTextNode.textContent = ((_c = precedingTextNode.textContent) != null ? _c : "").slice(0, -precedingChars.length);
+    }
+    parent.removeChild(this.expandedEl);
+    this.expandedEl = null;
+    this.expandedElOriginalText = null;
+    const tempDiv = document.createElement("div");
+    tempDiv.innerHTML = html;
+    while (tempDiv.firstChild) {
+      parent.insertBefore(tempDiv.firstChild, nextSibling);
+    }
+    if (this.pendingAnnotationUndo && !this.isUndoRedoing) {
+      const { parentEl, beforeHTML, beforeCursor } = this.pendingAnnotationUndo;
+      const lastInserted = nextSibling ? nextSibling.previousSibling : parent.lastChild;
+      let afterCursor = beforeCursor;
+      if (lastInserted) {
+        try {
+          const sel = window.getSelection();
+          if (sel) {
+            const r = document.createRange();
+            r.setStartAfter(lastInserted);
+            r.collapse(true);
+            sel.removeAllRanges();
+            sel.addRange(r);
+            afterCursor = this.getVisibleOffset();
+          }
+        } catch (e) {
+        }
+      }
+      const afterHTML = parentEl.innerHTML;
+      this.undoManager.pushAnnotation(
+        () => {
+          parentEl.innerHTML = beforeHTML;
+          this.setVisibleOffset(beforeCursor);
+        },
+        () => {
+          parentEl.innerHTML = afterHTML;
+          this.setVisibleOffset(afterCursor);
+        }
+      );
+    }
+    this.pendingAnnotationUndo = null;
   }
   // 要素内のカーソル位置を raw テキスト上の文字オフセットに変換する
   rawOffsetForExpand(el, node, offset) {
@@ -782,42 +835,114 @@ var EditorElement = class {
     }
     return null;
   }
-  // テキストノードの [matchStart, matchEnd) を html で置き換える
-  // 行中（両端がテキストノード境界でない）場合は execCommand('insertHTML') でUndoスタックに記録する。
-  // 行頭（matchStart=0）または行末（matchEnd=textNode.length）の場合、Chromium が
-  // insertHTML をブロック境界として扱い要素を剥ぎ取るバグがあるため、直接DOM操作で代替する。
-  execInsertHtml(textNode, matchStart, matchEnd, html) {
-    if (textNode.parentNode !== this.el && (matchStart === 0 || matchEnd === textNode.length)) {
-      this.execInsertHtmlAtBoundary(textNode, matchStart, matchEnd, html);
-      return;
-    }
-    const sel = window.getSelection();
-    const r = document.createRange();
-    r.setStart(textNode, matchStart);
-    r.setEnd(textNode, matchEnd);
-    sel.removeAllRanges();
-    sel.addRange(r);
-    document.execCommand("insertHTML", false, html);
-  }
-  // execCommand('insertHTML') のブロック境界バグを回避するための直接 DOM 操作代替
-  execInsertHtmlAtBoundary(textNode, matchStart, matchEnd, html) {
-    const parent = textNode.parentNode;
-    const nextSibling = textNode.nextSibling;
+  // テキストノードの [matchStart, matchEnd) を element で置き換える直接 DOM 操作。
+  // 行頭・行末・行中の区別なく常に直接 DOM 操作で統一する（execCommand 不使用）。
+  // { element, commitUndo } を返す。呼び出し元がカーソルを設定した後に commitUndo() を呼ぶと
+  // 操作前後の段落 innerHTML と cursor offset を annotation undo エントリとして記録する。
+  insertAnnotationElement(textNode, matchStart, matchEnd, element) {
+    const parentEl = textNode.parentNode;
+    const beforeHTML = parentEl.innerHTML;
+    const beforeCursor = this.getVisibleOffset();
     const precedingText = textNode.textContent.slice(0, matchStart);
     const followingText = textNode.textContent.slice(matchEnd);
-    const tempDiv = document.createElement("div");
-    tempDiv.innerHTML = html;
-    const newNodes = Array.from(tempDiv.childNodes);
-    parent.removeChild(textNode);
-    if (precedingText) {
-      parent.insertBefore(document.createTextNode(precedingText), nextSibling);
+    const next = textNode.nextSibling;
+    parentEl.removeChild(textNode);
+    if (precedingText) parentEl.insertBefore(document.createTextNode(precedingText), next);
+    parentEl.insertBefore(element, next);
+    if (followingText) parentEl.insertBefore(document.createTextNode(followingText), next);
+    return {
+      element,
+      // カーソル設定後に呼ぶ。そのとき afterCursor をキャプチャして annotation エントリを積む。
+      commitUndo: () => {
+        if (this.isUndoRedoing) return;
+        const afterHTML = parentEl.innerHTML;
+        const afterCursor = this.getVisibleOffset();
+        this.undoManager.pushAnnotation(
+          () => {
+            parentEl.innerHTML = beforeHTML;
+            this.setVisibleOffset(beforeCursor);
+          },
+          () => {
+            parentEl.innerHTML = afterHTML;
+            this.setVisibleOffset(afterCursor);
+          }
+        );
+      }
+    };
+  }
+  // input イベントからネイティブ Undo マーカーを積む（view.ts から呼ぶ）
+  // 展開中スパンがある間はネイティブマーカーを積まない（collapseEditing 後に参照が失効するため）
+  // Undo/Redo 操作中も積まない（execCommand('undo') が発火する input を無視するため）
+  pushNativeMarker() {
+    if (this.isUndoRedoing) return;
+    if (this.expandedEl) return;
+    this.undoManager.pushNativeMarker();
+  }
+  // Ctrl+Z に対応する Undo 操作（view.ts から呼ぶ）
+  // 展開中スパンがあれば先に収束してから Undo を実行する。
+  // 戻り値: DOM が変化した場合 true（呼び出し元が onEditorChange() を呼ぶ目安）
+  undo() {
+    this.isUndoRedoing = true;
+    this.isModifyingDom = true;
+    try {
+      this.collapseEditingIfExpanded();
+      if (!this.undoManager.canUndo) {
+        document.execCommand("undo");
+        return true;
+      }
+      const entry = this.undoManager.undo();
+      if (!entry) return false;
+      if (entry.kind === "native") {
+        document.execCommand("undo");
+      }
+      return true;
+    } finally {
+      this.isModifyingDom = false;
+      this.isUndoRedoing = false;
     }
-    for (const node of newNodes) {
-      parent.insertBefore(node, nextSibling);
+  }
+  // Ctrl+Shift+Z に対応する Redo 操作（view.ts から呼ぶ）
+  // 展開中スパンがあれば先に収束してから Redo を実行する。
+  // 戻り値: DOM が変化した場合 true
+  redo() {
+    this.isUndoRedoing = true;
+    this.isModifyingDom = true;
+    try {
+      this.collapseEditingIfExpanded();
+      if (!this.undoManager.canRedo) {
+        document.execCommand("redo");
+        return true;
+      }
+      const entry = this.undoManager.redo();
+      if (!entry) return false;
+      if (entry.kind === "native") {
+        document.execCommand("redo");
+      }
+      return true;
+    } finally {
+      this.isModifyingDom = false;
+      this.isUndoRedoing = false;
     }
-    if (followingText) {
-      parent.insertBefore(document.createTextNode(followingText), nextSibling);
-    }
+  }
+  // 展開中スパンがあれば収束する。undo()/redo() の冒頭から呼ぶ前提で
+  // isModifyingDom と isUndoRedoing は呼び出し元が設定済みであること。
+  collapseEditingIfExpanded() {
+    var _a;
+    if (!((_a = this.expandedEl) == null ? void 0 : _a.isConnected)) return;
+    this.collapseEditing();
+    this.savedRange = null;
+  }
+  // カーソルを node の直後に移動する。
+  // ライブ変換・コマンドで要素を挿入した直後に呼び、カーソルが要素内に入って
+  // selectionchange → expandForEditing() が即発火するのを防ぐ。
+  setCursorAfter(node) {
+    const sel = window.getSelection();
+    if (!sel) return;
+    const r = document.createRange();
+    r.setStartAfter(node);
+    r.collapse(true);
+    sel.removeAllRanges();
+    sel.addRange(r);
   }
   // インライン編集後の収束時に、アノテーション「」内容がスパン内の前方テキストより
   // 長い場合に直前テキストノードから取り込むべき文字列を返す。
@@ -902,6 +1027,7 @@ var VerticalWritingView = class extends import_obsidian.ItemView {
     });
     this.registerDomEvent(editorEl.el, "input", (e) => {
       syncCoordinator.onEditorChange();
+      editorEl.pushNativeMarker();
       if (!e.isComposing) {
         editorEl.handleRubyCompletion();
         editorEl.handleTcyCompletion();
@@ -915,6 +1041,13 @@ var VerticalWritingView = class extends import_obsidian.ItemView {
     });
     this.registerDomEvent(document, "selectionchange", () => {
       editorEl.handleSelectionChange();
+    });
+    this.registerDomEvent(editorEl.el, "keydown", (e) => {
+      if ((e.metaKey || e.ctrlKey) && !e.altKey && e.key === "z") {
+        e.preventDefault();
+        const changed = e.shiftKey ? editorEl.redo() : editorEl.undo();
+        if (changed) syncCoordinator.onEditorChange();
+      }
     });
     this.registerEvent(
       this.app.vault.on("modify", (file) => {
