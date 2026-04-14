@@ -26,11 +26,13 @@ src/
 ├── view.ts                    # VerticalWritingView（ItemView）
 ├── settings.ts                # TatePluginSettings型 + TateSettingTab
 ├── sync/
-│   ├── SyncCoordinator.ts     # 双方向同期制御
-│   └── DebounceQueue.ts       # デバウンス（flushAndExecute付き）
+│   ├── SyncCoordinator.ts     # 双方向同期制御（外部変更検出・ファイル読み込み）
+│   └── DebounceQueue.ts       # デバウンス（現在未使用）
 └── ui/
     ├── EditorElement.ts       # contenteditable div DOM管理
-    └── UndoManager.ts         # 独自 Undo/Redo スタック
+    ├── SegmentMap.ts          # ソースオフセット ↔ 表示オフセット双方向マッピング
+    ├── SegmentMap.test.ts     # SegmentMap ユニットテスト（vitest）
+    └── UndoManager.ts         # 独自 Undo/Redo スタック（現在未使用）
 styles.css                     # 縦書きCSS（writing-mode: vertical-rl）
 manifest.json                  # プラグインメタデータ（id: obsidian-tate）
 ```
@@ -40,13 +42,14 @@ manifest.json                  # プラグインメタデータ（id: obsidian-t
 ### contenteditable divによる縦書き実現
 `writing-mode: vertical-rl` をcontenteditable divに適用する。textareaへの`writing-mode`適用はChrome 119以降が必要だが、ObsidianのElectronバージョンによっては未対応のため、より広く動作するcontenteditable divを採用する。テキストの取得には `getValue()`（カスタム `serializeNode()` DOMウォーカー）、設定には `setValue()`（`innerHTML = parseToHtml(content)`）を使用する。
 
-### 双方向同期の競合防止
+### 双方向同期の競合防止（Proxy Editor モデル）
+- ファイルへの書き込みは CM6（Obsidian の標準 Markdown エディタ）の autosave に一本化。`SyncCoordinator` は読み取り専用（`vault.modify` / `DebounceQueue` を使用しない）
 - `el.innerHTML` への直接代入はinputイベントを発生させないため、`isApplyingExternalChange` フラグは不要
 - `SyncCoordinator.loadFile()` と `onExternalModify()` はどちらも非同期（vault.read）なのでシーケンス番号（loadSeq, externalModifySeq）を使って古い結果を捨てる
-- 自分の `vault.modify` が発火した `modify` イベントは内容比較（`externalContent === getEditorValue()`）でスキップ
+- CM6 autosave が発火した `modify` イベントは内容比較（`externalContent === getEditorValue()`）でスキップ
 
 ### ビューを閉じるときのデータロスト防止
-`DebounceQueue.flushAndExecute()` はタイマーをキャンセルしつつペンディング中のコールバックを即時実行する。`SyncCoordinator.dispose()` から呼ぶことで、500msデバウンス待機中でもビューを閉じる際に確実に保存される。
+`onClose()` の先頭で `commitToCm6()` を呼ぶことで、未コミットのバーストを確実に CM6 に書き込む。CM6 がその後 autosave でファイルに保存する。
 
 ### DOMイベントの自動解除
 input / compositionend / paste イベントはすべて `this.registerDomEvent(el, ...)` で登録する（`addEventListener` の直接呼び出しは禁止）。Obsidianの `Component.registerDomEvent` を使うと `onClose` 時に自動解除される。
@@ -80,13 +83,13 @@ input / compositionend / paste イベントはすべて `this.registerDomEvent(e
 
 **ルビ区切り文字 `｜` の表示制御**: シリアライズは全角 `｜` で統一し、収束時は `<ruby>` 要素内なので不可視。インライン展開時の生テキストとしてのみ可視になる。
 
-**ライブ変換**: `》`/`］` 入力時に `handleRubyCompletion()` / `handleTcyCompletion()` / `handleBoutenCompletion()` が記法を要素に変換する。IME対応のため `input`（`isComposing=false`）と `compositionend` の両方で呼ぶ。全操作は `insertAnnotationElement()` による直接 DOM 操作で統一（`execCommand` 不使用）。DOM 変更前に `pushSnapshot()` を呼んでスナップショットを保存する。`handleTcyCompletion` と `handleBoutenCompletion` は `handleAnnotationCompletion()` に共通化。展開中（`expandedEl` が非 null）または DOM 操作中（`isModifyingDom` が true）はライブ変換を行わない（再入防止）。
+**ライブ変換**: `》`/`］` 入力時に `handleRubyCompletion()` / `handleTcyCompletion()` / `handleBoutenCompletion()` が記法を要素に変換する。IME対応のため `input`（`isComposing=false`）と `compositionend` の両方で呼ぶ。全操作は `insertAnnotationElement()` による直接 DOM 操作で統一（`execCommand` 不使用）。`handleTcyCompletion` と `handleBoutenCompletion` は `handleAnnotationCompletion()` に共通化。これらのメソッドは `boolean`（変換が発生したか）を返し、`view.ts` が `true` のとき `commitToCm6()` を呼ぶ。展開中（`expandedEl` が非 null）または DOM 操作中（`isModifyingDom` が true）はライブ変換を行わない（再入防止）。
 
 ### インライン展開（Obsidian Markdown エディタ風）
 `document` の `selectionchange` イベントを `registerDomEvent(document, 'selectionchange', ...)` で登録し、カーソル位置に応じて ruby/tcy/bouten 要素をその場で展開・収束する。
 
-- **展開**: カーソルが `<ruby>`・`<span data-tcy="explicit">`・`<span data-bouten>` に入ると `expandForEditing()` が要素を `<span class="tate-editing">` に置換し、Aozora 生テキストを表示する。このとき `expandedElOriginalText` に展開前のテキストを保存する（変化検出用）。`inBurst = false` もリセットして直後の入力を新バーストとして扱う
-- **収束**: カーソルが外れると `collapseEditing()` が `parseInlineToHtml()` で再パースして元の要素に戻す。編集内容は反映される（`parseToHtml()` を使うと段落 `<div>` の中に `<div>` がネストするため禁止）。収束は常に直接 DOM 操作で統一（`execCommand` 不使用）。収束後に `inBurst = false` をリセットする
+- **展開**: カーソルが `<ruby>`・`<span data-tcy="explicit">`・`<span data-bouten>` に入ると `expandForEditing()` が要素を `<span class="tate-editing">` に置換し、Aozora 生テキストを表示する。このとき `expandedElOriginalText` に展開前のテキストを保存する（変化検出用）。`inBurst = false` もリセットする
+- **収束**: カーソルが外れると `collapseEditing()` が `parseInlineToHtml()` で再パースして元の要素に戻す。編集内容は反映される（`parseToHtml()` を使うと段落 `<div>` の中に `<div>` がネストするため禁止）。収束は常に直接 DOM 操作で統一（`execCommand` 不使用）。`collapseEditing()` は `boolean`（内容変化の有無）を返す。`view.ts` の `selectionchange` ハンドラが `true` のとき `commitToCm6()` を呼ぶ
 - **`collapseEditing()` の前方テキスト取り込み**: `getExtraCharsFromAnnotation()` が「」内容とスパン内前方テキストを比較し、「」内容が長い場合（例: content=`130`, leading=`30` → 差分=`1`文字）は直前テキストノードの末尾から一致する文字を取り込む（例: テキスト `A1` + tcy `30` → 「30」→「130」編集 → テキスト `A` + tcy `130`）
 - **`collapseEditing()` の detached ノード対策**: `collapseEditing()` の先頭で `expandedEl.isConnected` を確認し、false の場合は `expandedEl` / `expandedElOriginalText` をクリアして即リターンする。detached ノードに `parentNode` / `selectNode` を呼ぶと例外が発生するため
 - **孤立スパン（orphan span）の検出と再追跡**: `handleSelectionChange()` の `!isModifyingDom` ブロック先頭で `expandedEl` が null または detached のとき `this.el.querySelector('span.tate-editing')` を実行して DOM の実態と同期する。予期せぬ経路で編集スパンが DOM に残った場合のロバストネス対策。再追跡後 `expandedElOriginalText = null` にして `hasChanged = true` とすることで確実に収束させる
@@ -100,112 +103,85 @@ input / compositionend / paste イベントはすべて `this.registerDomEvent(e
 `add-ruby` / `add-tcy` / `add-bouten` コマンドで選択テキストに記法を適用できる。
 
 - **選択範囲キャッシュ**: `handleSelectionChange()` の先頭（`isModifyingDom` チェックより前）で、エディタ内に非 collapsed 選択があるとき `savedRange` フィールドに保存する。コマンドパレットを開くとフォーカスが離れるが、エディタ外の selectionchange ではキャッシュを**更新しない**（保持する）ことで、コマンド実行時に選択を復元できる
-- **ルビ**: `wrapSelectionWithRuby()` が `pushSnapshot()` でスナップショットを保存した後、直接 DOM 操作で `<span class="tate-editing">｜text《》</span>` を挿入する。`expandedEl` と `expandedElOriginalText` を直接セットしてインライン展開状態にする。ユーザーがルビ文字を入力後カーソルを外すと `collapseEditing()` が `<ruby>` 要素に収束する
-- **縦中横・傍点**: `wrapSelectionWith()` に共通化。`pushSnapshot()` 後、`insertAnnotationElement()` で直接 DOM 操作により選択テキストを要素に置換する。`setCursorAfter()` でカーソルを要素の**直後**に置く。カーソルが要素内にあると `selectionchange → expandForEditing()` が呼ばれ Undo スタックが不整合になるため
+- **ルビ**: `wrapSelectionWithRuby()` が直接 DOM 操作で `<span class="tate-editing">｜text《》</span>` を挿入する。`expandedEl` と `expandedElOriginalText` を直接セットしてインライン展開状態にする。ユーザーがルビ文字を入力後カーソルを外すと `collapseEditing()` が `<ruby>` 要素に収束し、`view.ts` の selectionchange ハンドラが `commitToCm6()` を呼ぶ
+- **縦中横・傍点**: `wrapSelectionWith()` に共通化。`insertAnnotationElement()` で直接 DOM 操作により選択テキストを要素に置換する。`setCursorAfter()` でカーソルを要素の**直後**に置く。カーソルが要素内にあると `selectionchange → expandForEditing()` が呼ばれ意図しない展開が発生するため
 - **ライブ変換後のカーソル移動**: `handleRubyCompletion()` / `handleAnnotationCompletion()` でも同様に、`insertAnnotationElement()` + `setCursorAfter()` でカーソルを要素の**直後**に置く。これがないと直後の `selectionchange` で `expandForEditing()` が即発火して記法が展開状態のまま残るように見えてしまう
 - **エラー通知**: 選択なし・ビュー未開は `new Notice(...)` で通知。`editorEl` が null のときは `applyAnnotation()` が早期リターンする（誤メッセージを出さない）
-- **同期**: ラップ成功後に `view.ts` の `applyAnnotation()` が `syncCoordinator.onEditorChange()` を呼ぶ（`EditorElement` は `SyncCoordinator` を知らないため）
+- **CM6 同期**: ラップ成功後に `view.ts` の `applyAnnotation()` が `commitToCm6()` を呼ぶ（tcy/bouten のみ。ルビは collapseEditing 時に selectionchange 経由でコミット）
 
 ### ファイル切り替えの検知
 `file-open` ワークスペースイベントを使う（`active-leaf-change` より正確）。縦書きビュー自身がアクティブになっても `file-open` は発火しないため、表示中のファイルが意図せずリセットされない。
 
-### Undo/Redo 対応（統合スナップショット方式）
+### Undo/Redo 対応（Proxy Editor モデル）
 
-`UndoManager`（`src/ui/UndoManager.ts`）が独自のスタックを管理する。全操作（テキスト入力・削除・ペースト・記法コマンド・ライブ変換・インライン編集）を単一スタックで統一管理する。
+Undo/Redo は CM6（Obsidian 標準エディタ）に完全委譲する。縦書きビューは独自の Undo スタックを持たない。
 
-**スナップショットの構造**
+**コミットポイントによる CM6 への書き込み**
+
+縦書きビューへの入力は `commitToCm6()`（`view.ts`）で CM6 に全文 `replaceRange` する。CM6 の履歴エントリとなるため、その後 `editor.undo()` で確実に元に戻せる。
+
+コミットポイント:
+
+| 操作 | コミットタイミング |
+|------|-----------------|
+| ペースト | `paste` イベント後に即時 |
+| IME 確定 | `compositionend` 後に即時 |
+| ライブ変換 | `input` イベントで `boolean` 返却が `true` のとき |
+| アノテーション収束 | `selectionchange` で `collapseEditing()` が `true` を返したとき |
+| ナビゲーションキー | `keydown` で矢印・Home/End/PgUp/PgDn 検出時 |
+| mousedown | クリック時（バースト終了） |
+| ビューを閉じる | `onClose()` 先頭 |
+| tcy/bouten コマンド | `applyAnnotation()` 内 |
+
+**`inBurst` フラグの役割（変更後）**
+
+`inBurst = true` は「CM6 に未コミットの変更がある」状態を表す（旧: 独自 Undo スタック向けのバーストグループ制御）。`onBeforeInput()` で `inBurst = true` にし、`commitToCm6()` 内の `resetBurst()` で `false` に戻す。
+
+**Undo/Redo 実行フロー（`doUndoRedo()`）**
+
+```
+commitToCm6()           // 未コミットのバーストを先に CM6 に書き込む
+cm6.undo() / cm6.redo() // CM6 側で Undo/Redo を実行
+newContent = cm6.getValue()
+srcOffset = cm6.posToOffset(cm6.getCursor())
+editorEl.applyFromCm6(newContent, srcOffset)
+```
+
+**`applyFromCm6()` によるカーソル復元**
+
+`EditorElement.applyFromCm6(content, srcOffset)`:
+1. `expandedEl` / `expandedElOriginalText` / `savedRange` をクリア（stale 参照除去）
+2. 内容変化がある場合 `el.innerHTML = parseToHtml(content)` で DOM を更新
+3. `buildSegmentMap(content)` + `srcToView(segs, srcOffset)` でソースオフセットを表示オフセットに変換
+4. `setVisibleOffset(viewOffset)` でカーソルを設定
+
+### SegmentMap（ソース ↔ 表示オフセット変換）
+
+`src/ui/SegmentMap.ts` が Aozora 記法テキストの双方向オフセットマッピングを担う。
 
 ```typescript
-type Snapshot = { text: string; cursor: number };
-// text:   getValue() の結果（Aozora 生テキスト）
-// cursor: getCollapsedCursor() の結果（収束後 DOM での visible offset）
+// セグメント種別: plain / ruby-explicit / ruby-implicit / tcy / bouten / newline
+export function buildSegmentMap(source: string): Segment[];
+export function srcToView(segs: readonly Segment[], srcOffset: number): number;
+export function viewToSrc(segs: readonly Segment[], viewOffset: number): number;
 ```
 
-**バースト方式によるUndo粒度**
+**srcLen ルール（ソース上の文字数）**:
+- `ruby-explicit` `｜base《rt》`: baseLen + rtLen + 3（`｜`, `《`, `》`）
+- `ruby-implicit` `base《rt》`: baseLen + rtLen + 2（`《`, `》`）
+- `tcy` `content［＃「content」は縦中横］`: contentLen × 2 + 9
+- `bouten` `content［＃「content」に傍点］`: contentLen × 2 + 8
+- `newline` `\n`: 1
 
-連続するキー入力を1つのUndo単位にまとめる `inBurst` フラグを持つ:
-- `onBeforeInput()`: `inBurst = false` のときのみ `pushSnapshot()` を呼び、`inBurst = true` にする
-- ナビゲーションキー（矢印・Home/End/PgUp/PgDn）・mousedown: `resetBurst()` で `inBurst = false` にリセット
-- 記法操作（ライブ変換・コマンド）・`collapseEditing()`・`expandForEditing()`: `inBurst = false` をリセット
+**srcToView ルール（ソースオフセット → 表示オフセット）**:
+- `ruby-explicit`: local=0（`｜`）→ viewStart、1..baseLen（base）→ viewStart + local - 1、≥ baseLen + 1（`《rt》`）→ viewStart + baseLen
+- `ruby-implicit`: local 0..baseLen（base）→ viewStart + local、≥ baseLen（`《rt》`）→ viewStart + baseLen
+- `tcy` / `bouten`: local 0..contentLen（content）→ viewStart + local、≥ contentLen（注記部分）→ viewStart + contentLen
 
-**スナップショットの保存タイミング**
-
-| 操作 | 保存タイミング |
-|------|--------------|
-| テキスト入力（バースト開始） | `onBeforeInput()` でバースト初回のみ |
-| ペースト | `handlePaste()` で `execCommand` 呼び出し直前に明示的に保存 |
-| ライブ変換（`》`/`］`） | DOM 変更前に `pushSnapshot()` |
-| コマンド（ruby/tcy/bouten） | DOM 変更前に `pushSnapshot()` |
-
-**`getCollapsedCursor()`**
-
-tate-editing スパン内のカーソルを「収束後の DOM における visible offset」に変換する関数。`undo()`/`redo()` で保存するスナップショットに使い、`setValue()` + `setVisibleOffset()` で正確に復元できる:
-
-- tate-editing 外: `getVisibleOffset()` と同値
-- 明示ルビ `｜base《rt》`: カーソルが base 内なら `prefix(1)` 分シフト、rt/括弧内なら baseLen 相当
-- 省略ルビ `base《rt》`: カーソルが base 内ならそのまま、rt/括弧内なら baseLen 相当
-- tcy/bouten `content［＃...］`: `indexOf('［＃')` までがコンテンツ部分、括弧内は contentLen 相当
-
-**undo()/redo() のフロー**
-
-```
-collapseEditingIfExpanded()   // 展開中なら先に収束
-popUndo() / popRedo()         // スタックから取り出す
-current = { getValue(), getCollapsedCursor() }  // 現状を保存
-pushRedo(current) / pushUndo(current)
-setValue(entry.text, false)   // isUndoRedoing=true なのでスタッククリアされない
-setVisibleOffset(entry.cursor)
-inBurst = false
-```
-
-**インライン編集中の Undo (Q3 A)**
-
-undo() は常に `collapseEditingIfExpanded()` で先に収束してからスナップショットを復元する。`setValue()` 後に `setVisibleOffset()` でカーソルを収束後位置に置くと、カーソルがアノテーション要素内（ruby の base 末尾など）に入り、直後の `handleSelectionChange()` → `expandForEditing()` が自動的に tate-editing スパンを再展開する。これによりインライン編集状態を維持したまま Undo が動作する。
-
-**カーソル復元の制約**: undo 後のカーソルは tate-editing スパン内の `《` 直前（base 末尾位置）に復元される（入力していた rt フィールド内の正確な位置ではない）。内容は正しく復元される。
-
-**setValue() でのスタッククリア保護**
-
-`setValue()` は `!preserveCursor && !isUndoRedoing` のときのみ `undoManager.clear()` を呼ぶ。undo/redo から `setValue(entry.text, false)` を呼ぶ際に `isUndoRedoing = true` であるためスタックが破壊されない。
-
-### 差分方式への移行（未実装・将来の検討）
-
-現行の全文スナップショット方式は O(文書長) × O(履歴数) のメモリを消費する。Myers' diff Algorithm による差分方式に移行すると O(編集距離) × O(履歴数) に削減できる。
-
-**パッチ表現**
-
-```typescript
-type Op =
-  | { kind: 'retain'; len: number }
-  | { kind: 'insert'; text: string }
-  | { kind: 'delete'; text: string }; // 逆方向パッチ生成のため元テキストを保持
-type Patch = Op[];
-```
-
-逆方向パッチ（Undo 用）は `insert ↔ delete` の交換で生成できる。
-
-**タイミング**
-
-- 記法コマンド: DOM 変更前後の2点が明確なので変更前後で diff を計算しやすい
-- テキスト入力（バースト）: バースト開始時に `text_before` を保存し、バースト終了時（次バースト開始・ナビゲーション・Undo 押下時）に `diff(text_before, getValue())` を計算してシール
-
-**メモリ比較**
-
-| | 現行（全文） | 差分方式 |
-|---|---|---|
-| 1エントリ | O(文書長) | O(編集距離) |
-| 5万字 × 1000ステップ | ~100MB | ~数百KB |
-
-**実装上の注意点**
-
-- Unicode: Myers' diff は文字単位。サロゲートペア・結合文字を `Array.from(text)` ベースで扱わないと壊れる
-- 検証: `applyPatch(applyPatch(text, patch), invertPatch(patch)) === text` を担保するテストが必要
-- バースト終了の検出: バーストが終わった時点でシール処理を追加する必要がある
-
-**推奨**: まず `UndoManager` に `maxEntries`（例: 500ステップ上限）を追加して全文スナップショット方式のままメモリを制限する方法も有効。10万字超の長編文書を扱う場合や長時間セッションが想定される場合に差分方式への移行を検討する。
+パーサは `parseInlineToHtml()` と同じ優先順位（明示ルビ → tcy → bouten → 省略ルビ）で処理する。
 
 ### ペーストのプレーンテキスト化
-`contenteditable` div はデフォルトでクリップボードの `text/html` を優先してペーストするため、インライン展開スパンのスタイルや外部 HTML のスタイルが貼り付けられてしまう。`paste` イベントで `e.preventDefault()` した後、`e.clipboardData.getData('text/plain')` でプレーンテキストのみ取得し、`document.execCommand('insertText', false, text)` で挿入する。`execCommand('insertText')` は deprecated だが Electron では動作し、カーソル位置への挿入・選択範囲の置換を一括処理できる。`handlePaste()` は `execCommand` 呼び出しの直前に `pushSnapshot()` を明示的に呼ぶ（`execCommand` が `beforeinput` を発火しない場合のフォールバック）。
+`contenteditable` div はデフォルトでクリップボードの `text/html` を優先してペーストするため、インライン展開スパンのスタイルや外部 HTML のスタイルが貼り付けられてしまう。`paste` イベントで `e.preventDefault()` した後、`e.clipboardData.getData('text/plain')` でプレーンテキストのみ取得し、`document.execCommand('insertText', false, text)` で挿入する。`execCommand('insertText')` は deprecated だが Electron では動作し、カーソル位置への挿入・選択範囲の置換を一括処理できる。ペースト後は `view.ts` の `paste` ハンドラが `commitToCm6()` を即時呼ぶ。
 
 ### 自動字下げ
 `text-indent: 1em` を CSS で適用する（ファイルには保存しない）。
