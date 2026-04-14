@@ -1,4 +1,4 @@
-import { ItemView, MarkdownView, Notice, TFile, WorkspaceLeaf } from 'obsidian';
+import { Editor, ItemView, MarkdownView, Notice, TFile, WorkspaceLeaf } from 'obsidian';
 import type TatePlugin from './main';
 import { SyncCoordinator } from './sync/SyncCoordinator';
 import { EditorElement } from './ui/EditorElement';
@@ -36,43 +36,49 @@ export class VerticalWritingView extends ItemView {
         this.syncCoordinator = syncCoordinator;
 
         // registerDomEvent で登録することで onClose 時に自動解除される
+
         this.registerDomEvent(editorEl.el, 'paste', (e: ClipboardEvent) => {
+            if (!this.guardCm6(e)) return; // CM6 がなければブロック
             editorEl.handlePaste(e);
-            syncCoordinator.onEditorChange();
+            this.commitToCm6(); // ペーストは即時コミット
         });
-        this.registerDomEvent(editorEl.el, 'beforeinput', () => {
-            editorEl.onBeforeInput(); // バースト開始時にスナップショットを保存
+        this.registerDomEvent(editorEl.el, 'beforeinput', (e: InputEvent) => {
+            if (!this.guardCm6(e)) return; // CM6 がなければ入力をブロック（readonly）
+            editorEl.onBeforeInput();
         });
         this.registerDomEvent(editorEl.el, 'input', (e: Event) => {
-            syncCoordinator.onEditorChange();
             if (!(e as InputEvent).isComposing) {
-                editorEl.handleRubyCompletion();
-                editorEl.handleTcyCompletion();
-                editorEl.handleBoutenCompletion();
+                const annotated = editorEl.handleRubyCompletion()
+                               || editorEl.handleTcyCompletion()
+                               || editorEl.handleBoutenCompletion();
+                if (annotated) this.commitToCm6(); // 記法変換は即時コミット
             }
         });
         this.registerDomEvent(editorEl.el, 'compositionend', () => {
             editorEl.handleRubyCompletion();
             editorEl.handleTcyCompletion();
             editorEl.handleBoutenCompletion();
+            this.commitToCm6(); // IME 確定はコミットポイント
         });
         this.registerDomEvent(document, 'selectionchange', () => {
-            editorEl.handleSelectionChange();
+            const contentChanged = editorEl.handleSelectionChange();
+            if (contentChanged) this.commitToCm6(); // collapse で内容が変わった場合のみ
         });
         this.registerDomEvent(editorEl.el, 'mousedown', () => {
-            editorEl.resetBurst(); // マウスクリックはバーストを終了させる
+            this.commitToCm6(); // クリックはバースト終了 = コミットポイント
+            editorEl.resetBurst();
         });
         this.registerDomEvent(editorEl.el, 'keydown', (e: KeyboardEvent) => {
             // Ctrl+Z / Cmd+Z: Undo、Ctrl+Shift+Z / Cmd+Shift+Z: Redo
             if ((e.metaKey || e.ctrlKey) && !e.altKey && e.key === 'z') {
                 e.preventDefault();
-                const changed = e.shiftKey ? editorEl.redo() : editorEl.undo();
-                if (changed) syncCoordinator.onEditorChange();
+                this.doUndoRedo(editorEl, e.shiftKey);
                 return;
             }
-            // ナビゲーションキーはバーストを終了させる（次の入力を別のUndo単位にする）
+            // ナビゲーションキーはコミットポイント（次の入力を別の CM6 エントリにする）
             if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown',
                  'Home', 'End', 'PageUp', 'PageDown'].includes(e.key)) {
+                this.commitToCm6();
                 editorEl.resetBurst();
             }
         });
@@ -121,15 +127,22 @@ export class VerticalWritingView extends ItemView {
     }
 
     async onClose(): Promise<void> {
-        // dispose() は未保存の書き込みを即時実行してからクリーンアップする
-        await this.syncCoordinator?.dispose();
+        // 閉じる前に未コミットの変更を CM6 に書き込む
+        this.commitToCm6();
+        this.syncCoordinator?.dispose();
     }
 
     applySettings(settings: TatePluginSettings): void {
         this.editorEl?.applySettings(settings);
     }
 
-    applyRuby(): void   { this.applyAnnotation(el => el.wrapSelectionWithRuby()); }
+    applyRuby(): void {
+        if (!this.editorEl) return;
+        if (!this.editorEl.wrapSelectionWithRuby()) {
+            new Notice('テキストを選択してください');
+        }
+        // Ruby はインライン展開状態になるため、collapseEditing 完了時に commitToCm6 が呼ばれる
+    }
     applyTcy(): void    { this.applyAnnotation(el => el.wrapSelectionWithTcy()); }
     applyBouten(): void { this.applyAnnotation(el => el.wrapSelectionWithBouten()); }
 
@@ -138,7 +151,61 @@ export class VerticalWritingView extends ItemView {
         if (!wrap(this.editorEl)) {
             new Notice('テキストを選択してください');
         } else {
-            this.syncCoordinator?.onEditorChange();
+            this.commitToCm6(); // tcy/bouten は即時確定するのでコミット
         }
+    }
+
+    // ---- CM6 連携ヘルパー ----
+
+    /** currentFile を開いている MarkdownView の CM6 エディタを返す。見つからなければ null。 */
+    private getCm6Editor(): Editor | null {
+        const file = this.syncCoordinator?.currentFile;
+        if (!file) return null;
+        for (const leaf of this.app.workspace.getLeavesOfType('markdown')) {
+            const mv = leaf.view;
+            if (mv instanceof MarkdownView && mv.file === file) {
+                return mv.editor;
+            }
+        }
+        return null;
+    }
+
+    /** CM6 エディタが利用できない場合、入力イベントをキャンセルして Notice を出す。
+     *  CM6 が利用可能なら true を返す。 */
+    private guardCm6(e: Event): boolean {
+        if (this.getCm6Editor()) return true;
+        e.preventDefault();
+        new Notice('縦書きエディタを使用するには、対応する Markdown ビューを開いてください');
+        return false;
+    }
+
+    /** 縦書きエディタの現在内容を CM6 に全文 replaceRange でコミットする。
+     *  CM6 と内容が一致している場合はスキップ。 */
+    private commitToCm6(): void {
+        const el = this.editorEl;
+        if (!el) return;
+        const cm6 = this.getCm6Editor();
+        if (!cm6) return;
+        const content = el.getValue();
+        if (content === cm6.getValue()) return; // 差分なし
+        const lastLine = cm6.lastLine();
+        const lastCh = cm6.getLine(lastLine).length;
+        cm6.replaceRange(content, { line: 0, ch: 0 }, { line: lastLine, ch: lastCh });
+        el.resetBurst();
+    }
+
+    /** Undo (isRedo=false) または Redo (isRedo=true) を CM6 に委譲し、
+     *  srcToView でカーソルを復元する。 */
+    private doUndoRedo(editorEl: EditorElement, isRedo: boolean): void {
+        const cm6 = this.getCm6Editor();
+        if (!cm6) return;
+        // 未コミットの変更があれば先にコミット（CM6 undo/redo の基準を揃える）
+        this.commitToCm6();
+        // CM6 側で Undo/Redo を実行
+        if (isRedo) cm6.redo(); else cm6.undo();
+        // CM6 の新しい状態を縦書きビューに反映（srcToView でカーソルを復元）
+        const newContent = cm6.getValue();
+        const srcOffset = cm6.posToOffset(cm6.getCursor());
+        editorEl.applyFromCm6(newContent, srcOffset);
     }
 }

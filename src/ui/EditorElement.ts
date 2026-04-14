@@ -1,5 +1,5 @@
 import { TatePluginSettings } from '../settings';
-import { UndoManager, Snapshot } from './UndoManager';
+import { buildSegmentMap, srcToView } from './SegmentMap';
 
 // 省略形式で自動検出する漢字の Unicode 範囲
 // CJK Unified Ideographs (U+4E00–U+9FFF) + Extension A (U+3400–U+4DBF) + 繰り返し記号
@@ -22,12 +22,8 @@ export class EditorElement {
         startContainer: Node; startOffset: number;
         endContainer: Node; endOffset: number;
     } | null = null;
-    // 独自 Undo/Redo スタック（統合スナップショット方式）
-    private undoManager = new UndoManager();
-    // Undo/Redo 操作中のフラグ（ライブ変換の再入・setValue でのスタッククリアを防ぐ）
-    private isUndoRedoing = false;
-    // 連続入力バースト中フラグ。true の間は onBeforeInput でスナップショットを積まない。
-    // ナビゲーションキー・mousedown・記法操作でリセットされる。
+    // CM6 への未コミット変更があることを示すフラグ。
+    // onBeforeInput でセット、commitToCm6() 完了時（resetBurst()）にクリアされる。
     private inBurst = false;
 
     constructor(container: HTMLElement) {
@@ -49,8 +45,6 @@ export class EditorElement {
         this.expandedEl = null;
         this.expandedElOriginalText = null;
         this.savedRange = null;
-        // ファイル切り替え（preserveCursor=false かつ Undo/Redo 操作外）時は Undo/Redo スタックをクリア
-        if (!preserveCursor && !this.isUndoRedoing) this.undoManager.clear();
         if (this.getValue() === content) return;
 
         if (preserveCursor && document.activeElement === this.el) {
@@ -64,8 +58,9 @@ export class EditorElement {
 
     // ---- インライン展開/収束（selectionchange から呼ぶ） ----
 
-    // カーソル移動のたびに呼ばれ、ruby/tcy 要素を展開・収束する
-    handleSelectionChange(): void {
+    // カーソル移動のたびに呼ばれ、ruby/tcy 要素を展開・収束する。
+    // collapse によって内容が変化した場合 true を返す（view.ts が commitToCm6 を呼ぶ目安）。
+    handleSelectionChange(): boolean {
         // DOM操作外かつエディタ内に非collapsed選択があるときのみキャッシュを更新
         // （外れたときは保持することでコマンドパレット起動後も参照できる）
         if (!this.isModifyingDom) {
@@ -96,20 +91,21 @@ export class EditorElement {
                 }
             }
         }
-        if (this.isModifyingDom) return;
+        if (this.isModifyingDom) return false;
         // エディタ外の selectionchange は展開中でない限り早期リターン（複数ビュー対策）
         const sel0 = window.getSelection();
         if (!this.expandedEl && (!sel0 || sel0.rangeCount === 0 ||
-            !this.el.contains(sel0.getRangeAt(0).startContainer))) return;
+            !this.el.contains(sel0.getRangeAt(0).startContainer))) return false;
+        let contentChanged = false;
         this.isModifyingDom = true;
         try {
             const sel = window.getSelection();
-            if (!sel || sel.rangeCount === 0) return;
+            if (!sel || sel.rangeCount === 0) return false;
             const range = sel.getRangeAt(0);
 
             // カーソルがまだ展開スパン内にある → 何もしない
             if (this.expandedEl && this.expandedEl.contains(range.startContainer)) {
-                return;
+                return false;
             }
 
             // カーソルが展開スパン外に出た → 収束してから意図した位置を復元
@@ -117,7 +113,7 @@ export class EditorElement {
                 const savedNode = range.startContainer;
                 const savedOffset = range.startOffset;
 
-                this.collapseEditing();
+                contentChanged = this.collapseEditing();
                 this.savedRange = null; // 収束後は stale ノード参照を破棄
 
                 // ユーザーがカーソルを移動した先（savedNode）を復元する
@@ -136,9 +132,9 @@ export class EditorElement {
             }
 
             // カーソルがエディタ内にあるか確認
-            if (sel.rangeCount === 0) return;
+            if (sel.rangeCount === 0) return contentChanged;
             const currentRange = sel.getRangeAt(0);
-            if (!this.el.contains(currentRange.startContainer)) return;
+            if (!this.el.contains(currentRange.startContainer)) return contentChanged;
 
             // 展開可能な要素（ruby/tcy）の中にいれば展開
             const target = this.findExpandableAncestor(currentRange.startContainer);
@@ -148,25 +144,27 @@ export class EditorElement {
         } finally {
             this.isModifyingDom = false;
         }
+        return contentChanged;
     }
 
     // ---- ルビ・縦中横ライブ変換（input/compositionend から呼ぶ） ----
 
-    // 》が入力されたときに直前のルビ記法を <ruby> 要素に変換する
-    handleRubyCompletion(): void {
+    // 》が入力されたときに直前のルビ記法を <ruby> 要素に変換する。
+    // 変換が行われた場合 true を返す（view.ts が commitToCm6 を呼ぶ目安）。
+    handleRubyCompletion(): boolean {
         // 展開中、または DOM 操作中（execCommand の再入）はスキップ
-        if (this.expandedEl) return;
-        if (this.isModifyingDom) return;
+        if (this.expandedEl) return false;
+        if (this.isModifyingDom) return false;
 
         const sel = window.getSelection();
-        if (!sel || sel.rangeCount === 0) return;
+        if (!sel || sel.rangeCount === 0) return false;
         const range = sel.getRangeAt(0);
-        if (range.startContainer.nodeType !== Node.TEXT_NODE) return;
-        if (this.isInsideRuby(range.startContainer)) return;
+        if (range.startContainer.nodeType !== Node.TEXT_NODE) return false;
+        if (this.isInsideRuby(range.startContainer)) return false;
 
         const textNode = range.startContainer as Text;
         const textBefore = textNode.textContent?.slice(0, range.startOffset) ?? '';
-        if (!textBefore.endsWith('》')) return;
+        if (!textBefore.endsWith('》')) return false;
 
         // 明示形式を優先: ｜base《rt》 または |base《rt》
         let match = textBefore.match(/[|｜]([^|｜《》\n]+)《([^《》\n]*)》$/);
@@ -176,7 +174,7 @@ export class EditorElement {
             match = textBefore.match(new RegExp(`(${KANJI_RE_STR})《([^《》\\n]*)》$`, 'u'));
             explicit = false;
         }
-        if (!match) return;
+        if (!match) return false;
 
         const base = match[1];
         const rt = match[2];
@@ -184,8 +182,6 @@ export class EditorElement {
 
         this.isModifyingDom = true;
         try {
-            this.pushSnapshot(); // DOM 変更前にスナップショットを保存
-            this.inBurst = false; // 記法操作はバーストを終了させる
             const rubyEl = this.createRubyEl(base, rt, explicit);
             const inserted = this.insertAnnotationElement(
                 textNode, matchStart, range.startOffset, rubyEl,
@@ -194,14 +190,16 @@ export class EditorElement {
             // カーソルを要素の直後に置く
             // カーソルが ruby 内にあると selectionchange → expandForEditing() が即座に発火するため
             this.setCursorAfter(inserted);
+            return true;
         } finally {
             this.isModifyingDom = false;
         }
     }
 
-    // ］が入力されたときに直前の縦中横記法を <span class="tcy"> 要素に変換する
-    handleTcyCompletion(): void {
-        this.handleAnnotationCompletion('］', /［＃「([^「」\n]+)」は縦中横］$/, c => this.createTcyEl(c));
+    // ］が入力されたときに直前の縦中横記法を <span class="tcy"> 要素に変換する。
+    // 変換が行われた場合 true を返す。
+    handleTcyCompletion(): boolean {
+        return this.handleAnnotationCompletion('］', /［＃「([^「」\n]+)」は縦中横］$/, c => this.createTcyEl(c));
     }
 
     // ---- コマンドパレットから呼ぶ選択ラップメソッド ----
@@ -215,9 +213,6 @@ export class EditorElement {
         const { textNode, startOffset, endOffset } = resolved;
         const selectedText = textNode.textContent!.slice(startOffset, endOffset);
         if (!selectedText) return false;
-
-        this.pushSnapshot(); // DOM 変更前にスナップショットを保存
-        this.inBurst = false; // 記法操作はバーストを終了させる
 
         const rawText = `｜${selectedText}《》`;
         const span = document.createElement('span');
@@ -268,9 +263,10 @@ export class EditorElement {
         return this.wrapSelectionWith(c => this.createBoutenEl(c));
     }
 
-    // ］が入力されたときに直前の傍点記法を <span class="bouten"> 要素に変換する
-    handleBoutenCompletion(): void {
-        this.handleAnnotationCompletion('］', /［＃「([^「」\n]+)」に傍点］$/, c => this.createBoutenEl(c));
+    // ］が入力されたときに直前の傍点記法を <span class="bouten"> 要素に変換する。
+    // 変換が行われた場合 true を返す。
+    handleBoutenCompletion(): boolean {
+        return this.handleAnnotationCompletion('］', /［＃「([^「」\n]+)」に傍点］$/, c => this.createBoutenEl(c));
     }
 
     // ---- 選択ラップ・アノテーション完了の共通ロジック ----
@@ -283,9 +279,6 @@ export class EditorElement {
         const { textNode, startOffset, endOffset } = resolved;
         const selectedText = textNode.textContent!.slice(startOffset, endOffset);
         if (!selectedText) return false;
-
-        this.pushSnapshot(); // DOM 変更前にスナップショットを保存
-        this.inBurst = false; // 記法操作はバーストを終了させる
 
         const newEl = createElement(selectedText);
 
@@ -305,36 +298,35 @@ export class EditorElement {
         return true;
     }
 
-    // tcy/bouten など終端文字で確定するライブ変換の共通実装
+    // tcy/bouten など終端文字で確定するライブ変換の共通実装。
+    // 変換が行われた場合 true を返す。
     private handleAnnotationCompletion(
         endChar: string,
         re: RegExp,
         createElement: (content: string) => HTMLElement,
-    ): void {
+    ): boolean {
         // 展開中、または DOM 操作中（execCommand の再入）はスキップ
-        if (this.expandedEl) return;
-        if (this.isModifyingDom) return;
+        if (this.expandedEl) return false;
+        if (this.isModifyingDom) return false;
         const sel = window.getSelection();
-        if (!sel || sel.rangeCount === 0) return;
+        if (!sel || sel.rangeCount === 0) return false;
         const range = sel.getRangeAt(0);
-        if (range.startContainer.nodeType !== Node.TEXT_NODE) return;
-        if (this.isInsideRuby(range.startContainer)) return;
+        if (range.startContainer.nodeType !== Node.TEXT_NODE) return false;
+        if (this.isInsideRuby(range.startContainer)) return false;
 
         const textNode = range.startContainer as Text;
         const textBefore = textNode.textContent?.slice(0, range.startOffset) ?? '';
-        if (!textBefore.endsWith(endChar)) return;
+        if (!textBefore.endsWith(endChar)) return false;
 
         const annotationMatch = textBefore.match(re);
-        if (!annotationMatch) return;
+        if (!annotationMatch) return false;
 
         const content = annotationMatch[1];
         const annotationStart = range.startOffset - annotationMatch[0].length;
-        if (!textBefore.slice(0, annotationStart).endsWith(content)) return;
+        if (!textBefore.slice(0, annotationStart).endsWith(content)) return false;
 
         this.isModifyingDom = true;
         try {
-            this.pushSnapshot(); // DOM 変更前にスナップショットを保存
-            this.inBurst = false; // 記法操作はバーストを終了させる
             const newEl = createElement(content);
             const inserted = this.insertAnnotationElement(
                 textNode, annotationStart - content.length, range.startOffset, newEl,
@@ -343,6 +335,7 @@ export class EditorElement {
             // カーソルを要素の直後に置く
             // カーソルが要素内にあると selectionchange → expandForEditing() が即座に発火するため
             this.setCursorAfter(inserted);
+            return true;
         } finally {
             this.isModifyingDom = false;
         }
@@ -353,15 +346,11 @@ export class EditorElement {
         e.preventDefault();
         const text = e.clipboardData?.getData('text/plain') ?? '';
         if (!text) return;
-        // ペーストは常に独立したUndo単位。バーストをリセットしてスナップショットを手動保存する。
-        // execCommand('insertText') が beforeinput を発火しない場合も確実にスナップショットが残る。
-        this.inBurst = false;
-        this.pushSnapshot();
-        this.inBurst = true; // onBeforeInput が発火しても重複スナップショットを防ぐ
-        // execCommand('insertText') はカーソル位置へのプレーンテキスト挿入・選択範囲の置換・
-        // アンドゥ履歴への追加を一括処理する（deprecated だが Electron では動作する）
+        // execCommand('insertText') はカーソル位置へのプレーンテキスト挿入・選択範囲の置換を
+        // 一括処理する（deprecated だが Electron では動作する）。
+        // beforeinput イベントが発火して onBeforeInput() が inBurst = true にする。
         document.execCommand('insertText', false, text);
-        this.inBurst = false; // ペースト後は次の入力を別のバーストとして扱う
+        // view.ts が paste 後に commitToCm6() を呼ぶ
     }
 
     applySettings(settings: TatePluginSettings): void {
@@ -420,15 +409,16 @@ export class EditorElement {
         }
     }
 
-    // 編集スパンを収束し、内容を再パースして元の位置に挿入する（カーソルは呼び出し元が処理）
-    private collapseEditing(): void {
-        if (!this.expandedEl) return;
+    // 編集スパンを収束し、内容を再パースして元の位置に挿入する（カーソルは呼び出し元が処理）。
+    // 内容が変化した場合 true を返す（view.ts が commitToCm6 を呼ぶ目安）。
+    private collapseEditing(): boolean {
+        if (!this.expandedEl) return false;
         // detached ノードは単純にクリアして終了
         // （parentNode / selectNode を呼ぶと例外が発生するため）
         if (!this.expandedEl.isConnected) {
             this.expandedEl = null;
             this.expandedElOriginalText = null;
-            return;
+            return false;
         }
 
         let rawText = this.expandedEl.textContent ?? '';
@@ -479,6 +469,7 @@ export class EditorElement {
 
         // 収束後は次の入力を新バーストとして扱う
         this.inBurst = false;
+        return hasChanged;
     }
 
     // 要素内のカーソル位置を raw テキスト上の文字オフセットに変換する
@@ -752,72 +743,6 @@ export class EditorElement {
         sel.addRange(range);
     }
 
-    // tate-editing スパン内のカーソル位置を「収束後の DOM における visible offset」に変換する。
-    // undo()/redo() でのスナップショット保存に使い、setValue() + setVisibleOffset() で正確に復元できる。
-    // expandedEl が null の場合は getVisibleOffset() と同値。
-    private getCollapsedCursor(): number {
-        if (!this.expandedEl) {
-            return this.getVisibleOffset();
-        }
-
-        const sel = window.getSelection();
-        if (!sel || sel.rangeCount === 0) return 0;
-        const range = sel.getRangeAt(0);
-
-        // カーソルがスパン外にある場合は通常の visible offset を返す
-        if (!this.expandedEl.contains(range.startContainer)) {
-            return this.getVisibleOffset();
-        }
-
-        // スパン前の可視文字数を数える
-        let count = 0;
-        const walker = document.createTreeWalker(this.el, NodeFilter.SHOW_TEXT);
-        let node = walker.nextNode() as Text | null;
-        while (node) {
-            if (this.expandedEl.contains(node)) break;
-            if (!this.isInsideRt(node)) count += node.length;
-            node = walker.nextNode() as Text | null;
-        }
-
-        // スパン内のカーソル位置（テキストノード先頭からのオフセット）
-        const cursorInSpan = range.startOffset;
-        const spanText = this.expandedEl.textContent ?? '';
-
-        // アノテーション種別を判定して収束後の相当オフセットを計算する
-        let collapsedInSpan: number;
-
-        if (spanText.startsWith('｜') || spanText.startsWith('|')) {
-            // 明示ルビ: ｜base《rt》 → prefix(1文字) + base + 《rt》
-            const angleOpen = spanText.indexOf('《');
-            const baseLen = angleOpen >= 1 ? angleOpen - 1 : spanText.length - 1;
-            if (cursorInSpan > 1 + baseLen) {
-                // rt や閉じ括弧内 → base 末尾相当
-                collapsedInSpan = baseLen;
-            } else {
-                // prefix または base 内 → prefix 分シフト（最小0）
-                collapsedInSpan = Math.max(0, cursorInSpan - 1);
-            }
-        } else if (spanText.includes('《')) {
-            // 省略ルビ: base《rt》 → prefix なし
-            const baseLen = spanText.indexOf('《');
-            if (cursorInSpan > baseLen) {
-                collapsedInSpan = baseLen;
-            } else {
-                collapsedInSpan = cursorInSpan;
-            }
-        } else {
-            // tcy/bouten: content［＃「content」...］ → content 部分のみ visible
-            const bracketIdx = spanText.indexOf('［＃');
-            if (bracketIdx >= 0) {
-                collapsedInSpan = Math.min(cursorInSpan, bracketIdx);
-            } else {
-                collapsedInSpan = cursorInSpan;
-            }
-        }
-
-        return count + collapsedInSpan;
-    }
-
     private isInsideRt(node: Node): boolean {
         let parent = node.parentElement;
         while (parent && parent !== this.el) {
@@ -893,76 +818,32 @@ export class EditorElement {
     }
 
     // beforeinput イベントで呼ぶ（view.ts から登録）。
-    // バースト開始時（inBurst=false のとき）にスナップショットを積む。
-    // バースト中（inBurst=true）はスキップ。ナビゲーション等でバーストがリセットされるまで
-    // 同一バーストの入力は1つのUndo単位にまとめられる。
+    // CM6 への未コミット変更があることを示す inBurst フラグをセットする。
     onBeforeInput(): void {
-        if (this.isUndoRedoing) return;
-        if (this.inBurst) return;
-        this.pushSnapshot();
         this.inBurst = true;
     }
 
-    // バーストをリセットする（view.ts からナビゲーションキー・mousedown 時に呼ぶ）。
-    // 次の onBeforeInput で新しいスナップショットが積まれ、別のUndo単位になる。
+    // バーストをリセットする（commitToCm6() 完了後・view.ts のナビゲーション処理時に呼ぶ）。
     resetBurst(): void {
         this.inBurst = false;
     }
 
-    // Ctrl+Z に対応する Undo 操作（view.ts から呼ぶ）。
-    // 展開中スパンがあれば先に収束してから Undo を実行する。
-    // 戻り値: DOM が変化した場合 true（呼び出し元が onEditorChange() を呼ぶ目安）
-    undo(): boolean {
-        this.isUndoRedoing = true;
-        this.isModifyingDom = true;
-        try {
-            this.collapseEditingIfExpanded();
-            if (!this.undoManager.canUndo) return false;
-            const entry = this.undoManager.popUndo();
-            if (!entry) return false;
-            // 現在状態を Redo スタックへ保存してからエントリを復元する
-            const current: Snapshot = { text: this.getValue(), cursor: this.getCollapsedCursor() };
-            this.undoManager.pushRedo(current);
-            this.setValue(entry.text, false);
-            this.setVisibleOffset(entry.cursor);
-            this.inBurst = false;
-            return true;
-        } finally {
-            this.isModifyingDom = false;
-            this.isUndoRedoing = false;
-        }
-    }
-
-    // Ctrl+Shift+Z に対応する Redo 操作（view.ts から呼ぶ）。
-    // 展開中スパンがあれば先に収束してから Redo を実行する。
-    // 戻り値: DOM が変化した場合 true
-    redo(): boolean {
-        this.isUndoRedoing = true;
-        this.isModifyingDom = true;
-        try {
-            this.collapseEditingIfExpanded();
-            if (!this.undoManager.canRedo) return false;
-            const entry = this.undoManager.popRedo();
-            if (!entry) return false;
-            // 現在状態を Undo スタックへ保存してからエントリを復元する
-            const current: Snapshot = { text: this.getValue(), cursor: this.getCollapsedCursor() };
-            this.undoManager.pushUndo(current);
-            this.setValue(entry.text, false);
-            this.setVisibleOffset(entry.cursor);
-            this.inBurst = false;
-            return true;
-        } finally {
-            this.isModifyingDom = false;
-            this.isUndoRedoing = false;
-        }
-    }
-
-    // 展開中スパンがあれば収束する。undo()/redo() の冒頭から呼ぶ前提で
-    // isModifyingDom と isUndoRedoing は呼び出し元が設定済みであること。
-    private collapseEditingIfExpanded(): void {
-        if (!this.expandedEl?.isConnected) return;
-        this.collapseEditing();
+    // CM6 の Undo/Redo 後に呼ぶ。content を縦書きビューに適用し、
+    // srcOffset（CM6 のカーソル位置）を srcToView で変換してカーソルを復元する。
+    applyFromCm6(content: string, srcOffset: number): void {
+        // 展開中スパンをクリア（CM6 の状態が真実なので強制リセット）
+        this.expandedEl = null;
+        this.expandedElOriginalText = null;
         this.savedRange = null;
+        this.inBurst = false;
+        // DOM を更新（差分がある場合のみ）
+        if (this.getValue() !== content) {
+            this.el.innerHTML = this.parseToHtml(content);
+        }
+        // CM6 のソースオフセットを可視オフセットに変換してカーソルを復元
+        const segs = buildSegmentMap(content);
+        const viewOffset = srcToView(segs, srcOffset);
+        this.setVisibleOffset(viewOffset);
     }
 
     // カーソルを node の直後に移動する。
@@ -998,12 +879,6 @@ export class EditorElement {
             }
         }
         return '';
-    }
-
-    // 現在の文書状態（テキスト + 収束後カーソル相当）を Undo スタックに積む。
-    // 操作の直前に呼ぶことで、Undo 時にその状態へ戻れるようにする。
-    private pushSnapshot(): void {
-        this.undoManager.push({ text: this.getValue(), cursor: this.getCollapsedCursor() });
     }
 
     private createRubyEl(base: string, rt: string, explicit: boolean): HTMLElement {
