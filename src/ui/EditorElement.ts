@@ -1,5 +1,5 @@
 import { TatePluginSettings } from '../settings';
-import { UndoManager } from './UndoManager';
+import { UndoManager, Snapshot } from './UndoManager';
 
 // 省略形式で自動検出する漢字の Unicode 範囲
 // CJK Unified Ideographs (U+4E00–U+9FFF) + Extension A (U+3400–U+4DBF) + 繰り返し記号
@@ -22,17 +22,13 @@ export class EditorElement {
         startContainer: Node; startOffset: number;
         endContainer: Node; endOffset: number;
     } | null = null;
-    // 独自 Undo/Redo スタック
+    // 独自 Undo/Redo スタック（統合スナップショット方式）
     private undoManager = new UndoManager();
-    // Undo/Redo 操作中のフラグ（native マーカー重複追加・ライブ変換の再入を防ぐ）
+    // Undo/Redo 操作中のフラグ（ライブ変換の再入・setValue でのスタッククリアを防ぐ）
     private isUndoRedoing = false;
-    // wrapSelectionWithRuby が設定する「collapseEditing 時に記録する annotation undo の事前情報」
-    // cursor-triggered な expand/collapse には設定されない（Undo スタックに積まない）
-    private pendingAnnotationUndo: {
-        parentEl: HTMLElement;
-        beforeHTML: string;
-        beforeCursor: number;
-    } | null = null;
+    // 連続入力バースト中フラグ。true の間は onBeforeInput でスナップショットを積まない。
+    // ナビゲーションキー・mousedown・記法操作でリセットされる。
+    private inBurst = false;
 
     constructor(container: HTMLElement) {
         this.el = container.createEl('div');
@@ -53,9 +49,8 @@ export class EditorElement {
         this.expandedEl = null;
         this.expandedElOriginalText = null;
         this.savedRange = null;
-        this.pendingAnnotationUndo = null;
-        // ファイル切り替え（preserveCursor=false）時は Undo/Redo スタックをクリア
-        if (!preserveCursor) this.undoManager.clear();
+        // ファイル切り替え（preserveCursor=false かつ Undo/Redo 操作外）時は Undo/Redo スタックをクリア
+        if (!preserveCursor && !this.isUndoRedoing) this.undoManager.clear();
         if (this.getValue() === content) return;
 
         if (preserveCursor && document.activeElement === this.el) {
@@ -189,15 +184,16 @@ export class EditorElement {
 
         this.isModifyingDom = true;
         try {
+            this.pushSnapshot(); // DOM 変更前にスナップショットを保存
+            this.inBurst = false; // 記法操作はバーストを終了させる
             const rubyEl = this.createRubyEl(base, rt, explicit);
-            const { element: inserted, commitUndo } = this.insertAnnotationElement(
+            const inserted = this.insertAnnotationElement(
                 textNode, matchStart, range.startOffset, rubyEl,
             );
 
             // カーソルを要素の直後に置く
             // カーソルが ruby 内にあると selectionchange → expandForEditing() が即座に発火するため
             this.setCursorAfter(inserted);
-            commitUndo(); // afterCursor をキャプチャして annotation エントリを記録
         } finally {
             this.isModifyingDom = false;
         }
@@ -220,14 +216,15 @@ export class EditorElement {
         const selectedText = textNode.textContent!.slice(startOffset, endOffset);
         if (!selectedText) return false;
 
+        this.pushSnapshot(); // DOM 変更前にスナップショットを保存
+        this.inBurst = false; // 記法操作はバーストを終了させる
+
         const rawText = `｜${selectedText}《》`;
         const span = document.createElement('span');
         span.className = 'tate-editing';
         span.textContent = rawText;
 
         const parentEl = textNode.parentNode as HTMLElement;
-        const beforeHTML = parentEl.innerHTML;
-        const beforeCursor = this.getVisibleOffset();
 
         this.isModifyingDom = true;
         try {
@@ -242,8 +239,6 @@ export class EditorElement {
 
             this.expandedEl = span;
             this.expandedElOriginalText = rawText;
-            // collapseEditing 時に annotation undo エントリを記録するための事前情報
-            this.pendingAnnotationUndo = { parentEl, beforeHTML, beforeCursor };
 
             // カーソルを《と》の間（rawText.length - 1 = 》の直前）に設定
             const spanText = span.firstChild as Text | null;
@@ -289,18 +284,20 @@ export class EditorElement {
         const selectedText = textNode.textContent!.slice(startOffset, endOffset);
         if (!selectedText) return false;
 
+        this.pushSnapshot(); // DOM 変更前にスナップショットを保存
+        this.inBurst = false; // 記法操作はバーストを終了させる
+
         const newEl = createElement(selectedText);
 
         this.isModifyingDom = true;
         try {
-            const { element: inserted, commitUndo } = this.insertAnnotationElement(
+            const inserted = this.insertAnnotationElement(
                 textNode, startOffset, endOffset, newEl,
             );
 
             // カーソルを挿入要素の直後に置く
             // カーソルが要素内にあると selectionchange → expandForEditing() が呼ばれるため
             this.setCursorAfter(inserted);
-            commitUndo(); // afterCursor をキャプチャして annotation エントリを記録
         } finally {
             this.isModifyingDom = false;
         }
@@ -336,15 +333,16 @@ export class EditorElement {
 
         this.isModifyingDom = true;
         try {
+            this.pushSnapshot(); // DOM 変更前にスナップショットを保存
+            this.inBurst = false; // 記法操作はバーストを終了させる
             const newEl = createElement(content);
-            const { element: inserted, commitUndo } = this.insertAnnotationElement(
+            const inserted = this.insertAnnotationElement(
                 textNode, annotationStart - content.length, range.startOffset, newEl,
             );
 
             // カーソルを要素の直後に置く
             // カーソルが要素内にあると selectionchange → expandForEditing() が即座に発火するため
             this.setCursorAfter(inserted);
-            commitUndo(); // afterCursor をキャプチャして annotation エントリを記録
         } finally {
             this.isModifyingDom = false;
         }
@@ -355,9 +353,15 @@ export class EditorElement {
         e.preventDefault();
         const text = e.clipboardData?.getData('text/plain') ?? '';
         if (!text) return;
+        // ペーストは常に独立したUndo単位。バーストをリセットしてスナップショットを手動保存する。
+        // execCommand('insertText') が beforeinput を発火しない場合も確実にスナップショットが残る。
+        this.inBurst = false;
+        this.pushSnapshot();
+        this.inBurst = true; // onBeforeInput が発火しても重複スナップショットを防ぐ
         // execCommand('insertText') はカーソル位置へのプレーンテキスト挿入・選択範囲の置換・
         // アンドゥ履歴への追加を一括処理する（deprecated だが Electron では動作する）
         document.execCommand('insertText', false, text);
+        this.inBurst = false; // ペースト後は次の入力を別のバーストとして扱う
     }
 
     applySettings(settings: TatePluginSettings): void {
@@ -401,6 +405,7 @@ export class EditorElement {
         target.parentNode!.replaceChild(span, target);
         this.expandedEl = span;
         this.expandedElOriginalText = rawText; // collapseEditing での変化検出用
+        this.inBurst = false; // 展開はナビゲーション操作。直後の入力を新バーストとして扱う。
 
         const textNode = span.firstChild as Text | null;
         if (textNode) {
@@ -416,9 +421,6 @@ export class EditorElement {
     }
 
     // 編集スパンを収束し、内容を再パースして元の位置に挿入する（カーソルは呼び出し元が処理）
-    // pendingAnnotationUndo が設定されている場合（wrapSelectionWithRuby 由来）は
-    // 収束後の最終状態を annotation undo エントリとして記録する。
-    // cursor-triggered な expand/collapse は pendingAnnotationUndo が null のため記録しない。
     private collapseEditing(): void {
         if (!this.expandedEl) return;
         // detached ノードは単純にクリアして終了
@@ -426,7 +428,6 @@ export class EditorElement {
         if (!this.expandedEl.isConnected) {
             this.expandedEl = null;
             this.expandedElOriginalText = null;
-            this.pendingAnnotationUndo = null;
             return;
         }
 
@@ -476,33 +477,8 @@ export class EditorElement {
             parent.insertBefore(tempDiv.firstChild, nextSibling);
         }
 
-        // wrapSelectionWithRuby 由来の場合: 最終 DOM 状態を annotation undo エントリとして記録
-        // isUndoRedoing=true（undo() 内から呼ばれた場合）は記録しない
-        if (this.pendingAnnotationUndo && !this.isUndoRedoing) {
-            const { parentEl, beforeHTML, beforeCursor } = this.pendingAnnotationUndo;
-            // afterCursor: 最後に挿入したノードの直後にカーソルを置いて計測
-            const lastInserted = nextSibling ? nextSibling.previousSibling : parent.lastChild;
-            let afterCursor = beforeCursor;
-            if (lastInserted) {
-                try {
-                    const sel = window.getSelection();
-                    if (sel) {
-                        const r = document.createRange();
-                        r.setStartAfter(lastInserted);
-                        r.collapse(true);
-                        sel.removeAllRanges();
-                        sel.addRange(r);
-                        afterCursor = this.getVisibleOffset();
-                    }
-                } catch { /* ignore */ }
-            }
-            const afterHTML = parentEl.innerHTML;
-            this.undoManager.pushAnnotation(
-                () => { parentEl.innerHTML = beforeHTML; this.setVisibleOffset(beforeCursor); },
-                () => { parentEl.innerHTML = afterHTML; this.setVisibleOffset(afterCursor); },
-            );
-        }
-        this.pendingAnnotationUndo = null;
+        // 収束後は次の入力を新バーストとして扱う
+        this.inBurst = false;
     }
 
     // 要素内のカーソル位置を raw テキスト上の文字オフセットに変換する
@@ -776,6 +752,72 @@ export class EditorElement {
         sel.addRange(range);
     }
 
+    // tate-editing スパン内のカーソル位置を「収束後の DOM における visible offset」に変換する。
+    // undo()/redo() でのスナップショット保存に使い、setValue() + setVisibleOffset() で正確に復元できる。
+    // expandedEl が null の場合は getVisibleOffset() と同値。
+    private getCollapsedCursor(): number {
+        if (!this.expandedEl) {
+            return this.getVisibleOffset();
+        }
+
+        const sel = window.getSelection();
+        if (!sel || sel.rangeCount === 0) return 0;
+        const range = sel.getRangeAt(0);
+
+        // カーソルがスパン外にある場合は通常の visible offset を返す
+        if (!this.expandedEl.contains(range.startContainer)) {
+            return this.getVisibleOffset();
+        }
+
+        // スパン前の可視文字数を数える
+        let count = 0;
+        const walker = document.createTreeWalker(this.el, NodeFilter.SHOW_TEXT);
+        let node = walker.nextNode() as Text | null;
+        while (node) {
+            if (this.expandedEl.contains(node)) break;
+            if (!this.isInsideRt(node)) count += node.length;
+            node = walker.nextNode() as Text | null;
+        }
+
+        // スパン内のカーソル位置（テキストノード先頭からのオフセット）
+        const cursorInSpan = range.startOffset;
+        const spanText = this.expandedEl.textContent ?? '';
+
+        // アノテーション種別を判定して収束後の相当オフセットを計算する
+        let collapsedInSpan: number;
+
+        if (spanText.startsWith('｜') || spanText.startsWith('|')) {
+            // 明示ルビ: ｜base《rt》 → prefix(1文字) + base + 《rt》
+            const angleOpen = spanText.indexOf('《');
+            const baseLen = angleOpen >= 1 ? angleOpen - 1 : spanText.length - 1;
+            if (cursorInSpan > 1 + baseLen) {
+                // rt や閉じ括弧内 → base 末尾相当
+                collapsedInSpan = baseLen;
+            } else {
+                // prefix または base 内 → prefix 分シフト（最小0）
+                collapsedInSpan = Math.max(0, cursorInSpan - 1);
+            }
+        } else if (spanText.includes('《')) {
+            // 省略ルビ: base《rt》 → prefix なし
+            const baseLen = spanText.indexOf('《');
+            if (cursorInSpan > baseLen) {
+                collapsedInSpan = baseLen;
+            } else {
+                collapsedInSpan = cursorInSpan;
+            }
+        } else {
+            // tcy/bouten: content［＃「content」...］ → content 部分のみ visible
+            const bracketIdx = spanText.indexOf('［＃');
+            if (bracketIdx >= 0) {
+                collapsedInSpan = Math.min(cursorInSpan, bracketIdx);
+            } else {
+                collapsedInSpan = cursorInSpan;
+            }
+        }
+
+        return count + collapsedInSpan;
+    }
+
     private isInsideRt(node: Node): boolean {
         let parent = node.parentElement;
         while (parent && parent !== this.el) {
@@ -829,17 +871,14 @@ export class EditorElement {
 
     // テキストノードの [matchStart, matchEnd) を element で置き換える直接 DOM 操作。
     // 行頭・行末・行中の区別なく常に直接 DOM 操作で統一する（execCommand 不使用）。
-    // { element, commitUndo } を返す。呼び出し元がカーソルを設定した後に commitUndo() を呼ぶと
-    // 操作前後の段落 innerHTML と cursor offset を annotation undo エントリとして記録する。
+    // 挿入した要素を返す。
     private insertAnnotationElement(
         textNode: Text,
         matchStart: number,
         matchEnd: number,
         element: HTMLElement,
-    ): { element: HTMLElement; commitUndo: () => void } {
+    ): HTMLElement {
         const parentEl = textNode.parentNode as HTMLElement;
-        const beforeHTML = parentEl.innerHTML;
-        const beforeCursor = this.getVisibleOffset();
 
         // テキストノードを分割して要素を挿入
         const precedingText = textNode.textContent!.slice(0, matchStart);
@@ -850,52 +889,43 @@ export class EditorElement {
         parentEl.insertBefore(element, next);
         if (followingText) parentEl.insertBefore(document.createTextNode(followingText), next);
 
-        return {
-            element,
-            // カーソル設定後に呼ぶ。そのとき afterCursor をキャプチャして annotation エントリを積む。
-            commitUndo: () => {
-                if (this.isUndoRedoing) return;
-                const afterHTML = parentEl.innerHTML;
-                const afterCursor = this.getVisibleOffset();
-                this.undoManager.pushAnnotation(
-                    () => { parentEl.innerHTML = beforeHTML; this.setVisibleOffset(beforeCursor); },
-                    () => { parentEl.innerHTML = afterHTML; this.setVisibleOffset(afterCursor); },
-                );
-            },
-        };
+        return element;
     }
 
-    // input イベントからネイティブ Undo マーカーを積む（view.ts から呼ぶ）
-    // 展開中スパンがある間はネイティブマーカーを積まない（collapseEditing 後に参照が失効するため）
-    // Undo/Redo 操作中も積まない（execCommand('undo') が発火する input を無視するため）
-    pushNativeMarker(): void {
+    // beforeinput イベントで呼ぶ（view.ts から登録）。
+    // バースト開始時（inBurst=false のとき）にスナップショットを積む。
+    // バースト中（inBurst=true）はスキップ。ナビゲーション等でバーストがリセットされるまで
+    // 同一バーストの入力は1つのUndo単位にまとめられる。
+    onBeforeInput(): void {
         if (this.isUndoRedoing) return;
-        if (this.expandedEl) return;
-        this.undoManager.pushNativeMarker();
+        if (this.inBurst) return;
+        this.pushSnapshot();
+        this.inBurst = true;
     }
 
-    // Ctrl+Z に対応する Undo 操作（view.ts から呼ぶ）
+    // バーストをリセットする（view.ts からナビゲーションキー・mousedown 時に呼ぶ）。
+    // 次の onBeforeInput で新しいスナップショットが積まれ、別のUndo単位になる。
+    resetBurst(): void {
+        this.inBurst = false;
+    }
+
+    // Ctrl+Z に対応する Undo 操作（view.ts から呼ぶ）。
     // 展開中スパンがあれば先に収束してから Undo を実行する。
     // 戻り値: DOM が変化した場合 true（呼び出し元が onEditorChange() を呼ぶ目安）
     undo(): boolean {
-        // isUndoRedoing を先頭でセットして collapseEditing 内の pendingAnnotationUndo 処理を抑制する。
-        // これにより Redo スタックが不必要にクリアされるのを防ぐ。
         this.isUndoRedoing = true;
         this.isModifyingDom = true;
         try {
             this.collapseEditingIfExpanded();
-            if (!this.undoManager.canUndo) {
-                // カスタムスタックが空でもネイティブ Undo に委譲する。
-                // 連続テキスト入力は dedup で 1 マーカーにまとまるため、
-                // 最初の Ctrl+Z でマーカーが消えた後も入力が残っている場合がある。
-                document.execCommand('undo');
-                return true;
-            }
-            const entry = this.undoManager.undo();
+            if (!this.undoManager.canUndo) return false;
+            const entry = this.undoManager.popUndo();
             if (!entry) return false;
-            if (entry.kind === 'native') {
-                document.execCommand('undo');
-            }
+            // 現在状態を Redo スタックへ保存してからエントリを復元する
+            const current: Snapshot = { text: this.getValue(), cursor: this.getCollapsedCursor() };
+            this.undoManager.pushRedo(current);
+            this.setValue(entry.text, false);
+            this.setVisibleOffset(entry.cursor);
+            this.inBurst = false;
             return true;
         } finally {
             this.isModifyingDom = false;
@@ -903,7 +933,7 @@ export class EditorElement {
         }
     }
 
-    // Ctrl+Shift+Z に対応する Redo 操作（view.ts から呼ぶ）
+    // Ctrl+Shift+Z に対応する Redo 操作（view.ts から呼ぶ）。
     // 展開中スパンがあれば先に収束してから Redo を実行する。
     // 戻り値: DOM が変化した場合 true
     redo(): boolean {
@@ -911,16 +941,15 @@ export class EditorElement {
         this.isModifyingDom = true;
         try {
             this.collapseEditingIfExpanded();
-            if (!this.undoManager.canRedo) {
-                // カスタムスタックが空でもネイティブ Redo に委譲する。
-                document.execCommand('redo');
-                return true;
-            }
-            const entry = this.undoManager.redo();
+            if (!this.undoManager.canRedo) return false;
+            const entry = this.undoManager.popRedo();
             if (!entry) return false;
-            if (entry.kind === 'native') {
-                document.execCommand('redo');
-            }
+            // 現在状態を Undo スタックへ保存してからエントリを復元する
+            const current: Snapshot = { text: this.getValue(), cursor: this.getCollapsedCursor() };
+            this.undoManager.pushUndo(current);
+            this.setValue(entry.text, false);
+            this.setVisibleOffset(entry.cursor);
+            this.inBurst = false;
             return true;
         } finally {
             this.isModifyingDom = false;
@@ -969,6 +998,12 @@ export class EditorElement {
             }
         }
         return '';
+    }
+
+    // 現在の文書状態（テキスト + 収束後カーソル相当）を Undo スタックに積む。
+    // 操作の直前に呼ぶことで、Undo 時にその状態へ戻れるようにする。
+    private pushSnapshot(): void {
+        this.undoManager.push({ text: this.getValue(), cursor: this.getCollapsedCursor() });
     }
 
     private createRubyEl(base: string, rt: string, explicit: boolean): HTMLElement {

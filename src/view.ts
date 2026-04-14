@@ -40,9 +40,11 @@ export class VerticalWritingView extends ItemView {
             editorEl.handlePaste(e);
             syncCoordinator.onEditorChange();
         });
+        this.registerDomEvent(editorEl.el, 'beforeinput', () => {
+            editorEl.onBeforeInput(); // バースト開始時にスナップショットを保存
+        });
         this.registerDomEvent(editorEl.el, 'input', (e: Event) => {
             syncCoordinator.onEditorChange();
-            editorEl.pushNativeMarker(); // キー入力・IME確定をネイティブ Undo マーカーとして記録
             if (!(e as InputEvent).isComposing) {
                 editorEl.handleRubyCompletion();
                 editorEl.handleTcyCompletion();
@@ -57,12 +59,21 @@ export class VerticalWritingView extends ItemView {
         this.registerDomEvent(document, 'selectionchange', () => {
             editorEl.handleSelectionChange();
         });
+        this.registerDomEvent(editorEl.el, 'mousedown', () => {
+            editorEl.resetBurst(); // マウスクリックはバーストを終了させる
+        });
         this.registerDomEvent(editorEl.el, 'keydown', (e: KeyboardEvent) => {
             // Ctrl+Z / Cmd+Z: Undo、Ctrl+Shift+Z / Cmd+Shift+Z: Redo
             if ((e.metaKey || e.ctrlKey) && !e.altKey && e.key === 'z') {
                 e.preventDefault();
                 const changed = e.shiftKey ? editorEl.redo() : editorEl.undo();
                 if (changed) syncCoordinator.onEditorChange();
+                return;
+            }
+            // ナビゲーションキーはバーストを終了させる（次の入力を別のUndo単位にする）
+            if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown',
+                 'Home', 'End', 'PageUp', 'PageDown'].includes(e.key)) {
+                editorEl.resetBurst();
             }
         });
 

@@ -120,67 +120,39 @@ var UndoManager = class {
     this.undoStack = [];
     this.redoStack = [];
   }
-  /** 記法操作エントリを積む（Redo スタックはクリア） */
-  pushAnnotation(undo, redo) {
-    this.undoStack.push({ kind: "annotation", undo, redo });
+  /** スナップショットを Undo スタックに積む（Redo スタックはクリア） */
+  push(snap) {
+    this.undoStack.push(snap);
     this.redoStack = [];
   }
-  /**
-   * ネイティブ Undo マーカーを積む。
-   * 直前がすでに native なら重複スキップ。Redo スタックはクリア。
-   */
-  pushNativeMarker() {
-    const top = this.undoStack[this.undoStack.length - 1];
-    if ((top == null ? void 0 : top.kind) === "native") return;
-    this.undoStack.push({ kind: "native" });
-    this.redoStack = [];
-  }
-  /**
-   * Undo 操作。エントリを 1 つ取り出して返す。
-   * - annotation: entry.undo() を実行して Redo スタックへ移す
-   * - native: Redo スタックにマーカーを積む（execCommand 委譲は呼び出し元が行う）
-   * - 空: null を返す
-   */
-  undo() {
+  /** Undo スタックからスナップショットを取り出す */
+  popUndo() {
     var _a;
-    const entry = (_a = this.undoStack.pop()) != null ? _a : null;
-    if (!entry) return null;
-    if (entry.kind === "annotation") {
-      entry.undo();
-      this.redoStack.push(entry);
-    } else {
-      this.redoStack.push({ kind: "native" });
-    }
-    return entry;
+    return (_a = this.undoStack.pop()) != null ? _a : null;
   }
-  /**
-   * Redo 操作。エントリを 1 つ取り出して返す。
-   * - annotation: entry.redo() を実行して Undo スタックへ移す
-   * - native: Undo スタックにマーカーを積む（execCommand 委譲は呼び出し元が行う）
-   * - 空: null を返す
-   */
-  redo() {
+  /** Redo スタックからスナップショットを取り出す */
+  popRedo() {
     var _a;
-    const entry = (_a = this.redoStack.pop()) != null ? _a : null;
-    if (!entry) return null;
-    if (entry.kind === "annotation") {
-      entry.redo();
-      this.undoStack.push(entry);
-    } else {
-      this.undoStack.push({ kind: "native" });
-    }
-    return entry;
+    return (_a = this.redoStack.pop()) != null ? _a : null;
   }
-  /** スタックをクリア（ファイル切り替え時など） */
-  clear() {
-    this.undoStack = [];
-    this.redoStack = [];
+  /** Redo スタックにスナップショットを積む（Undo 後に現在状態を保存） */
+  pushRedo(snap) {
+    this.redoStack.push(snap);
+  }
+  /** Undo スタックにスナップショットを積む（Redo 後に現在状態を保存） */
+  pushUndo(snap) {
+    this.undoStack.push(snap);
   }
   get canUndo() {
     return this.undoStack.length > 0;
   }
   get canRedo() {
     return this.redoStack.length > 0;
+  }
+  /** スタックをクリア（ファイル切り替え時など） */
+  clear() {
+    this.undoStack = [];
+    this.redoStack = [];
   }
 };
 
@@ -196,13 +168,13 @@ var EditorElement = class {
     this.expandedElOriginalText = null;
     // コマンド実行時に使う選択範囲キャッシュ（コマンドパレット起動でフォーカスが外れた後も保持）
     this.savedRange = null;
-    // 独自 Undo/Redo スタック
+    // 独自 Undo/Redo スタック（統合スナップショット方式）
     this.undoManager = new UndoManager();
-    // Undo/Redo 操作中のフラグ（native マーカー重複追加・ライブ変換の再入を防ぐ）
+    // Undo/Redo 操作中のフラグ（ライブ変換の再入・setValue でのスタッククリアを防ぐ）
     this.isUndoRedoing = false;
-    // wrapSelectionWithRuby が設定する「collapseEditing 時に記録する annotation undo の事前情報」
-    // cursor-triggered な expand/collapse には設定されない（Undo スタックに積まない）
-    this.pendingAnnotationUndo = null;
+    // 連続入力バースト中フラグ。true の間は onBeforeInput でスナップショットを積まない。
+    // ナビゲーションキー・mousedown・記法操作でリセットされる。
+    this.inBurst = false;
     this.el = container.createEl("div");
     this.el.addClass("tate-editor");
     this.el.setAttribute("contenteditable", "true");
@@ -216,8 +188,7 @@ var EditorElement = class {
     this.expandedEl = null;
     this.expandedElOriginalText = null;
     this.savedRange = null;
-    this.pendingAnnotationUndo = null;
-    if (!preserveCursor) this.undoManager.clear();
+    if (!preserveCursor && !this.isUndoRedoing) this.undoManager.clear();
     if (this.getValue() === content) return;
     if (preserveCursor && document.activeElement === this.el) {
       const pos = this.getVisibleOffset();
@@ -316,15 +287,16 @@ var EditorElement = class {
     const matchStart = range.startOffset - match[0].length;
     this.isModifyingDom = true;
     try {
+      this.pushSnapshot();
+      this.inBurst = false;
       const rubyEl = this.createRubyEl(base, rt, explicit);
-      const { element: inserted, commitUndo } = this.insertAnnotationElement(
+      const inserted = this.insertAnnotationElement(
         textNode,
         matchStart,
         range.startOffset,
         rubyEl
       );
       this.setCursorAfter(inserted);
-      commitUndo();
     } finally {
       this.isModifyingDom = false;
     }
@@ -343,13 +315,13 @@ var EditorElement = class {
     const { textNode, startOffset, endOffset } = resolved;
     const selectedText = textNode.textContent.slice(startOffset, endOffset);
     if (!selectedText) return false;
+    this.pushSnapshot();
+    this.inBurst = false;
     const rawText = `\uFF5C${selectedText}\u300A\u300B`;
     const span = document.createElement("span");
     span.className = "tate-editing";
     span.textContent = rawText;
     const parentEl = textNode.parentNode;
-    const beforeHTML = parentEl.innerHTML;
-    const beforeCursor = this.getVisibleOffset();
     this.isModifyingDom = true;
     try {
       const precedingText = textNode.textContent.slice(0, startOffset);
@@ -361,7 +333,6 @@ var EditorElement = class {
       if (followingText) parentEl.insertBefore(document.createTextNode(followingText), next);
       this.expandedEl = span;
       this.expandedElOriginalText = rawText;
-      this.pendingAnnotationUndo = { parentEl, beforeHTML, beforeCursor };
       const spanText = span.firstChild;
       if (spanText) {
         const sel = window.getSelection();
@@ -398,17 +369,18 @@ var EditorElement = class {
     const { textNode, startOffset, endOffset } = resolved;
     const selectedText = textNode.textContent.slice(startOffset, endOffset);
     if (!selectedText) return false;
+    this.pushSnapshot();
+    this.inBurst = false;
     const newEl = createElement(selectedText);
     this.isModifyingDom = true;
     try {
-      const { element: inserted, commitUndo } = this.insertAnnotationElement(
+      const inserted = this.insertAnnotationElement(
         textNode,
         startOffset,
         endOffset,
         newEl
       );
       this.setCursorAfter(inserted);
-      commitUndo();
     } finally {
       this.isModifyingDom = false;
     }
@@ -435,15 +407,16 @@ var EditorElement = class {
     if (!textBefore.slice(0, annotationStart).endsWith(content)) return;
     this.isModifyingDom = true;
     try {
+      this.pushSnapshot();
+      this.inBurst = false;
       const newEl = createElement(content);
-      const { element: inserted, commitUndo } = this.insertAnnotationElement(
+      const inserted = this.insertAnnotationElement(
         textNode,
         annotationStart - content.length,
         range.startOffset,
         newEl
       );
       this.setCursorAfter(inserted);
-      commitUndo();
     } finally {
       this.isModifyingDom = false;
     }
@@ -454,7 +427,11 @@ var EditorElement = class {
     e.preventDefault();
     const text = (_b = (_a = e.clipboardData) == null ? void 0 : _a.getData("text/plain")) != null ? _b : "";
     if (!text) return;
+    this.inBurst = false;
+    this.pushSnapshot();
+    this.inBurst = true;
     document.execCommand("insertText", false, text);
+    this.inBurst = false;
   }
   applySettings(settings) {
     this.el.style.fontFamily = settings.fontFamily;
@@ -493,6 +470,7 @@ var EditorElement = class {
     target.parentNode.replaceChild(span, target);
     this.expandedEl = span;
     this.expandedElOriginalText = rawText;
+    this.inBurst = false;
     const textNode = span.firstChild;
     if (textNode) {
       const sel = window.getSelection();
@@ -506,16 +484,12 @@ var EditorElement = class {
     }
   }
   // 編集スパンを収束し、内容を再パースして元の位置に挿入する（カーソルは呼び出し元が処理）
-  // pendingAnnotationUndo が設定されている場合（wrapSelectionWithRuby 由来）は
-  // 収束後の最終状態を annotation undo エントリとして記録する。
-  // cursor-triggered な expand/collapse は pendingAnnotationUndo が null のため記録しない。
   collapseEditing() {
     var _a, _b, _c;
     if (!this.expandedEl) return;
     if (!this.expandedEl.isConnected) {
       this.expandedEl = null;
       this.expandedElOriginalText = null;
-      this.pendingAnnotationUndo = null;
       return;
     }
     let rawText = (_a = this.expandedEl.textContent) != null ? _a : "";
@@ -550,37 +524,7 @@ var EditorElement = class {
     while (tempDiv.firstChild) {
       parent.insertBefore(tempDiv.firstChild, nextSibling);
     }
-    if (this.pendingAnnotationUndo && !this.isUndoRedoing) {
-      const { parentEl, beforeHTML, beforeCursor } = this.pendingAnnotationUndo;
-      const lastInserted = nextSibling ? nextSibling.previousSibling : parent.lastChild;
-      let afterCursor = beforeCursor;
-      if (lastInserted) {
-        try {
-          const sel = window.getSelection();
-          if (sel) {
-            const r = document.createRange();
-            r.setStartAfter(lastInserted);
-            r.collapse(true);
-            sel.removeAllRanges();
-            sel.addRange(r);
-            afterCursor = this.getVisibleOffset();
-          }
-        } catch (e) {
-        }
-      }
-      const afterHTML = parentEl.innerHTML;
-      this.undoManager.pushAnnotation(
-        () => {
-          parentEl.innerHTML = beforeHTML;
-          this.setVisibleOffset(beforeCursor);
-        },
-        () => {
-          parentEl.innerHTML = afterHTML;
-          this.setVisibleOffset(afterCursor);
-        }
-      );
-    }
-    this.pendingAnnotationUndo = null;
+    this.inBurst = false;
   }
   // 要素内のカーソル位置を raw テキスト上の文字オフセットに変換する
   rawOffsetForExpand(el, node, offset) {
@@ -795,6 +739,56 @@ var EditorElement = class {
     sel.removeAllRanges();
     sel.addRange(range);
   }
+  // tate-editing スパン内のカーソル位置を「収束後の DOM における visible offset」に変換する。
+  // undo()/redo() でのスナップショット保存に使い、setValue() + setVisibleOffset() で正確に復元できる。
+  // expandedEl が null の場合は getVisibleOffset() と同値。
+  getCollapsedCursor() {
+    var _a;
+    if (!this.expandedEl) {
+      return this.getVisibleOffset();
+    }
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return 0;
+    const range = sel.getRangeAt(0);
+    if (!this.expandedEl.contains(range.startContainer)) {
+      return this.getVisibleOffset();
+    }
+    let count = 0;
+    const walker = document.createTreeWalker(this.el, NodeFilter.SHOW_TEXT);
+    let node = walker.nextNode();
+    while (node) {
+      if (this.expandedEl.contains(node)) break;
+      if (!this.isInsideRt(node)) count += node.length;
+      node = walker.nextNode();
+    }
+    const cursorInSpan = range.startOffset;
+    const spanText = (_a = this.expandedEl.textContent) != null ? _a : "";
+    let collapsedInSpan;
+    if (spanText.startsWith("\uFF5C") || spanText.startsWith("|")) {
+      const angleOpen = spanText.indexOf("\u300A");
+      const baseLen = angleOpen >= 1 ? angleOpen - 1 : spanText.length - 1;
+      if (cursorInSpan > 1 + baseLen) {
+        collapsedInSpan = baseLen;
+      } else {
+        collapsedInSpan = Math.max(0, cursorInSpan - 1);
+      }
+    } else if (spanText.includes("\u300A")) {
+      const baseLen = spanText.indexOf("\u300A");
+      if (cursorInSpan > baseLen) {
+        collapsedInSpan = baseLen;
+      } else {
+        collapsedInSpan = cursorInSpan;
+      }
+    } else {
+      const bracketIdx = spanText.indexOf("\uFF3B\uFF03");
+      if (bracketIdx >= 0) {
+        collapsedInSpan = Math.min(cursorInSpan, bracketIdx);
+      } else {
+        collapsedInSpan = cursorInSpan;
+      }
+    }
+    return count + collapsedInSpan;
+  }
   isInsideRt(node) {
     let parent = node.parentElement;
     while (parent && parent !== this.el) {
@@ -837,12 +831,9 @@ var EditorElement = class {
   }
   // テキストノードの [matchStart, matchEnd) を element で置き換える直接 DOM 操作。
   // 行頭・行末・行中の区別なく常に直接 DOM 操作で統一する（execCommand 不使用）。
-  // { element, commitUndo } を返す。呼び出し元がカーソルを設定した後に commitUndo() を呼ぶと
-  // 操作前後の段落 innerHTML と cursor offset を annotation undo エントリとして記録する。
+  // 挿入した要素を返す。
   insertAnnotationElement(textNode, matchStart, matchEnd, element) {
     const parentEl = textNode.parentNode;
-    const beforeHTML = parentEl.innerHTML;
-    const beforeCursor = this.getVisibleOffset();
     const precedingText = textNode.textContent.slice(0, matchStart);
     const followingText = textNode.textContent.slice(matchEnd);
     const next = textNode.nextSibling;
@@ -850,35 +841,24 @@ var EditorElement = class {
     if (precedingText) parentEl.insertBefore(document.createTextNode(precedingText), next);
     parentEl.insertBefore(element, next);
     if (followingText) parentEl.insertBefore(document.createTextNode(followingText), next);
-    return {
-      element,
-      // カーソル設定後に呼ぶ。そのとき afterCursor をキャプチャして annotation エントリを積む。
-      commitUndo: () => {
-        if (this.isUndoRedoing) return;
-        const afterHTML = parentEl.innerHTML;
-        const afterCursor = this.getVisibleOffset();
-        this.undoManager.pushAnnotation(
-          () => {
-            parentEl.innerHTML = beforeHTML;
-            this.setVisibleOffset(beforeCursor);
-          },
-          () => {
-            parentEl.innerHTML = afterHTML;
-            this.setVisibleOffset(afterCursor);
-          }
-        );
-      }
-    };
+    return element;
   }
-  // input イベントからネイティブ Undo マーカーを積む（view.ts から呼ぶ）
-  // 展開中スパンがある間はネイティブマーカーを積まない（collapseEditing 後に参照が失効するため）
-  // Undo/Redo 操作中も積まない（execCommand('undo') が発火する input を無視するため）
-  pushNativeMarker() {
+  // beforeinput イベントで呼ぶ（view.ts から登録）。
+  // バースト開始時（inBurst=false のとき）にスナップショットを積む。
+  // バースト中（inBurst=true）はスキップ。ナビゲーション等でバーストがリセットされるまで
+  // 同一バーストの入力は1つのUndo単位にまとめられる。
+  onBeforeInput() {
     if (this.isUndoRedoing) return;
-    if (this.expandedEl) return;
-    this.undoManager.pushNativeMarker();
+    if (this.inBurst) return;
+    this.pushSnapshot();
+    this.inBurst = true;
   }
-  // Ctrl+Z に対応する Undo 操作（view.ts から呼ぶ）
+  // バーストをリセットする（view.ts からナビゲーションキー・mousedown 時に呼ぶ）。
+  // 次の onBeforeInput で新しいスナップショットが積まれ、別のUndo単位になる。
+  resetBurst() {
+    this.inBurst = false;
+  }
+  // Ctrl+Z に対応する Undo 操作（view.ts から呼ぶ）。
   // 展開中スパンがあれば先に収束してから Undo を実行する。
   // 戻り値: DOM が変化した場合 true（呼び出し元が onEditorChange() を呼ぶ目安）
   undo() {
@@ -886,22 +866,21 @@ var EditorElement = class {
     this.isModifyingDom = true;
     try {
       this.collapseEditingIfExpanded();
-      if (!this.undoManager.canUndo) {
-        document.execCommand("undo");
-        return true;
-      }
-      const entry = this.undoManager.undo();
+      if (!this.undoManager.canUndo) return false;
+      const entry = this.undoManager.popUndo();
       if (!entry) return false;
-      if (entry.kind === "native") {
-        document.execCommand("undo");
-      }
+      const current = { text: this.getValue(), cursor: this.getCollapsedCursor() };
+      this.undoManager.pushRedo(current);
+      this.setValue(entry.text, false);
+      this.setVisibleOffset(entry.cursor);
+      this.inBurst = false;
       return true;
     } finally {
       this.isModifyingDom = false;
       this.isUndoRedoing = false;
     }
   }
-  // Ctrl+Shift+Z に対応する Redo 操作（view.ts から呼ぶ）
+  // Ctrl+Shift+Z に対応する Redo 操作（view.ts から呼ぶ）。
   // 展開中スパンがあれば先に収束してから Redo を実行する。
   // 戻り値: DOM が変化した場合 true
   redo() {
@@ -909,15 +888,14 @@ var EditorElement = class {
     this.isModifyingDom = true;
     try {
       this.collapseEditingIfExpanded();
-      if (!this.undoManager.canRedo) {
-        document.execCommand("redo");
-        return true;
-      }
-      const entry = this.undoManager.redo();
+      if (!this.undoManager.canRedo) return false;
+      const entry = this.undoManager.popRedo();
       if (!entry) return false;
-      if (entry.kind === "native") {
-        document.execCommand("redo");
-      }
+      const current = { text: this.getValue(), cursor: this.getCollapsedCursor() };
+      this.undoManager.pushUndo(current);
+      this.setValue(entry.text, false);
+      this.setVisibleOffset(entry.cursor);
+      this.inBurst = false;
       return true;
     } finally {
       this.isModifyingDom = false;
@@ -964,6 +942,11 @@ var EditorElement = class {
       }
     }
     return "";
+  }
+  // 現在の文書状態（テキスト + 収束後カーソル相当）を Undo スタックに積む。
+  // 操作の直前に呼ぶことで、Undo 時にその状態へ戻れるようにする。
+  pushSnapshot() {
+    this.undoManager.push({ text: this.getValue(), cursor: this.getCollapsedCursor() });
   }
   createRubyEl(base, rt, explicit) {
     const rubyEl = document.createElement("ruby");
@@ -1025,9 +1008,11 @@ var VerticalWritingView = class extends import_obsidian.ItemView {
       editorEl.handlePaste(e);
       syncCoordinator.onEditorChange();
     });
+    this.registerDomEvent(editorEl.el, "beforeinput", () => {
+      editorEl.onBeforeInput();
+    });
     this.registerDomEvent(editorEl.el, "input", (e) => {
       syncCoordinator.onEditorChange();
-      editorEl.pushNativeMarker();
       if (!e.isComposing) {
         editorEl.handleRubyCompletion();
         editorEl.handleTcyCompletion();
@@ -1042,11 +1027,27 @@ var VerticalWritingView = class extends import_obsidian.ItemView {
     this.registerDomEvent(document, "selectionchange", () => {
       editorEl.handleSelectionChange();
     });
+    this.registerDomEvent(editorEl.el, "mousedown", () => {
+      editorEl.resetBurst();
+    });
     this.registerDomEvent(editorEl.el, "keydown", (e) => {
       if ((e.metaKey || e.ctrlKey) && !e.altKey && e.key === "z") {
         e.preventDefault();
         const changed = e.shiftKey ? editorEl.redo() : editorEl.undo();
         if (changed) syncCoordinator.onEditorChange();
+        return;
+      }
+      if ([
+        "ArrowLeft",
+        "ArrowRight",
+        "ArrowUp",
+        "ArrowDown",
+        "Home",
+        "End",
+        "PageUp",
+        "PageDown"
+      ].includes(e.key)) {
+        editorEl.resetBurst();
       }
     });
     this.registerEvent(

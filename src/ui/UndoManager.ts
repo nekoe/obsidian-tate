@@ -1,70 +1,41 @@
-export type UndoEntry =
-    | { readonly kind: 'native' }
-    | { readonly kind: 'annotation'; undo(): void; redo(): void; };
+export type Snapshot = { readonly text: string; readonly cursor: number };
 
 export class UndoManager {
-    private undoStack: UndoEntry[] = [];
-    private redoStack: UndoEntry[] = [];
+    private undoStack: Snapshot[] = [];
+    private redoStack: Snapshot[] = [];
 
-    /** 記法操作エントリを積む（Redo スタックはクリア） */
-    pushAnnotation(undo: () => void, redo: () => void): void {
-        this.undoStack.push({ kind: 'annotation', undo, redo });
+    /** スナップショットを Undo スタックに積む（Redo スタックはクリア） */
+    push(snap: Snapshot): void {
+        this.undoStack.push(snap);
         this.redoStack = [];
     }
 
-    /**
-     * ネイティブ Undo マーカーを積む。
-     * 直前がすでに native なら重複スキップ。Redo スタックはクリア。
-     */
-    pushNativeMarker(): void {
-        const top = this.undoStack[this.undoStack.length - 1];
-        if (top?.kind === 'native') return;
-        this.undoStack.push({ kind: 'native' });
-        this.redoStack = [];
+    /** Undo スタックからスナップショットを取り出す */
+    popUndo(): Snapshot | null {
+        return this.undoStack.pop() ?? null;
     }
 
-    /**
-     * Undo 操作。エントリを 1 つ取り出して返す。
-     * - annotation: entry.undo() を実行して Redo スタックへ移す
-     * - native: Redo スタックにマーカーを積む（execCommand 委譲は呼び出し元が行う）
-     * - 空: null を返す
-     */
-    undo(): UndoEntry | null {
-        const entry = this.undoStack.pop() ?? null;
-        if (!entry) return null;
-        if (entry.kind === 'annotation') {
-            entry.undo();
-            this.redoStack.push(entry);
-        } else {
-            this.redoStack.push({ kind: 'native' });
-        }
-        return entry;
+    /** Redo スタックからスナップショットを取り出す */
+    popRedo(): Snapshot | null {
+        return this.redoStack.pop() ?? null;
     }
 
-    /**
-     * Redo 操作。エントリを 1 つ取り出して返す。
-     * - annotation: entry.redo() を実行して Undo スタックへ移す
-     * - native: Undo スタックにマーカーを積む（execCommand 委譲は呼び出し元が行う）
-     * - 空: null を返す
-     */
-    redo(): UndoEntry | null {
-        const entry = this.redoStack.pop() ?? null;
-        if (!entry) return null;
-        if (entry.kind === 'annotation') {
-            entry.redo();
-            this.undoStack.push(entry);
-        } else {
-            this.undoStack.push({ kind: 'native' });
-        }
-        return entry;
+    /** Redo スタックにスナップショットを積む（Undo 後に現在状態を保存） */
+    pushRedo(snap: Snapshot): void {
+        this.redoStack.push(snap);
     }
+
+    /** Undo スタックにスナップショットを積む（Redo 後に現在状態を保存） */
+    pushUndo(snap: Snapshot): void {
+        this.undoStack.push(snap);
+    }
+
+    get canUndo(): boolean { return this.undoStack.length > 0; }
+    get canRedo(): boolean { return this.redoStack.length > 0; }
 
     /** スタックをクリア（ファイル切り替え時など） */
     clear(): void {
         this.undoStack = [];
         this.redoStack = [];
     }
-
-    get canUndo(): boolean { return this.undoStack.length > 0; }
-    get canRedo(): boolean { return this.redoStack.length > 0; }
 }
