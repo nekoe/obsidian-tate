@@ -180,6 +180,15 @@ export function viewToSrc(segs: readonly Segment[], viewOffset: number): number;
 
 パーサは `parseInlineToHtml()` と同じ優先順位（明示ルビ → tcy → bouten → 省略ルビ）で処理する。
 
+**差分更新（Incremental Update）— 将来の最適化（Phase 4）**
+
+現状 `buildSegmentMap()` は全文スキャン（O(文書長)）。長編文書でコミットポイントが頻繁に来ると重くなる可能性がある。
+
+最適化案: 変更があった段落（行）だけを再パースし、それ以降のセグメントの `srcStart` / `viewStart` に差分（`offsetDelta`）を加算してずらす。
+- 変更行を特定 → その行のセグメントを再計算 → 後続セグメントを `±delta` でシフト
+- 全文パース不要なので長編でも高速
+- 未変更セグメントの再利用により O(変更行のソース長 + 後続セグメント数) に削減できる
+
 ### ペーストのプレーンテキスト化
 `contenteditable` div はデフォルトでクリップボードの `text/html` を優先してペーストするため、インライン展開スパンのスタイルや外部 HTML のスタイルが貼り付けられてしまう。`paste` イベントで `e.preventDefault()` した後、`e.clipboardData.getData('text/plain')` でプレーンテキストのみ取得し、`document.execCommand('insertText', false, text)` で挿入する。`execCommand('insertText')` は deprecated だが Electron では動作し、カーソル位置への挿入・選択範囲の置換を一括処理できる。ペースト後は `view.ts` の `paste` ハンドラが `commitToCm6()` を即時呼ぶ。
 
