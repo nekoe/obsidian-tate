@@ -1213,6 +1213,7 @@ var VerticalWritingView = class extends import_obsidian.ItemView {
     if (newContent === prevContent) return;
     const srcOffset = this.deriveUndoRedoCursor(prevContent, newContent);
     editorEl.applyFromCm6(newContent, srcOffset);
+    this.lastCommittedContent = newContent;
   }
   /** undo/redo 前後のコンテンツ差分から適切なカーソル位置を算出する。
    *  prev→next の変化領域の末尾（next 上のオフセット）を返す。

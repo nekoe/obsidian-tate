@@ -252,6 +252,10 @@ export class VerticalWritingView extends ItemView {
         // 差分からカーソル位置を算出（復元された/削除されたテキストの末尾）
         const srcOffset = this.deriveUndoRedoCursor(prevContent, newContent);
         editorEl.applyFromCm6(newContent, srcOffset);
+        // CM6 の新状態に合わせて確定済み内容を更新する。
+        // これをしないと CM6 autosave の modify イベントで onExternalModify() が誤検知し、
+        // undo 直後の入力中に tate view の DOM がリセットされてカーソルジャンプが発生する。
+        this.lastCommittedContent = newContent;
     }
 
     /** undo/redo 前後のコンテンツ差分から適切なカーソル位置を算出する。
