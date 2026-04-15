@@ -996,6 +996,9 @@ var VerticalWritingView = class extends import_obsidian.ItemView {
     this.plugin = plugin;
     this.editorEl = null;
     this.syncCoordinator = null;
+    // CM6 に最後にコミットした確定済みテキスト。
+    // onExternalModify の比較に使い、IME 未確定テキストを含む getValue() との混同を防ぐ。
+    this.lastCommittedContent = "";
   }
   getViewType() {
     return TATE_VIEW_TYPE;
@@ -1015,8 +1018,12 @@ var VerticalWritingView = class extends import_obsidian.ItemView {
     editorEl.applySettings(this.plugin.settings);
     const syncCoordinator = new SyncCoordinator(
       this.app.vault,
-      () => editorEl.getValue(),
-      (content, preserveCursor) => editorEl.setValue(content, preserveCursor)
+      // 比較には確定済みテキストを使う（IME 未確定テキストを含む getValue() ではない）
+      () => this.lastCommittedContent,
+      (content, preserveCursor) => {
+        this.lastCommittedContent = content;
+        editorEl.setValue(content, preserveCursor);
+      }
     );
     this.syncCoordinator = syncCoordinator;
     this.registerDomEvent(editorEl.el, "paste", (e) => {
@@ -1168,6 +1175,7 @@ var VerticalWritingView = class extends import_obsidian.ItemView {
     const lastLine = cm6.lastLine();
     const lastCh = cm6.getLine(lastLine).length;
     cm6.replaceRange(content, { line: 0, ch: 0 }, { line: lastLine, ch: lastCh });
+    this.lastCommittedContent = content;
     if (!el.isInlineExpanded()) {
       const segs = buildSegmentMap(content);
       const srcOffset = viewToSrc(segs, el.getViewCursorOffset());

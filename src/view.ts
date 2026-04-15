@@ -10,6 +10,9 @@ export const TATE_VIEW_TYPE = 'tate-vertical-writing';
 export class VerticalWritingView extends ItemView {
     private editorEl: EditorElement | null = null;
     private syncCoordinator: SyncCoordinator | null = null;
+    // CM6 に最後にコミットした確定済みテキスト。
+    // onExternalModify の比較に使い、IME 未確定テキストを含む getValue() との混同を防ぐ。
+    private lastCommittedContent = '';
 
     constructor(leaf: WorkspaceLeaf, private readonly plugin: TatePlugin) {
         super(leaf);
@@ -31,8 +34,13 @@ export class VerticalWritingView extends ItemView {
 
         const syncCoordinator = new SyncCoordinator(
             this.app.vault,
-            () => editorEl.getValue(),
-            (content, preserveCursor) => editorEl.setValue(content, preserveCursor),
+            // 比較には確定済みテキストを使う（IME 未確定テキストを含む getValue() ではない）
+            () => this.lastCommittedContent,
+            (content, preserveCursor) => {
+                // ロード・外部変更適用時は確定済み内容も更新する
+                this.lastCommittedContent = content;
+                editorEl.setValue(content, preserveCursor);
+            },
         );
         this.syncCoordinator = syncCoordinator;
 
@@ -194,6 +202,8 @@ export class VerticalWritingView extends ItemView {
         const lastLine = cm6.lastLine();
         const lastCh = cm6.getLine(lastLine).length;
         cm6.replaceRange(content, { line: 0, ch: 0 }, { line: lastLine, ch: lastCh });
+        // コミット完了 → 確定済み内容を更新（onExternalModify の誤検知防止）
+        this.lastCommittedContent = content;
         // tate-editing 展開中はカーソル同期をスキップ（カーソルが生テキスト内にあり
         // viewToSrc の入力空間と一致しないため）。収束後の commitToCm6 で正しく同期される。
         if (!el.isInlineExpanded()) {
