@@ -26,10 +26,13 @@ src/
 ├── view.ts                    # VerticalWritingView（ItemView）
 ├── settings.ts                # TatePluginSettings型 + TateSettingTab
 ├── sync/
-│   ├── SyncCoordinator.ts     # 双方向同期制御
-│   └── DebounceQueue.ts       # デバウンス（flushAndExecute付き）
+│   ├── SyncCoordinator.ts     # 双方向同期制御（外部変更検出・ファイル読み込み）
+│   └── DebounceQueue.ts       # デバウンス（現在未使用）
 └── ui/
-    └── EditorElement.ts       # contenteditable div DOM管理
+    ├── EditorElement.ts       # contenteditable div DOM管理
+    ├── SegmentMap.ts          # ソースオフセット ↔ 表示オフセット双方向マッピング
+    ├── SegmentMap.test.ts     # SegmentMap ユニットテスト（vitest）
+    └── UndoManager.ts         # 独自 Undo/Redo スタック（現在未使用）
 styles.css                     # 縦書きCSS（writing-mode: vertical-rl）
 manifest.json                  # プラグインメタデータ（id: obsidian-tate）
 ```
@@ -39,13 +42,14 @@ manifest.json                  # プラグインメタデータ（id: obsidian-t
 ### contenteditable divによる縦書き実現
 `writing-mode: vertical-rl` をcontenteditable divに適用する。textareaへの`writing-mode`適用はChrome 119以降が必要だが、ObsidianのElectronバージョンによっては未対応のため、より広く動作するcontenteditable divを採用する。テキストの取得には `getValue()`（カスタム `serializeNode()` DOMウォーカー）、設定には `setValue()`（`innerHTML = parseToHtml(content)`）を使用する。
 
-### 双方向同期の競合防止
+### 双方向同期の競合防止（Proxy Editor モデル）
+- ファイルへの書き込みは CM6（Obsidian の標準 Markdown エディタ）の autosave に一本化。`SyncCoordinator` は読み取り専用（`vault.modify` / `DebounceQueue` を使用しない）
 - `el.innerHTML` への直接代入はinputイベントを発生させないため、`isApplyingExternalChange` フラグは不要
 - `SyncCoordinator.loadFile()` と `onExternalModify()` はどちらも非同期（vault.read）なのでシーケンス番号（loadSeq, externalModifySeq）を使って古い結果を捨てる
-- 自分の `vault.modify` が発火した `modify` イベントは内容比較（`externalContent === getEditorValue()`）でスキップ
+- CM6 autosave が発火した `modify` イベントは内容比較（`externalContent === getEditorValue()`）でスキップ
 
 ### ビューを閉じるときのデータロスト防止
-`DebounceQueue.flushAndExecute()` はタイマーをキャンセルしつつペンディング中のコールバックを即時実行する。`SyncCoordinator.dispose()` から呼ぶことで、500msデバウンス待機中でもビューを閉じる際に確実に保存される。
+`onClose()` の先頭で `commitToCm6()` を呼ぶことで、未コミットのバーストを確実に CM6 に書き込む。CM6 がその後 autosave でファイルに保存する。
 
 ### DOMイベントの自動解除
 input / compositionend / paste イベントはすべて `this.registerDomEvent(el, ...)` で登録する（`addEventListener` の直接呼び出しは禁止）。Obsidianの `Component.registerDomEvent` を使うと `onClose` 時に自動解除される。
@@ -75,22 +79,20 @@ input / compositionend / paste イベントはすべて `this.registerDomEvent(e
 - `<span data-bouten="sesame">` → `X［＃「X」に傍点］`
 - `<span class="tate-editing">` → 子ノードのテキストをそのまま返す（インライン展開中の生テキスト）
 
+**重要**: `getValue()` は tate-editing スパン展開中・収束後いずれの状態でも同じ Aozora 生テキストを返す。tate-editing スパンがそのままシリアライズされるため（例: `｜漢字《かんじ》`）、スナップショットとして保存した `text` は収束後の DOM でも `setValue()` で正しく復元できる。
+
 **ルビ区切り文字 `｜` の表示制御**: シリアライズは全角 `｜` で統一し、収束時は `<ruby>` 要素内なので不可視。インライン展開時の生テキストとしてのみ可視になる。
 
-**ライブ変換**: `》`/`］` 入力時に `handleRubyCompletion()` / `handleTcyCompletion()` / `handleBoutenCompletion()` が記法を要素に変換する。IME対応のため `input`（`isComposing=false`）と `compositionend` の両方で呼ぶ。テキスト範囲の選択 + `execCommand('insertHTML')` による置換は `execInsertHtml()` に共通化（Undo スタックへの記録も兼ねる）。`handleTcyCompletion` と `handleBoutenCompletion` は `handleAnnotationCompletion()` に共通化。展開中（`expandedEl` が非 null）または DOM 操作中（`isModifyingDom` が true）はライブ変換を行わない（`execCommand` の再入防止）。
+**ライブ変換**: `》`/`］` 入力時に `handleRubyCompletion()` / `handleTcyCompletion()` / `handleBoutenCompletion()` が記法を要素に変換する。IME対応のため `input`（`isComposing=false`）と `compositionend` の両方で呼ぶ。全操作は `insertAnnotationElement()` による直接 DOM 操作で統一（`execCommand` 不使用）。`handleTcyCompletion` と `handleBoutenCompletion` は `handleAnnotationCompletion()` に共通化。これらのメソッドは `boolean`（変換が発生したか）を返し、`view.ts` が `true` のとき `commitToCm6()` を呼ぶ。展開中（`expandedEl` が非 null）または DOM 操作中（`isModifyingDom` が true）はライブ変換を行わない（再入防止）。
 
 ### インライン展開（Obsidian Markdown エディタ風）
 `document` の `selectionchange` イベントを `registerDomEvent(document, 'selectionchange', ...)` で登録し、カーソル位置に応じて ruby/tcy/bouten 要素をその場で展開・収束する。
 
-- **展開**: カーソルが `<ruby>`・`<span data-tcy="explicit">`・`<span data-bouten>` に入ると `expandForEditing()` が要素を `<span class="tate-editing">` に置換し、Aozora 生テキストを表示する。このとき `expandedElOriginalText` に展開前のテキストを保存する（変化検出用）
-- **収束**: カーソルが外れると `collapseEditing()` が `parseInlineToHtml()` で再パースして元の要素に戻す。編集内容は反映される（`parseToHtml()` を使うと段落 `<div>` の中に `<div>` がネストするため禁止）
-- **収束と Undo スタック**: `collapseEditing()` は内容が変化した場合（`expandedElOriginalText` との比較）のみ `execCommand('insertHTML')` で収束する。変化なし（カーソルが通過しただけ）の場合は生 DOM 操作にして Undo スタックを汚染しない。`execCommand` は `input` イベントを発火するため、`handleRubyCompletion()` / `handleAnnotationCompletion()` の冒頭に `if (this.isModifyingDom) return` ガードを置いて再入をブロックすること
-- **`collapseEditing()` のブロック境界対策**: `hasChanged` パスで、スパンが行頭（`previousSibling === null`）または行末（`nextSibling === null` もしくは次が `<br>`）にある場合は `execCommand` が `<ruby>` 等のインライン要素をストリップして平文にするバグがあるため、直接 DOM 操作で収束する（Undo スタックへの記録はされない）。`isAtBlockBoundary` 判定で分岐する
-- **`collapseEditing()` hasChanged パスの execCommand フォールバック**: `execCommand('insertHTML')` の後に `spanRef.isConnected` を確認し、true（= execCommand が失敗してスパンが DOM に残っている）の場合は生 DOM 操作で強制収束する。フォーカス喪失などで execCommand が失敗しても確実にスパンが除去される
-- **`collapseEditing()` の前方テキスト取り込み**: `getExtraCharsFromAnnotation()` が「」内容とスパン内前方テキストを比較し、「」内容が長い場合（例: content=`130`, leading=`30` → 差分=`1`文字）は直前テキストノードの末尾から一致する文字を取り込む。選択範囲を「直前テキスト末尾 N 文字 + 編集スパン全体」に拡張して `execCommand` で一括置換することで Undo も正しく動作する（例: テキスト `A1` + tcy `30` → 「30」→「130」編集 → テキスト `A` + tcy `130`）。`splitByAnnotation()` は厳密モードのみで動作し、前方テキスト取り込み後は前方テキストとアノテーション内容が必ず一致するため lenient モードは不要
-- **`collapseEditing()` の detached ノード対策**: `collapseEditing()` の先頭で `expandedEl.isConnected` を確認し、false の場合は `expandedEl` / `expandedElOriginalText` をクリアして即リターンする。Undo で編集スパンが DOM から取り除かれたとき、detached ノードに `parentNode` / `selectNode` を呼ぶと例外が発生して `expandedEl = null` が実行されなくなるため（以降のコマンドが `if (this.expandedEl) return false` で常にブロックされる）
-- **孤立スパン（orphan span）の検出と再追跡**: `handleSelectionChange()` の `!isModifyingDom` ブロック先頭で `expandedEl` が null または detached のとき `this.el.querySelector('span.tate-editing')` を実行して DOM の実態と同期する。Undo が `collapseEditing()` の `execCommand` を取り消すと editing スパンが DOM に復活するが `expandedEl = null` のまま（孤立スパン）になるため。再追跡後 `expandedElOriginalText = null` にして `hasChanged = true` とすることで確実に収束させる
-- **`collapseEditing()` hasChanged パスのフォーカス保証**: `execCommand('insertHTML')` の前に `this.el.focus()` を呼ぶ。editor 外クリック（サイドバーなど）で editor がフォーカスを失っているとき `execCommand` が失敗してスパンが収束されなくなるため
+- **展開**: カーソルが `<ruby>`・`<span data-tcy="explicit">`・`<span data-bouten>` に入ると `expandForEditing()` が要素を `<span class="tate-editing">` に置換し、Aozora 生テキストを表示する。このとき `expandedElOriginalText` に展開前のテキストを保存する（変化検出用）。`inBurst = false` もリセットする
+- **収束**: カーソルが外れると `collapseEditing()` が `parseInlineToHtml()` で再パースして元の要素に戻す。編集内容は反映される（`parseToHtml()` を使うと段落 `<div>` の中に `<div>` がネストするため禁止）。収束は常に直接 DOM 操作で統一（`execCommand` 不使用）。`collapseEditing()` は `boolean`（内容変化の有無）を返す。`view.ts` の `selectionchange` ハンドラが `true` のとき `commitToCm6()` を呼ぶ
+- **`collapseEditing()` の前方テキスト取り込み**: `getExtraCharsFromAnnotation()` が「」内容とスパン内前方テキストを比較し、「」内容が長い場合（例: content=`130`, leading=`30` → 差分=`1`文字）は直前テキストノードの末尾から一致する文字を取り込む（例: テキスト `A1` + tcy `30` → 「30」→「130」編集 → テキスト `A` + tcy `130`）
+- **`collapseEditing()` の detached ノード対策**: `collapseEditing()` の先頭で `expandedEl.isConnected` を確認し、false の場合は `expandedEl` / `expandedElOriginalText` をクリアして即リターンする。detached ノードに `parentNode` / `selectNode` を呼ぶと例外が発生するため
+- **孤立スパン（orphan span）の検出と再追跡**: `handleSelectionChange()` の `!isModifyingDom` ブロック先頭で `expandedEl` が null または detached のとき `this.el.querySelector('span.tate-editing')` を実行して DOM の実態と同期する。予期せぬ経路で編集スパンが DOM に残った場合のロバストネス対策。再追跡後 `expandedElOriginalText = null` にして `hasChanged = true` とすることで確実に収束させる
 - **カーソル位置**: `rawOffsetForExpand()` が ruby（base/rt それぞれ）・tcy・bouten のカーソル位置を raw テキスト上のオフセットに変換する（tcy/bouten はコンテンツが先頭にあるため `return offset` のみ）
 - **再入防止**: `isModifyingDom` フラグで DOM 操作中の `selectionchange` 再入をブロックする
 - **`setValue()` との競合防止**: `this.expandedEl = null` / `this.expandedElOriginalText = null` / `this.savedRange = null` は `getValue() === content` の早期リターン**より前**に実行すること（detach 済みノード参照を防ぐ）
@@ -101,60 +103,111 @@ input / compositionend / paste イベントはすべて `this.registerDomEvent(e
 `add-ruby` / `add-tcy` / `add-bouten` コマンドで選択テキストに記法を適用できる。
 
 - **選択範囲キャッシュ**: `handleSelectionChange()` の先頭（`isModifyingDom` チェックより前）で、エディタ内に非 collapsed 選択があるとき `savedRange` フィールドに保存する。コマンドパレットを開くとフォーカスが離れるが、エディタ外の selectionchange ではキャッシュを**更新しない**（保持する）ことで、コマンド実行時に選択を復元できる
-- **ルビ**: `wrapSelectionWithRuby()` が `execInsertHtml()` で `<span class="tate-editing" data-ruby-new="1">｜text《》</span>` を挿入する。`data-ruby-new` 属性で挿入したスパンを `querySelector` で特定し（挿入後すぐ属性を除去）、`expandedEl` と `expandedElOriginalText` をセットしてインライン展開状態にする。ユーザーがルビ文字を入力後カーソルを外すと `collapseEditing()` が `<ruby>` 要素に収束する（行中は `execCommand`、行頭・行末は直接 DOM 操作）
-- **縦中横・傍点**: `wrapSelectionWith()` に共通化。`execInsertHtml()` で選択テキストを要素に置換する。挿入後は `data-wrap-new="1"` 一時属性で要素を特定し、カーソルを要素の**直後**に置く。カーソルが要素内にあると `selectionchange → expandForEditing()` が呼ばれ、Undo 時に DOM と Undo スタックが不整合になって "tcy 30 と普通の 30 が両方残る" バグが発生するため
-- **ライブ変換後のカーソル移動**: `handleRubyCompletion()` / `handleAnnotationCompletion()` でも同様に、`execInsertHtml()` 後に `data-new-el="1"` 一時属性で挿入要素を特定し、カーソルを要素の**直後**に置く。これがないと `execCommand` 後のカーソルが要素内に入り、直後の `selectionchange` で `expandForEditing()` が即座に発火して「`《》` が消えてルビ文字が平文のまま残る」ように見えてしまう
+- **ルビ**: `wrapSelectionWithRuby()` が直接 DOM 操作で `<span class="tate-editing">｜text《》</span>` を挿入する。`expandedEl` と `expandedElOriginalText` を直接セットしてインライン展開状態にする。ユーザーがルビ文字を入力後カーソルを外すと `collapseEditing()` が `<ruby>` 要素に収束し、`view.ts` の selectionchange ハンドラが `commitToCm6()` を呼ぶ
+- **縦中横・傍点**: `wrapSelectionWith()` に共通化。`insertAnnotationElement()` で直接 DOM 操作により選択テキストを要素に置換する。`setCursorAfter()` でカーソルを要素の**直後**に置く。カーソルが要素内にあると `selectionchange → expandForEditing()` が呼ばれ意図しない展開が発生するため
+- **ライブ変換後のカーソル移動**: `handleRubyCompletion()` / `handleAnnotationCompletion()` でも同様に、`insertAnnotationElement()` + `setCursorAfter()` でカーソルを要素の**直後**に置く。これがないと直後の `selectionchange` で `expandForEditing()` が即発火して記法が展開状態のまま残るように見えてしまう
 - **エラー通知**: 選択なし・ビュー未開は `new Notice(...)` で通知。`editorEl` が null のときは `applyAnnotation()` が早期リターンする（誤メッセージを出さない）
-- **同期**: ラップ成功後に `view.ts` の `applyAnnotation()` が `syncCoordinator.onEditorChange()` を呼ぶ（`EditorElement` は `SyncCoordinator` を知らないため）
+- **CM6 同期**: ラップ成功後に `view.ts` の `applyAnnotation()` が `commitToCm6()` を呼ぶ（tcy/bouten のみ。ルビは collapseEditing 時に selectionchange 経由でコミット）
 
 ### ファイル切り替えの検知
 `file-open` ワークスペースイベントを使う（`active-leaf-change` より正確）。縦書きビュー自身がアクティブになっても `file-open` は発火しないため、表示中のファイルが意図せずリセットされない。
 
-### Undo/Redo 対応
-記法適用操作（ライブ変換・コマンド）はすべて `document.execCommand('insertHTML')` 経由でブラウザの Undo スタックに記録する。これにより通常入力（キーボード）・ペーストと同一スタックで自然に共存し、ブラウザが Redo（Cmd+Shift+Z）も自動提供する。
+### Undo/Redo 対応（Proxy Editor モデル）
 
-- **`execInsertHtml(textNode, start, end, html)`**: テキストノードの `[start, end)` を選択してから `execCommand('insertHTML')` で置換するヘルパー。ライブ変換と挿入の共通処理。ただし div 内テキストノードの行頭（`start=0`）または行末（`end=textNode.length`）の場合、Chromium が `insertHTML` をブロック境界として扱い要素を剥ぎ取るバグがあるため、`execInsertHtmlAtBoundary()` で直接 DOM 操作に切り替える（Undo スタックへの記録なし）
-- **Undo の粒度**:
-  - コマンド（tcy/bouten）行中: 1回のUndoで選択テキストに戻る
-  - コマンド（tcy/bouten）行頭・行末: Undo 不可（直接 DOM 操作のため）
-  - コマンド（ルビ）行中: Undoでルビ文字入力を1文字ずつ戻し、最後にコマンド実行前のテキストに戻る
-  - コマンド（ルビ）行頭・行末: Undo 不可（挿入・収束ともに直接 DOM 操作のため）
-  - ライブ変換（`》`/`］`）行中: 1回のUndoで変換前のAozora生テキストに戻る
-  - ライブ変換（`》`/`］`）行頭・行末: Undo 不可（直接 DOM 操作のため）
-- **生DOM操作との使い分け**: `setValue()`（`innerHTML` 直接代入）・`expandForEditing()`（`replaceChild`）・行頭行末の `execInsertHtmlAtBoundary()` は Undo スタックに載せない
-- **`execCommand` は deprecated**: `insertHTML` は `insertText`（ペーストで使用中）と同様に deprecated だが、Electron では安定動作する
+Undo/Redo は CM6（Obsidian 標準エディタ）に完全委譲する。縦書きビューは独自の Undo スタックを持たない。
 
-### Undo/Redo の完全対応に向けた検討（未実装）
+**コミットポイントによる CM6 への書き込み**
 
-行頭・行末の記法操作が Undo 不可な根本原因は、Chromium の `insertHTML` バグ回避のために直接 DOM 操作に切り替えていること。完全対応の選択肢：
+縦書きビューへの入力は `commitToCm6()`（`view.ts`）で CM6 に差分 `replaceRange` する。前後の共通プレフィックス・サフィックスを除いた変化部分だけを置換するため、CM6 が正確な編集位置を記録し Undo 後のカーソルが編集箇所に来る。CM6 の履歴エントリとなるため、その後 `editor.undo()` で確実に元に戻せる。
 
-**A. 独自 Undo/Redo スタック（推奨、実装コスト大）**
+**`lastCommittedContent`（IME 競合防止）**
 
-記法操作のエントリを自前のスタックで管理し、Ctrl+Z を横取りして適用する。
+`VerticalWritingView` が保持する「最後に CM6 にコミットした確定済みテキスト」。IME 変換中は DOM に未確定テキストが含まれるため、`getEditorValue()` をそのまま `onExternalModify()` の比較に使うと CM6 autosave の `modify` イベントで誤ってビューがリセットされる。`lastCommittedContent` は IME 変換中に更新されないため、autosave 由来の `modify` を正しくスキップできる。更新タイミング: `commitToCm6()` 完了時・ロード時・外部変更適用時。
+
+コミットポイント:
+
+| 操作 | コミットタイミング |
+|------|-----------------|
+| ペースト | `paste` イベント後に即時 |
+| IME 確定 | `compositionend` 後に即時 |
+| ライブ変換 | `input` イベントで `boolean` 返却が `true` のとき |
+| アノテーション収束 | `selectionchange` で `collapseEditing()` が `true` を返したとき |
+| ナビゲーションキー | `keydown` で矢印・Home/End/PgUp/PgDn 検出時 |
+| mousedown | クリック時（バースト終了） |
+| ビューを閉じる | `onClose()` 先頭 |
+| tcy/bouten コマンド | `applyAnnotation()` 内 |
+
+**`inBurst` フラグの役割（変更後）**
+
+`inBurst = true` は「CM6 に未コミットの変更がある」状態を表す（旧: 独自 Undo スタック向けのバーストグループ制御）。`onBeforeInput()` で `inBurst = true` にし、`commitToCm6()` 内の `resetBurst()` で `false` に戻す。
+
+**Undo/Redo 実行フロー（`doUndoRedo()`）**
 
 ```
-{ undo: () => { /* DOM を操作前に戻す */ }, redo: () => { /* 再適用 */ } }
+commitToCm6()                    // 未コミットのバーストを先に CM6 に書き込む
+prevContent = lastCommittedContent
+cm6.undo() / cm6.redo()          // CM6 側で Undo/Redo を実行
+newContent = cm6.getValue()
+if newContent === prevContent: return  // スタック空などで変化なし → カーソルそのまま
+srcOffset = deriveUndoRedoCursor(prevContent, newContent)
+editorEl.applyFromCm6(newContent, srcOffset)
 ```
 
-独自スタックを採用した場合、`execCommand` を記法操作に使う理由がなくなるため、**行中・行頭・行末を問わず全ての記法操作を直接 DOM 操作に統一できる**。その結果：
-- `execInsertHtml` / `execInsertHtmlAtBoundary` の境界分岐が不要になる
-- `collapseEditing()` の `isAtBlockBoundary` 分岐が不要になる
-- `data-new-el` / `data-wrap-new` / `data-ruby-new` 経由の `querySelector` が不要になる（DOM 操作は挿入要素の参照を直接返せる）
+**`cm6.getCursor()` を使わない理由**
 
-最大の課題は**通常入力（キー入力・ペースト）とのスタック整合**：
-- 通常入力はブラウザのネイティブ Undo スタックに積まれるため、2スタックを正しい順序でインターリーブさせる必要がある
-- 通常入力発生時に「ネイティブ Undo 境界」マーカーを独自スタックに記録し、Ctrl+Z 時にマーカーなら `document.execCommand('undo')` へ委譲、そうでなければ独自 Undo を実行する方式が一般的
+`cm6.undo()` 後の `cm6.getCursor()` は「undo されたトランザクションの直前に `setCursor()` でセットした位置」を返す。これは前回の `commitToCm6()` がセットした位置であり、今回の編集箇所とは無関係なためドキュメント端に飛ぶことがある。
 
-**B. Chromium バグを回避して execCommand を維持（リスクあり）**
+**`deriveUndoRedoCursor(prev, next)`**
 
-`execCommand('insertText', false, '\u200B')` でゼロ幅スペースを先に挿入して挿入点をブロック境界からずらし、本来の `execCommand('insertHTML')` を実行後にゼロ幅スペースを `execCommand('delete')` で除去する。同一 JS 実行コンテキスト内の連続する `execCommand` が1エントリとしてマージされる挙動を利用するが、仕様外の挙動のため壊れるリスクあり。
+prevContent → newContent の差分（共通プレフィックス・サフィックスを除く）から `next` 上の変化領域末尾を返す:
+- undo（テキスト復元）: 復元テキストの末尾 → 例:「うえお」削除の undo → 「お」の直後
+- redo（削除の再実行）: 削除点（変化領域の先頭 = fromStart = fromEndNext）
+- 変化なし（スタック空）: 呼び出し元で early return するため到達しない
 
-**C. 現状維持（Undo 不可を許容）**
+**`applyFromCm6()` によるカーソル復元**
 
-行頭・行末への記法適用は比較的まれな操作であり、Undo できなくても手動削除は可能。現時点はこの状態。
+`EditorElement.applyFromCm6(content, srcOffset)`:
+1. `expandedEl` / `expandedElOriginalText` / `savedRange` をクリア（stale 参照除去）
+2. 内容変化がある場合 `el.innerHTML = parseToHtml(content)` で DOM を更新
+3. `buildSegmentMap(content)` + `srcToView(segs, srcOffset)` でソースオフセットを表示オフセットに変換
+4. `setVisibleOffset(viewOffset)` でカーソルを設定
+
+### SegmentMap（ソース ↔ 表示オフセット変換）
+
+`src/ui/SegmentMap.ts` が Aozora 記法テキストの双方向オフセットマッピングを担う。
+
+```typescript
+// セグメント種別: plain / ruby-explicit / ruby-implicit / tcy / bouten / newline
+export function buildSegmentMap(source: string): Segment[];
+export function srcToView(segs: readonly Segment[], srcOffset: number): number;
+export function viewToSrc(segs: readonly Segment[], viewOffset: number): number;
+```
+
+**srcLen ルール（ソース上の文字数）**:
+- `ruby-explicit` `｜base《rt》`: baseLen + rtLen + 3（`｜`, `《`, `》`）
+- `ruby-implicit` `base《rt》`: baseLen + rtLen + 2（`《`, `》`）
+- `tcy` `content［＃「content」は縦中横］`: contentLen × 2 + 9
+- `bouten` `content［＃「content」に傍点］`: contentLen × 2 + 8
+- `newline` `\n`: 1
+
+**srcToView ルール（ソースオフセット → 表示オフセット）**:
+- `ruby-explicit`: local=0（`｜`）→ viewStart、1..baseLen（base）→ viewStart + local - 1、≥ baseLen + 1（`《rt》`）→ viewStart + baseLen
+- `ruby-implicit`: local 0..baseLen（base）→ viewStart + local、≥ baseLen（`《rt》`）→ viewStart + baseLen
+- `tcy` / `bouten`: local 0..contentLen（content）→ viewStart + local、≥ contentLen（注記部分）→ viewStart + contentLen
+
+パーサは `parseInlineToHtml()` と同じ優先順位（明示ルビ → tcy → bouten → 省略ルビ）で処理する。
+
+**差分更新（Incremental Update）— 将来の最適化（Phase 4）**
+
+現状 `buildSegmentMap()` は全文スキャン（O(文書長)）。長編文書でコミットポイントが頻繁に来ると重くなる可能性がある。
+
+最適化案: 変更があった段落（行）だけを再パースし、それ以降のセグメントの `srcStart` / `viewStart` に差分（`offsetDelta`）を加算してずらす。
+- 変更行を特定 → その行のセグメントを再計算 → 後続セグメントを `±delta` でシフト
+- 全文パース不要なので長編でも高速
+- 未変更セグメントの再利用により O(変更行のソース長 + 後続セグメント数) に削減できる
 
 ### ペーストのプレーンテキスト化
-`contenteditable` div はデフォルトでクリップボードの `text/html` を優先してペーストするため、インライン展開スパンのスタイルや外部 HTML のスタイルが貼り付けられてしまう。`paste` イベントで `e.preventDefault()` した後、`e.clipboardData.getData('text/plain')` でプレーンテキストのみ取得し、`document.execCommand('insertText', false, text)` で挿入する。`execCommand('insertText')` は deprecated だが Electron では動作し、カーソル位置への挿入・選択範囲の置換・アンドゥ履歴への追加を一括処理できる。
+`contenteditable` div はデフォルトでクリップボードの `text/html` を優先してペーストするため、インライン展開スパンのスタイルや外部 HTML のスタイルが貼り付けられてしまう。`paste` イベントで `e.preventDefault()` した後、`e.clipboardData.getData('text/plain')` でプレーンテキストのみ取得し、`document.execCommand('insertText', false, text)` で挿入する。`execCommand('insertText')` は deprecated だが Electron では動作し、カーソル位置への挿入・選択範囲の置換を一括処理できる。ペースト後は `view.ts` の `paste` ハンドラが `commitToCm6()` を即時呼ぶ。
 
 ### 自動字下げ
 `text-indent: 1em` を CSS で適用する（ファイルには保存しない）。

@@ -33,40 +33,9 @@ var import_obsidian3 = require("obsidian");
 // src/view.ts
 var import_obsidian = require("obsidian");
 
-// src/sync/DebounceQueue.ts
-var DebounceQueue = class {
-  constructor(delayMs = 500) {
-    this.timer = null;
-    this.pending = null;
-    this.delayMs = delayMs;
-  }
-  schedule(fn) {
-    this.pending = fn;
-    if (this.timer !== null) clearTimeout(this.timer);
-    this.timer = setTimeout(async () => {
-      this.timer = null;
-      const f = this.pending;
-      this.pending = null;
-      if (f) await f();
-    }, this.delayMs);
-  }
-  // ペンディング中のコールバックをキャンセルせず即時実行する（ビューを閉じる際などに使用）
-  async flushAndExecute() {
-    if (this.timer !== null) {
-      clearTimeout(this.timer);
-      this.timer = null;
-    }
-    if (this.pending) {
-      const f = this.pending;
-      this.pending = null;
-      await f();
-    }
-  }
-};
-
 // src/sync/SyncCoordinator.ts
 var SyncCoordinator = class {
-  constructor(vault, getEditorValue, setEditorValue, debounceMs = 500) {
+  constructor(vault, getEditorValue, setEditorValue) {
     this.vault = vault;
     this.getEditorValue = getEditorValue;
     this.setEditorValue = setEditorValue;
@@ -74,7 +43,6 @@ var SyncCoordinator = class {
     this.loadSeq = 0;
     this.externalModifySeq = 0;
     this.currentFile = null;
-    this.writeDebounce = new DebounceQueue(debounceMs);
   }
   async loadFile(file) {
     const seq = ++this.loadSeq;
@@ -82,13 +50,6 @@ var SyncCoordinator = class {
     const content = await this.vault.read(file);
     if (seq !== this.loadSeq) return;
     this.setEditorValue(content, false);
-  }
-  onEditorChange() {
-    if (!this.currentFile) return;
-    this.writeDebounce.schedule(async () => {
-      if (!this.currentFile) return;
-      await this.vault.modify(this.currentFile, this.getEditorValue());
-    });
   }
   async onExternalModify(file) {
     if (file !== this.currentFile) return;
@@ -108,14 +69,207 @@ var SyncCoordinator = class {
       this.currentFile = file;
     }
   }
-  async dispose() {
-    await this.writeDebounce.flushAndExecute();
+  dispose() {
     this.currentFile = null;
   }
 };
 
-// src/ui/EditorElement.ts
+// src/ui/SegmentMap.ts
 var KANJI_RE_STR = "[\u4E00-\u9FFF\u3400-\u4DBF\u{20000}-\u{2A6DF}\u3005\u3006\u3024]+";
+function buildSegmentMap(source) {
+  const tokens = tokenize(source);
+  const segments = [];
+  let srcPos = 0;
+  let viewPos = 0;
+  for (const tok of tokens) {
+    const seg = {
+      kind: tok.kind,
+      srcStart: srcPos,
+      srcLen: tok.srcLen,
+      viewStart: viewPos,
+      viewLen: tok.viewLen
+    };
+    if (tok.baseLen !== void 0) seg.baseLen = tok.baseLen;
+    if (tok.rtLen !== void 0) seg.rtLen = tok.rtLen;
+    segments.push(seg);
+    srcPos += tok.srcLen;
+    viewPos += tok.viewLen;
+  }
+  return segments;
+}
+function srcToView(segs, srcOffset) {
+  for (const seg of segs) {
+    if (srcOffset < seg.srcStart) break;
+    if (srcOffset < seg.srcStart + seg.srcLen) {
+      return mapSrcLocalToView(seg, srcOffset - seg.srcStart);
+    }
+  }
+  if (segs.length === 0) return 0;
+  const last = segs[segs.length - 1];
+  return last.viewStart + last.viewLen;
+}
+function viewToSrc(segs, viewOffset) {
+  for (const seg of segs) {
+    if (seg.viewLen === 0) continue;
+    if (viewOffset < seg.viewStart + seg.viewLen) {
+      const local = Math.max(0, viewOffset - seg.viewStart);
+      return mapViewLocalToSrc(seg, local);
+    }
+  }
+  if (segs.length === 0) return 0;
+  const last = segs[segs.length - 1];
+  return last.srcStart + last.srcLen;
+}
+function mapSrcLocalToView(seg, local) {
+  var _a, _b;
+  switch (seg.kind) {
+    case "plain":
+    case "newline":
+      return seg.viewStart + local;
+    case "ruby-explicit": {
+      const baseLen = (_a = seg.baseLen) != null ? _a : seg.viewLen;
+      if (local === 0) return seg.viewStart;
+      if (local <= baseLen) return seg.viewStart + local - 1;
+      return seg.viewStart + seg.viewLen;
+    }
+    case "ruby-implicit": {
+      const baseLen = (_b = seg.baseLen) != null ? _b : seg.viewLen;
+      if (local <= baseLen) return seg.viewStart + local;
+      return seg.viewStart + seg.viewLen;
+    }
+    case "tcy":
+    case "bouten": {
+      if (local <= seg.viewLen) return seg.viewStart + local;
+      return seg.viewStart + seg.viewLen;
+    }
+  }
+}
+function mapViewLocalToSrc(seg, local) {
+  switch (seg.kind) {
+    case "plain":
+    case "newline":
+      return seg.srcStart + local;
+    case "ruby-explicit":
+      return seg.srcStart + 1 + local;
+    case "ruby-implicit":
+    case "tcy":
+    case "bouten":
+      return seg.srcStart + local;
+  }
+}
+function tokenize(source) {
+  let items = [{ resolved: false, raw: source }];
+  const tcyRe = /［＃「([^「」\n]+)」は縦中横］/g;
+  const boutenRe = /［＃「([^「」\n]+)」に傍点］/g;
+  items = flatScan(items, scanExplicitRuby);
+  items = flatScan(items, (raw) => scanAnnotation(raw, tcyRe, "tcy", 9));
+  items = flatScan(items, (raw) => scanAnnotation(raw, boutenRe, "bouten", 8));
+  items = flatScan(items, scanImplicitRuby);
+  items = flatScan(items, scanNewlines);
+  return items.map((item) => {
+    if (!item.resolved) {
+      const len = item.raw.length;
+      return { resolved: true, kind: "plain", srcLen: len, viewLen: len };
+    }
+    return item;
+  });
+}
+function flatScan(items, scanner) {
+  return items.flatMap((item) => item.resolved ? [item] : scanner(item.raw));
+}
+function scanExplicitRuby(raw) {
+  const re = /[|｜]([^|｜《》\n]+)《([^《》\n]*)》/g;
+  const result = [];
+  let lastIndex = 0;
+  let m;
+  while ((m = re.exec(raw)) !== null) {
+    if (m.index > lastIndex) {
+      result.push({ resolved: false, raw: raw.slice(lastIndex, m.index) });
+    }
+    const baseLen = m[1].length;
+    const rtLen = m[2].length;
+    result.push({
+      resolved: true,
+      kind: "ruby-explicit",
+      srcLen: baseLen + rtLen + 3,
+      // ｜ + base + 《 + rt + 》
+      viewLen: baseLen,
+      baseLen,
+      rtLen
+    });
+    lastIndex = re.lastIndex;
+  }
+  if (lastIndex < raw.length) result.push({ resolved: false, raw: raw.slice(lastIndex) });
+  return result;
+}
+function scanAnnotation(raw, re, kind, bracketFixedLen) {
+  re.lastIndex = 0;
+  const result = [];
+  let lastIndex = 0;
+  let m;
+  while ((m = re.exec(raw)) !== null) {
+    const content = m[1];
+    const annotationStart = m.index;
+    if (!raw.slice(lastIndex, annotationStart).endsWith(content)) {
+      result.push({ resolved: false, raw: raw.slice(lastIndex, re.lastIndex) });
+      lastIndex = re.lastIndex;
+      continue;
+    }
+    const contentStart = annotationStart - content.length;
+    if (contentStart > lastIndex) {
+      result.push({ resolved: false, raw: raw.slice(lastIndex, contentStart) });
+    }
+    result.push({
+      resolved: true,
+      kind,
+      srcLen: content.length * 2 + bracketFixedLen,
+      // content + ［＃「content」...］
+      viewLen: content.length
+    });
+    lastIndex = re.lastIndex;
+  }
+  if (lastIndex < raw.length) result.push({ resolved: false, raw: raw.slice(lastIndex) });
+  return result;
+}
+function scanImplicitRuby(raw) {
+  const re = new RegExp(`(${KANJI_RE_STR})\u300A([^\u300A\u300B\\n]*)\u300B`, "gu");
+  const result = [];
+  let lastIndex = 0;
+  let m;
+  while ((m = re.exec(raw)) !== null) {
+    if (m.index > lastIndex) {
+      result.push({ resolved: false, raw: raw.slice(lastIndex, m.index) });
+    }
+    const baseLen = m[1].length;
+    const rtLen = m[2].length;
+    result.push({
+      resolved: true,
+      kind: "ruby-implicit",
+      srcLen: baseLen + rtLen + 2,
+      // base + 《 + rt + 》
+      viewLen: baseLen,
+      baseLen,
+      rtLen
+    });
+    lastIndex = re.lastIndex;
+  }
+  if (lastIndex < raw.length) result.push({ resolved: false, raw: raw.slice(lastIndex) });
+  return result;
+}
+function scanNewlines(raw) {
+  const parts = raw.split("\n");
+  const result = [];
+  for (let i = 0; i < parts.length; i++) {
+    if (parts[i].length > 0) result.push({ resolved: false, raw: parts[i] });
+    if (i < parts.length - 1) {
+      result.push({ resolved: true, kind: "newline", srcLen: 1, viewLen: 0 });
+    }
+  }
+  return result;
+}
+
+// src/ui/EditorElement.ts
+var KANJI_RE_STR2 = "[\u4E00-\u9FFF\u3400-\u4DBF\u{20000}-\u{2A6DF}\u3005\u3006\u3024]+";
 var EditorElement = class {
   constructor(container) {
     // インライン展開中の編集スパン。null なら展開なし。
@@ -126,6 +280,9 @@ var EditorElement = class {
     this.expandedElOriginalText = null;
     // コマンド実行時に使う選択範囲キャッシュ（コマンドパレット起動でフォーカスが外れた後も保持）
     this.savedRange = null;
+    // CM6 への未コミット変更があることを示すフラグ。
+    // onBeforeInput でセット、commitToCm6() 完了時（resetBurst()）にクリアされる。
+    this.inBurst = false;
     this.el = container.createEl("div");
     this.el.addClass("tate-editor");
     this.el.setAttribute("contenteditable", "true");
@@ -149,7 +306,8 @@ var EditorElement = class {
     }
   }
   // ---- インライン展開/収束（selectionchange から呼ぶ） ----
-  // カーソル移動のたびに呼ばれ、ruby/tcy 要素を展開・収束する
+  // カーソル移動のたびに呼ばれ、ruby/tcy 要素を展開・収束する。
+  // collapse によって内容が変化した場合 true を返す（view.ts が commitToCm6 を呼ぶ目安）。
   handleSelectionChange() {
     if (!this.isModifyingDom) {
       if (!this.expandedEl || !this.expandedEl.isConnected) {
@@ -172,21 +330,22 @@ var EditorElement = class {
         }
       }
     }
-    if (this.isModifyingDom) return;
+    if (this.isModifyingDom) return false;
     const sel0 = window.getSelection();
-    if (!this.expandedEl && (!sel0 || sel0.rangeCount === 0 || !this.el.contains(sel0.getRangeAt(0).startContainer))) return;
+    if (!this.expandedEl && (!sel0 || sel0.rangeCount === 0 || !this.el.contains(sel0.getRangeAt(0).startContainer))) return false;
+    let contentChanged = false;
     this.isModifyingDom = true;
     try {
       const sel = window.getSelection();
-      if (!sel || sel.rangeCount === 0) return;
+      if (!sel || sel.rangeCount === 0) return false;
       const range = sel.getRangeAt(0);
       if (this.expandedEl && this.expandedEl.contains(range.startContainer)) {
-        return;
+        return false;
       }
       if (this.expandedEl) {
         const savedNode = range.startContainer;
         const savedOffset = range.startOffset;
-        this.collapseEditing();
+        contentChanged = this.collapseEditing();
         this.savedRange = null;
         if (savedNode.isConnected && this.el.contains(savedNode)) {
           try {
@@ -200,9 +359,9 @@ var EditorElement = class {
           }
         }
       }
-      if (sel.rangeCount === 0) return;
+      if (sel.rangeCount === 0) return contentChanged;
       const currentRange = sel.getRangeAt(0);
-      if (!this.el.contains(currentRange.startContainer)) return;
+      if (!this.el.contains(currentRange.startContainer)) return contentChanged;
       const target = this.findExpandableAncestor(currentRange.startContainer);
       if (target) {
         this.expandForEditing(target, currentRange);
@@ -210,54 +369,52 @@ var EditorElement = class {
     } finally {
       this.isModifyingDom = false;
     }
+    return contentChanged;
   }
   // ---- ルビ・縦中横ライブ変換（input/compositionend から呼ぶ） ----
-  // 》が入力されたときに直前のルビ記法を <ruby> 要素に変換する
+  // 》が入力されたときに直前のルビ記法を <ruby> 要素に変換する。
+  // 変換が行われた場合 true を返す（view.ts が commitToCm6 を呼ぶ目安）。
   handleRubyCompletion() {
     var _a, _b;
-    if (this.expandedEl) return;
-    if (this.isModifyingDom) return;
+    if (this.expandedEl) return false;
+    if (this.isModifyingDom) return false;
     const sel = window.getSelection();
-    if (!sel || sel.rangeCount === 0) return;
+    if (!sel || sel.rangeCount === 0) return false;
     const range = sel.getRangeAt(0);
-    if (range.startContainer.nodeType !== Node.TEXT_NODE) return;
-    if (this.isInsideRuby(range.startContainer)) return;
+    if (range.startContainer.nodeType !== Node.TEXT_NODE) return false;
+    if (this.isInsideRuby(range.startContainer)) return false;
     const textNode = range.startContainer;
     const textBefore = (_b = (_a = textNode.textContent) == null ? void 0 : _a.slice(0, range.startOffset)) != null ? _b : "";
-    if (!textBefore.endsWith("\u300B")) return;
+    if (!textBefore.endsWith("\u300B")) return false;
     let match = textBefore.match(/[|｜]([^|｜《》\n]+)《([^《》\n]*)》$/);
     let explicit = true;
     if (!match) {
-      match = textBefore.match(new RegExp(`(${KANJI_RE_STR})\u300A([^\u300A\u300B\\n]*)\u300B$`, "u"));
+      match = textBefore.match(new RegExp(`(${KANJI_RE_STR2})\u300A([^\u300A\u300B\\n]*)\u300B$`, "u"));
       explicit = false;
     }
-    if (!match) return;
+    if (!match) return false;
     const base = match[1];
     const rt = match[2];
     const matchStart = range.startOffset - match[0].length;
     this.isModifyingDom = true;
     try {
       const rubyEl = this.createRubyEl(base, rt, explicit);
-      rubyEl.setAttribute("data-new-el", "1");
-      this.execInsertHtml(textNode, matchStart, range.startOffset, rubyEl.outerHTML);
-      const inserted = this.el.querySelector('[data-new-el="1"]');
-      if (inserted) {
-        inserted.removeAttribute("data-new-el");
-        this.el.focus();
-        const afterSel = window.getSelection();
-        const r = document.createRange();
-        r.setStartAfter(inserted);
-        r.collapse(true);
-        afterSel.removeAllRanges();
-        afterSel.addRange(r);
-      }
+      const inserted = this.insertAnnotationElement(
+        textNode,
+        matchStart,
+        range.startOffset,
+        rubyEl
+      );
+      this.setCursorAfter(inserted);
+      return true;
     } finally {
       this.isModifyingDom = false;
     }
   }
-  // ］が入力されたときに直前の縦中横記法を <span class="tcy"> 要素に変換する
+  // ］が入力されたときに直前の縦中横記法を <span class="tcy"> 要素に変換する。
+  // 変換が行われた場合 true を返す。
   handleTcyCompletion() {
-    this.handleAnnotationCompletion("\uFF3D", /［＃「([^「」\n]+)」は縦中横］$/, (c) => this.createTcyEl(c));
+    return this.handleAnnotationCompletion("\uFF3D", /［＃「([^「」\n]+)」は縦中横］$/, (c) => this.createTcyEl(c));
   }
   // ---- コマンドパレットから呼ぶ選択ラップメソッド ----
   // 選択テキストを tate-editing スパンとして展開し、カーソルを《》の間に置く
@@ -270,30 +427,29 @@ var EditorElement = class {
     const selectedText = textNode.textContent.slice(startOffset, endOffset);
     if (!selectedText) return false;
     const rawText = `\uFF5C${selectedText}\u300A\u300B`;
-    const spanHtml = `<span class="tate-editing" data-ruby-new="1">${this.esc(rawText)}</span>`;
+    const span = document.createElement("span");
+    span.className = "tate-editing";
+    span.textContent = rawText;
+    const parentEl = textNode.parentNode;
     this.isModifyingDom = true;
     try {
-      this.el.focus();
-      this.execInsertHtml(textNode, startOffset, endOffset, spanHtml);
-      const span = this.el.querySelector('[data-ruby-new="1"]');
-      if (!span) {
-        this.el.querySelectorAll("[data-ruby-new]").forEach(
-          (el) => el.removeAttribute("data-ruby-new")
-        );
-        return false;
-      }
-      span.removeAttribute("data-ruby-new");
+      const precedingText = textNode.textContent.slice(0, startOffset);
+      const followingText = textNode.textContent.slice(endOffset);
+      const next = textNode.nextSibling;
+      parentEl.removeChild(textNode);
+      if (precedingText) parentEl.insertBefore(document.createTextNode(precedingText), next);
+      parentEl.insertBefore(span, next);
+      if (followingText) parentEl.insertBefore(document.createTextNode(followingText), next);
       this.expandedEl = span;
       this.expandedElOriginalText = rawText;
       const spanText = span.firstChild;
       if (spanText) {
-        this.el.focus();
         const sel = window.getSelection();
-        const range = document.createRange();
-        range.setStart(spanText, rawText.length - 1);
-        range.collapse(true);
+        const r = document.createRange();
+        r.setStart(spanText, rawText.length - 1);
+        r.collapse(true);
         sel.removeAllRanges();
-        sel.addRange(range);
+        sel.addRange(r);
       }
     } finally {
       this.isModifyingDom = false;
@@ -309,9 +465,10 @@ var EditorElement = class {
   wrapSelectionWithBouten() {
     return this.wrapSelectionWith((c) => this.createBoutenEl(c));
   }
-  // ］が入力されたときに直前の傍点記法を <span class="bouten"> 要素に変換する
+  // ］が入力されたときに直前の傍点記法を <span class="bouten"> 要素に変換する。
+  // 変換が行われた場合 true を返す。
   handleBoutenCompletion() {
-    this.handleAnnotationCompletion("\uFF3D", /［＃「([^「」\n]+)」に傍点］$/, (c) => this.createBoutenEl(c));
+    return this.handleAnnotationCompletion("\uFF3D", /［＃「([^「」\n]+)」に傍点］$/, (c) => this.createBoutenEl(c));
   }
   // ---- 選択ラップ・アノテーション完了の共通ロジック ----
   // tcy/bouten など要素置換型ラップの共通実装
@@ -323,66 +480,51 @@ var EditorElement = class {
     const selectedText = textNode.textContent.slice(startOffset, endOffset);
     if (!selectedText) return false;
     const newEl = createElement(selectedText);
-    newEl.setAttribute("data-wrap-new", "1");
     this.isModifyingDom = true;
     try {
-      this.el.focus();
-      this.execInsertHtml(textNode, startOffset, endOffset, newEl.outerHTML);
-      const inserted = this.el.querySelector('[data-wrap-new="1"]');
-      if (!inserted) {
-        this.el.querySelectorAll("[data-wrap-new]").forEach(
-          (el) => el.removeAttribute("data-wrap-new")
-        );
-        return false;
-      }
-      inserted.removeAttribute("data-wrap-new");
-      this.el.focus();
-      const sel = window.getSelection();
-      const range = document.createRange();
-      range.setStartAfter(inserted);
-      range.collapse(true);
-      sel.removeAllRanges();
-      sel.addRange(range);
+      const inserted = this.insertAnnotationElement(
+        textNode,
+        startOffset,
+        endOffset,
+        newEl
+      );
+      this.setCursorAfter(inserted);
     } finally {
       this.isModifyingDom = false;
     }
     this.savedRange = null;
     return true;
   }
-  // tcy/bouten など終端文字で確定するライブ変換の共通実装
+  // tcy/bouten など終端文字で確定するライブ変換の共通実装。
+  // 変換が行われた場合 true を返す。
   handleAnnotationCompletion(endChar, re, createElement) {
     var _a, _b;
-    if (this.expandedEl) return;
-    if (this.isModifyingDom) return;
+    if (this.expandedEl) return false;
+    if (this.isModifyingDom) return false;
     const sel = window.getSelection();
-    if (!sel || sel.rangeCount === 0) return;
+    if (!sel || sel.rangeCount === 0) return false;
     const range = sel.getRangeAt(0);
-    if (range.startContainer.nodeType !== Node.TEXT_NODE) return;
-    if (this.isInsideRuby(range.startContainer)) return;
+    if (range.startContainer.nodeType !== Node.TEXT_NODE) return false;
+    if (this.isInsideRuby(range.startContainer)) return false;
     const textNode = range.startContainer;
     const textBefore = (_b = (_a = textNode.textContent) == null ? void 0 : _a.slice(0, range.startOffset)) != null ? _b : "";
-    if (!textBefore.endsWith(endChar)) return;
+    if (!textBefore.endsWith(endChar)) return false;
     const annotationMatch = textBefore.match(re);
-    if (!annotationMatch) return;
+    if (!annotationMatch) return false;
     const content = annotationMatch[1];
     const annotationStart = range.startOffset - annotationMatch[0].length;
-    if (!textBefore.slice(0, annotationStart).endsWith(content)) return;
+    if (!textBefore.slice(0, annotationStart).endsWith(content)) return false;
     this.isModifyingDom = true;
     try {
       const newEl = createElement(content);
-      newEl.setAttribute("data-new-el", "1");
-      this.execInsertHtml(textNode, annotationStart - content.length, range.startOffset, newEl.outerHTML);
-      const inserted = this.el.querySelector('[data-new-el="1"]');
-      if (inserted) {
-        inserted.removeAttribute("data-new-el");
-        this.el.focus();
-        const afterSel = window.getSelection();
-        const r = document.createRange();
-        r.setStartAfter(inserted);
-        r.collapse(true);
-        afterSel.removeAllRanges();
-        afterSel.addRange(r);
-      }
+      const inserted = this.insertAnnotationElement(
+        textNode,
+        annotationStart - content.length,
+        range.startOffset,
+        newEl
+      );
+      this.setCursorAfter(inserted);
+      return true;
     } finally {
       this.isModifyingDom = false;
     }
@@ -432,6 +574,7 @@ var EditorElement = class {
     target.parentNode.replaceChild(span, target);
     this.expandedEl = span;
     this.expandedElOriginalText = rawText;
+    this.inBurst = false;
     const textNode = span.firstChild;
     if (textNode) {
       const sel = window.getSelection();
@@ -444,26 +587,27 @@ var EditorElement = class {
       }
     }
   }
-  // 編集スパンを収束し、内容を再パースして元の位置に挿入する（カーソルは呼び出し元が処理）
+  // 編集スパンを収束し、内容を再パースして元の位置に挿入する（カーソルは呼び出し元が処理）。
+  // 内容が変化した場合 true を返す（view.ts が commitToCm6 を呼ぶ目安）。
   collapseEditing() {
-    var _a, _b, _c, _d;
-    if (!this.expandedEl) return;
+    var _a, _b, _c;
+    if (!this.expandedEl) return false;
     if (!this.expandedEl.isConnected) {
       this.expandedEl = null;
       this.expandedElOriginalText = null;
-      return;
+      return false;
     }
     let rawText = (_a = this.expandedEl.textContent) != null ? _a : "";
     const hasChanged = this.expandedElOriginalText === null || rawText !== this.expandedElOriginalText;
     const parent = this.expandedEl.parentNode;
     const nextSibling = this.expandedEl.nextSibling;
+    let precedingTextNode = null;
+    let precedingChars = "";
     if (hasChanged) {
-      let precedingTextNode = null;
-      let precedingChars = "";
       const extraChars = this.getExtraCharsFromAnnotation(rawText);
       if (extraChars.length > 0) {
         const prev = this.expandedEl.previousSibling;
-        if (prev && prev.nodeType === Node.TEXT_NODE) {
+        if ((prev == null ? void 0 : prev.nodeType) === Node.TEXT_NODE) {
           const prevText = prev;
           if (((_b = prevText.textContent) != null ? _b : "").endsWith(extraChars)) {
             precedingTextNode = prevText;
@@ -472,62 +616,21 @@ var EditorElement = class {
           }
         }
       }
-      const html = this.parseInlineToHtml(rawText);
-      const spanParentEl = this.expandedEl.parentNode;
-      const spanNextEl = this.expandedEl.nextSibling;
-      const isAtBlockBoundary = spanParentEl !== this.el && (this.expandedEl.previousSibling === null || this.expandedEl.nextSibling === null || this.expandedEl.nextSibling.nodeType === Node.ELEMENT_NODE && this.expandedEl.nextSibling.tagName === "BR");
-      if (isAtBlockBoundary) {
-        if (precedingTextNode && precedingTextNode.isConnected) {
-          precedingTextNode.textContent = ((_c = precedingTextNode.textContent) != null ? _c : "").slice(0, -precedingChars.length);
-        }
-        spanParentEl.removeChild(this.expandedEl);
-        this.expandedEl = null;
-        this.expandedElOriginalText = null;
-        const tempDiv = document.createElement("div");
-        tempDiv.innerHTML = html;
-        while (tempDiv.firstChild) {
-          spanParentEl.insertBefore(tempDiv.firstChild, spanNextEl);
-        }
-      } else {
-        this.el.focus();
-        const sel = window.getSelection();
-        const r = document.createRange();
-        if (precedingTextNode) {
-          r.setStart(precedingTextNode, precedingTextNode.length - precedingChars.length);
-          r.setEndAfter(this.expandedEl);
-        } else {
-          r.selectNode(this.expandedEl);
-        }
-        sel.removeAllRanges();
-        sel.addRange(r);
-        const spanRef = this.expandedEl;
-        this.expandedEl = null;
-        this.expandedElOriginalText = null;
-        document.execCommand("insertHTML", false, html);
-        if (spanRef.isConnected) {
-          const spanParent = spanRef.parentNode;
-          const spanNext = spanRef.nextSibling;
-          if (precedingTextNode && precedingTextNode.isConnected) {
-            precedingTextNode.textContent = ((_d = precedingTextNode.textContent) != null ? _d : "").slice(0, -precedingChars.length);
-          }
-          spanParent.removeChild(spanRef);
-          const tempDiv = document.createElement("div");
-          tempDiv.innerHTML = html;
-          while (tempDiv.firstChild) {
-            spanParent.insertBefore(tempDiv.firstChild, spanNext);
-          }
-        }
-      }
-    } else {
-      parent.removeChild(this.expandedEl);
-      this.expandedEl = null;
-      this.expandedElOriginalText = null;
-      const tempDiv = document.createElement("div");
-      tempDiv.innerHTML = this.parseInlineToHtml(rawText);
-      while (tempDiv.firstChild) {
-        parent.insertBefore(tempDiv.firstChild, nextSibling);
-      }
     }
+    const html = this.parseInlineToHtml(rawText);
+    if (precedingTextNode == null ? void 0 : precedingTextNode.isConnected) {
+      precedingTextNode.textContent = ((_c = precedingTextNode.textContent) != null ? _c : "").slice(0, -precedingChars.length);
+    }
+    parent.removeChild(this.expandedEl);
+    this.expandedEl = null;
+    this.expandedElOriginalText = null;
+    const tempDiv = document.createElement("div");
+    tempDiv.innerHTML = html;
+    while (tempDiv.firstChild) {
+      parent.insertBefore(tempDiv.firstChild, nextSibling);
+    }
+    this.inBurst = false;
+    return hasChanged;
   }
   // 要素内のカーソル位置を raw テキスト上の文字オフセットに変換する
   rawOffsetForExpand(el, node, offset) {
@@ -637,7 +740,7 @@ var EditorElement = class {
   }
   // 省略ルビ kanji《rt》 を分割する
   splitByImplicitRuby(text) {
-    const re = new RegExp(`(${KANJI_RE_STR})\u300A([^\u300A\u300B\\n]*)\u300B`, "gu");
+    const re = new RegExp(`(${KANJI_RE_STR2})\u300A([^\u300A\u300B\\n]*)\u300B`, "gu");
     const result = [];
     let lastIndex = 0;
     let m;
@@ -782,42 +885,62 @@ var EditorElement = class {
     }
     return null;
   }
-  // テキストノードの [matchStart, matchEnd) を html で置き換える
-  // 行中（両端がテキストノード境界でない）場合は execCommand('insertHTML') でUndoスタックに記録する。
-  // 行頭（matchStart=0）または行末（matchEnd=textNode.length）の場合、Chromium が
-  // insertHTML をブロック境界として扱い要素を剥ぎ取るバグがあるため、直接DOM操作で代替する。
-  execInsertHtml(textNode, matchStart, matchEnd, html) {
-    if (textNode.parentNode !== this.el && (matchStart === 0 || matchEnd === textNode.length)) {
-      this.execInsertHtmlAtBoundary(textNode, matchStart, matchEnd, html);
-      return;
-    }
-    const sel = window.getSelection();
-    const r = document.createRange();
-    r.setStart(textNode, matchStart);
-    r.setEnd(textNode, matchEnd);
-    sel.removeAllRanges();
-    sel.addRange(r);
-    document.execCommand("insertHTML", false, html);
-  }
-  // execCommand('insertHTML') のブロック境界バグを回避するための直接 DOM 操作代替
-  execInsertHtmlAtBoundary(textNode, matchStart, matchEnd, html) {
-    const parent = textNode.parentNode;
-    const nextSibling = textNode.nextSibling;
+  // テキストノードの [matchStart, matchEnd) を element で置き換える直接 DOM 操作。
+  // 行頭・行末・行中の区別なく常に直接 DOM 操作で統一する（execCommand 不使用）。
+  // 挿入した要素を返す。
+  insertAnnotationElement(textNode, matchStart, matchEnd, element) {
+    const parentEl = textNode.parentNode;
     const precedingText = textNode.textContent.slice(0, matchStart);
     const followingText = textNode.textContent.slice(matchEnd);
-    const tempDiv = document.createElement("div");
-    tempDiv.innerHTML = html;
-    const newNodes = Array.from(tempDiv.childNodes);
-    parent.removeChild(textNode);
-    if (precedingText) {
-      parent.insertBefore(document.createTextNode(precedingText), nextSibling);
+    const next = textNode.nextSibling;
+    parentEl.removeChild(textNode);
+    if (precedingText) parentEl.insertBefore(document.createTextNode(precedingText), next);
+    parentEl.insertBefore(element, next);
+    if (followingText) parentEl.insertBefore(document.createTextNode(followingText), next);
+    return element;
+  }
+  // beforeinput イベントで呼ぶ（view.ts から登録）。
+  // CM6 への未コミット変更があることを示す inBurst フラグをセットする。
+  onBeforeInput() {
+    this.inBurst = true;
+  }
+  // バーストをリセットする（commitToCm6() 完了後・view.ts のナビゲーション処理時に呼ぶ）。
+  resetBurst() {
+    this.inBurst = false;
+  }
+  // CM6 の Undo/Redo 後に呼ぶ。content を縦書きビューに適用し、
+  // srcOffset（CM6 のカーソル位置）を srcToView で変換してカーソルを復元する。
+  applyFromCm6(content, srcOffset) {
+    this.expandedEl = null;
+    this.expandedElOriginalText = null;
+    this.savedRange = null;
+    this.inBurst = false;
+    if (this.getValue() !== content) {
+      this.el.innerHTML = this.parseToHtml(content);
     }
-    for (const node of newNodes) {
-      parent.insertBefore(node, nextSibling);
-    }
-    if (followingText) {
-      parent.insertBefore(document.createTextNode(followingText), nextSibling);
-    }
+    const segs = buildSegmentMap(content);
+    const viewOffset = srcToView(segs, srcOffset);
+    this.setVisibleOffset(viewOffset);
+  }
+  /** tate-editing スパンが展開中かどうかを返す（view.ts のカーソル同期判定用）。 */
+  isInlineExpanded() {
+    return this.expandedEl !== null;
+  }
+  /** 縦書き表示上の現在カーソル位置（visible offset）を返す（view.ts のカーソル同期用）。 */
+  getViewCursorOffset() {
+    return this.getVisibleOffset();
+  }
+  // カーソルを node の直後に移動する。
+  // ライブ変換・コマンドで要素を挿入した直後に呼び、カーソルが要素内に入って
+  // selectionchange → expandForEditing() が即発火するのを防ぐ。
+  setCursorAfter(node) {
+    const sel = window.getSelection();
+    if (!sel) return;
+    const r = document.createRange();
+    r.setStartAfter(node);
+    r.collapse(true);
+    sel.removeAllRanges();
+    sel.addRange(r);
   }
   // インライン編集後の収束時に、アノテーション「」内容がスパン内の前方テキストより
   // 長い場合に直前テキストノードから取り込むべき文字列を返す。
@@ -873,6 +996,9 @@ var VerticalWritingView = class extends import_obsidian.ItemView {
     this.plugin = plugin;
     this.editorEl = null;
     this.syncCoordinator = null;
+    // CM6 に最後にコミットした確定済みテキスト。
+    // onExternalModify の比較に使い、IME 未確定テキストを含む getValue() との混同を防ぐ。
+    this.lastCommittedContent = "";
   }
   getViewType() {
     return TATE_VIEW_TYPE;
@@ -892,29 +1018,62 @@ var VerticalWritingView = class extends import_obsidian.ItemView {
     editorEl.applySettings(this.plugin.settings);
     const syncCoordinator = new SyncCoordinator(
       this.app.vault,
-      () => editorEl.getValue(),
-      (content, preserveCursor) => editorEl.setValue(content, preserveCursor)
+      // 比較には確定済みテキストを使う（IME 未確定テキストを含む getValue() ではない）
+      () => this.lastCommittedContent,
+      (content, preserveCursor) => {
+        this.lastCommittedContent = content;
+        editorEl.setValue(content, preserveCursor);
+      }
     );
     this.syncCoordinator = syncCoordinator;
     this.registerDomEvent(editorEl.el, "paste", (e) => {
+      if (!this.guardCm6(e)) return;
       editorEl.handlePaste(e);
-      syncCoordinator.onEditorChange();
+      this.commitToCm6();
+    });
+    this.registerDomEvent(editorEl.el, "beforeinput", (e) => {
+      if (!this.guardCm6(e)) return;
+      editorEl.onBeforeInput();
     });
     this.registerDomEvent(editorEl.el, "input", (e) => {
-      syncCoordinator.onEditorChange();
       if (!e.isComposing) {
-        editorEl.handleRubyCompletion();
-        editorEl.handleTcyCompletion();
-        editorEl.handleBoutenCompletion();
+        const annotated = editorEl.handleRubyCompletion() || editorEl.handleTcyCompletion() || editorEl.handleBoutenCompletion();
+        if (annotated) this.commitToCm6();
       }
     });
     this.registerDomEvent(editorEl.el, "compositionend", () => {
       editorEl.handleRubyCompletion();
       editorEl.handleTcyCompletion();
       editorEl.handleBoutenCompletion();
+      this.commitToCm6();
     });
     this.registerDomEvent(document, "selectionchange", () => {
-      editorEl.handleSelectionChange();
+      const contentChanged = editorEl.handleSelectionChange();
+      if (contentChanged) this.commitToCm6();
+    });
+    this.registerDomEvent(editorEl.el, "mousedown", () => {
+      this.commitToCm6();
+      editorEl.resetBurst();
+    });
+    this.registerDomEvent(editorEl.el, "keydown", (e) => {
+      if ((e.metaKey || e.ctrlKey) && !e.altKey && e.key === "z") {
+        e.preventDefault();
+        this.doUndoRedo(editorEl, e.shiftKey);
+        return;
+      }
+      if (!e.isComposing && [
+        "ArrowLeft",
+        "ArrowRight",
+        "ArrowUp",
+        "ArrowDown",
+        "Home",
+        "End",
+        "PageUp",
+        "PageDown"
+      ].includes(e.key)) {
+        this.commitToCm6();
+        editorEl.resetBurst();
+      }
     });
     this.registerEvent(
       this.app.vault.on("modify", (file) => {
@@ -954,14 +1113,18 @@ var VerticalWritingView = class extends import_obsidian.ItemView {
   }
   async onClose() {
     var _a;
-    await ((_a = this.syncCoordinator) == null ? void 0 : _a.dispose());
+    this.commitToCm6();
+    (_a = this.syncCoordinator) == null ? void 0 : _a.dispose();
   }
   applySettings(settings) {
     var _a;
     (_a = this.editorEl) == null ? void 0 : _a.applySettings(settings);
   }
   applyRuby() {
-    this.applyAnnotation((el) => el.wrapSelectionWithRuby());
+    if (!this.editorEl) return;
+    if (!this.editorEl.wrapSelectionWithRuby()) {
+      new import_obsidian.Notice("\u30C6\u30AD\u30B9\u30C8\u3092\u9078\u629E\u3057\u3066\u304F\u3060\u3055\u3044");
+    }
   }
   applyTcy() {
     this.applyAnnotation((el) => el.wrapSelectionWithTcy());
@@ -970,13 +1133,104 @@ var VerticalWritingView = class extends import_obsidian.ItemView {
     this.applyAnnotation((el) => el.wrapSelectionWithBouten());
   }
   applyAnnotation(wrap) {
-    var _a;
     if (!this.editorEl) return;
     if (!wrap(this.editorEl)) {
       new import_obsidian.Notice("\u30C6\u30AD\u30B9\u30C8\u3092\u9078\u629E\u3057\u3066\u304F\u3060\u3055\u3044");
     } else {
-      (_a = this.syncCoordinator) == null ? void 0 : _a.onEditorChange();
+      this.commitToCm6();
     }
+  }
+  // ---- CM6 連携ヘルパー ----
+  /** currentFile を開いている MarkdownView の CM6 エディタを返す。見つからなければ null。 */
+  getCm6Editor() {
+    var _a;
+    const file = (_a = this.syncCoordinator) == null ? void 0 : _a.currentFile;
+    if (!file) return null;
+    for (const leaf of this.app.workspace.getLeavesOfType("markdown")) {
+      const mv = leaf.view;
+      if (mv instanceof import_obsidian.MarkdownView && mv.file === file) {
+        return mv.editor;
+      }
+    }
+    return null;
+  }
+  /** CM6 エディタが利用できない場合、入力イベントをキャンセルして Notice を出す。
+   *  CM6 が利用可能なら true を返す。 */
+  guardCm6(e) {
+    if (this.getCm6Editor()) return true;
+    e.preventDefault();
+    new import_obsidian.Notice("\u7E26\u66F8\u304D\u30A8\u30C7\u30A3\u30BF\u3092\u4F7F\u7528\u3059\u308B\u306B\u306F\u3001\u5BFE\u5FDC\u3059\u308B Markdown \u30D3\u30E5\u30FC\u3092\u958B\u3044\u3066\u304F\u3060\u3055\u3044");
+    return false;
+  }
+  /** 縦書きエディタの現在内容を CM6 に差分 replaceRange でコミットする。
+   *  変更されていない共通の先頭・末尾を除き、実際に変化した部分だけを置換する。
+   *  これにより CM6 が正確な編集位置を記録し、Undo 後のカーソルが編集箇所に来る。
+   *  内容が変化した場合は CM6 カーソルも縦書きビューのカーソル位置に同期する。
+   *  tate-editing 展開中はカーソル同期をスキップ（収束時の selectionchange で同期される）。 */
+  commitToCm6() {
+    const el = this.editorEl;
+    if (!el) return;
+    const cm6 = this.getCm6Editor();
+    if (!cm6) return;
+    const content = el.getValue();
+    const cm6Content = cm6.getValue();
+    if (content === cm6Content) return;
+    let fromStart = 0;
+    while (fromStart < cm6Content.length && fromStart < content.length && cm6Content[fromStart] === content[fromStart]) {
+      fromStart++;
+    }
+    let fromEndOld = cm6Content.length;
+    let fromEndNew = content.length;
+    while (fromEndOld > fromStart && fromEndNew > fromStart && cm6Content[fromEndOld - 1] === content[fromEndNew - 1]) {
+      fromEndOld--;
+      fromEndNew--;
+    }
+    cm6.replaceRange(
+      content.slice(fromStart, fromEndNew),
+      cm6.offsetToPos(fromStart),
+      cm6.offsetToPos(fromEndOld)
+    );
+    this.lastCommittedContent = content;
+    if (!el.isInlineExpanded()) {
+      const segs = buildSegmentMap(content);
+      const srcOffset = viewToSrc(segs, el.getViewCursorOffset());
+      cm6.setCursor(cm6.offsetToPos(srcOffset));
+    }
+    el.resetBurst();
+  }
+  /** Undo (isRedo=false) または Redo (isRedo=true) を CM6 に委譲し、
+   *  コンテンツ差分からカーソル位置を算出して復元する。
+   *  cm6.getCursor() は使わない: undo 後のカーソルは「undo したトランザクションの
+   *  直前に setCursor() で置いた位置」になるため、編集箇所と無関係な位置になり得る。 */
+  doUndoRedo(editorEl, isRedo) {
+    const cm6 = this.getCm6Editor();
+    if (!cm6) return;
+    this.commitToCm6();
+    const prevContent = this.lastCommittedContent;
+    if (isRedo) cm6.redo();
+    else cm6.undo();
+    const newContent = cm6.getValue();
+    if (newContent === prevContent) return;
+    const srcOffset = this.deriveUndoRedoCursor(prevContent, newContent);
+    editorEl.applyFromCm6(newContent, srcOffset);
+    this.lastCommittedContent = newContent;
+  }
+  /** undo/redo 前後のコンテンツ差分から適切なカーソル位置を算出する。
+   *  prev→next の変化領域の末尾（next 上のオフセット）を返す。
+   *  undo（テキスト復元）: 復元テキストの末尾 → 例:「うえお」削除のundo → 「お」の直後
+   *  redo（削除の再実行）: 削除点（変化領域の先頭）→ 次の入力位置として自然 */
+  deriveUndoRedoCursor(prev, next) {
+    let fromStart = 0;
+    while (fromStart < prev.length && fromStart < next.length && prev[fromStart] === next[fromStart]) {
+      fromStart++;
+    }
+    let fromEndPrev = prev.length;
+    let fromEndNext = next.length;
+    while (fromEndPrev > fromStart && fromEndNext > fromStart && prev[fromEndPrev - 1] === next[fromEndNext - 1]) {
+      fromEndPrev--;
+      fromEndNext--;
+    }
+    return fromEndNext;
   }
 };
 
