@@ -118,7 +118,11 @@ Undo/Redo は CM6（Obsidian 標準エディタ）に完全委譲する。縦書
 
 **コミットポイントによる CM6 への書き込み**
 
-縦書きビューへの入力は `commitToCm6()`（`view.ts`）で CM6 に全文 `replaceRange` する。CM6 の履歴エントリとなるため、その後 `editor.undo()` で確実に元に戻せる。
+縦書きビューへの入力は `commitToCm6()`（`view.ts`）で CM6 に差分 `replaceRange` する。前後の共通プレフィックス・サフィックスを除いた変化部分だけを置換するため、CM6 が正確な編集位置を記録し Undo 後のカーソルが編集箇所に来る。CM6 の履歴エントリとなるため、その後 `editor.undo()` で確実に元に戻せる。
+
+**`lastCommittedContent`（IME 競合防止）**
+
+`VerticalWritingView` が保持する「最後に CM6 にコミットした確定済みテキスト」。IME 変換中は DOM に未確定テキストが含まれるため、`getEditorValue()` をそのまま `onExternalModify()` の比較に使うと CM6 autosave の `modify` イベントで誤ってビューがリセットされる。`lastCommittedContent` は IME 変換中に更新されないため、autosave 由来の `modify` を正しくスキップできる。更新タイミング: `commitToCm6()` 完了時・ロード時・外部変更適用時。
 
 コミットポイント:
 
@@ -140,12 +144,25 @@ Undo/Redo は CM6（Obsidian 標準エディタ）に完全委譲する。縦書
 **Undo/Redo 実行フロー（`doUndoRedo()`）**
 
 ```
-commitToCm6()           // 未コミットのバーストを先に CM6 に書き込む
-cm6.undo() / cm6.redo() // CM6 側で Undo/Redo を実行
+commitToCm6()                    // 未コミットのバーストを先に CM6 に書き込む
+prevContent = lastCommittedContent
+cm6.undo() / cm6.redo()          // CM6 側で Undo/Redo を実行
 newContent = cm6.getValue()
-srcOffset = cm6.posToOffset(cm6.getCursor())
+if newContent === prevContent: return  // スタック空などで変化なし → カーソルそのまま
+srcOffset = deriveUndoRedoCursor(prevContent, newContent)
 editorEl.applyFromCm6(newContent, srcOffset)
 ```
+
+**`cm6.getCursor()` を使わない理由**
+
+`cm6.undo()` 後の `cm6.getCursor()` は「undo されたトランザクションの直前に `setCursor()` でセットした位置」を返す。これは前回の `commitToCm6()` がセットした位置であり、今回の編集箇所とは無関係なためドキュメント端に飛ぶことがある。
+
+**`deriveUndoRedoCursor(prev, next)`**
+
+prevContent → newContent の差分（共通プレフィックス・サフィックスを除く）から `next` 上の変化領域末尾を返す:
+- undo（テキスト復元）: 復元テキストの末尾 → 例:「うえお」削除の undo → 「お」の直後
+- redo（削除の再実行）: 削除点（変化領域の先頭 = fromStart = fromEndNext）
+- 変化なし（スタック空）: 呼び出し元で early return するため到達しない
 
 **`applyFromCm6()` によるカーソル復元**
 
