@@ -234,17 +234,44 @@ export class VerticalWritingView extends ItemView {
     }
 
     /** Undo (isRedo=false) または Redo (isRedo=true) を CM6 に委譲し、
-     *  srcToView でカーソルを復元する。 */
+     *  コンテンツ差分からカーソル位置を算出して復元する。
+     *  cm6.getCursor() は使わない: undo 後のカーソルは「undo したトランザクションの
+     *  直前に setCursor() で置いた位置」になるため、編集箇所と無関係な位置になり得る。 */
     private doUndoRedo(editorEl: EditorElement, isRedo: boolean): void {
         const cm6 = this.getCm6Editor();
         if (!cm6) return;
         // 未コミットの変更があれば先にコミット（CM6 undo/redo の基準を揃える）
         this.commitToCm6();
+        // commitToCm6 後の lastCommittedContent が「undo/redo 前の確定済み内容」
+        const prevContent = this.lastCommittedContent;
         // CM6 側で Undo/Redo を実行
         if (isRedo) cm6.redo(); else cm6.undo();
-        // CM6 の新しい状態を縦書きビューに反映（srcToView でカーソルを復元）
         const newContent = cm6.getValue();
-        const srcOffset = cm6.posToOffset(cm6.getCursor());
+        // 差分からカーソル位置を算出（復元された/削除されたテキストの末尾）
+        const srcOffset = this.deriveUndoRedoCursor(prevContent, newContent);
         editorEl.applyFromCm6(newContent, srcOffset);
+    }
+
+    /** undo/redo 前後のコンテンツ差分から適切なカーソル位置を算出する。
+     *  prev→next の変化領域の末尾（next 上のオフセット）を返す。
+     *  undo（テキスト復元）: 復元テキストの末尾 → 例:「うえお」削除のundo → 「お」の直後
+     *  redo（削除の再実行）: 削除点（変化領域の先頭）→ 次の入力位置として自然 */
+    private deriveUndoRedoCursor(prev: string, next: string): number {
+        // 共通プレフィックスを飛ばす
+        let fromStart = 0;
+        while (fromStart < prev.length && fromStart < next.length
+               && prev[fromStart] === next[fromStart]) {
+            fromStart++;
+        }
+        // 共通サフィックスを飛ばす
+        let fromEndPrev = prev.length;
+        let fromEndNext = next.length;
+        while (fromEndPrev > fromStart && fromEndNext > fromStart
+               && prev[fromEndPrev - 1] === next[fromEndNext - 1]) {
+            fromEndPrev--;
+            fromEndNext--;
+        }
+        // next 上の変化領域末尾を返す
+        return fromEndNext;
     }
 }

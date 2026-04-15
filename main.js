@@ -1199,16 +1199,36 @@ var VerticalWritingView = class extends import_obsidian.ItemView {
     el.resetBurst();
   }
   /** Undo (isRedo=false) または Redo (isRedo=true) を CM6 に委譲し、
-   *  srcToView でカーソルを復元する。 */
+   *  コンテンツ差分からカーソル位置を算出して復元する。
+   *  cm6.getCursor() は使わない: undo 後のカーソルは「undo したトランザクションの
+   *  直前に setCursor() で置いた位置」になるため、編集箇所と無関係な位置になり得る。 */
   doUndoRedo(editorEl, isRedo) {
     const cm6 = this.getCm6Editor();
     if (!cm6) return;
     this.commitToCm6();
+    const prevContent = this.lastCommittedContent;
     if (isRedo) cm6.redo();
     else cm6.undo();
     const newContent = cm6.getValue();
-    const srcOffset = cm6.posToOffset(cm6.getCursor());
+    const srcOffset = this.deriveUndoRedoCursor(prevContent, newContent);
     editorEl.applyFromCm6(newContent, srcOffset);
+  }
+  /** undo/redo 前後のコンテンツ差分から適切なカーソル位置を算出する。
+   *  prev→next の変化領域の末尾（next 上のオフセット）を返す。
+   *  undo（テキスト復元）: 復元テキストの末尾 → 例:「うえお」削除のundo → 「お」の直後
+   *  redo（削除の再実行）: 削除点（変化領域の先頭）→ 次の入力位置として自然 */
+  deriveUndoRedoCursor(prev, next) {
+    let fromStart = 0;
+    while (fromStart < prev.length && fromStart < next.length && prev[fromStart] === next[fromStart]) {
+      fromStart++;
+    }
+    let fromEndPrev = prev.length;
+    let fromEndNext = next.length;
+    while (fromEndPrev > fromStart && fromEndNext > fromStart && prev[fromEndPrev - 1] === next[fromEndNext - 1]) {
+      fromEndPrev--;
+      fromEndNext--;
+    }
+    return fromEndNext;
   }
 };
 
