@@ -189,7 +189,9 @@ export class VerticalWritingView extends ItemView {
         return false;
     }
 
-    /** 縦書きエディタの現在内容を CM6 に全文 replaceRange でコミットする。
+    /** 縦書きエディタの現在内容を CM6 に差分 replaceRange でコミットする。
+     *  変更されていない共通の先頭・末尾を除き、実際に変化した部分だけを置換する。
+     *  これにより CM6 が正確な編集位置を記録し、Undo 後のカーソルが編集箇所に来る。
      *  内容が変化した場合は CM6 カーソルも縦書きビューのカーソル位置に同期する。
      *  tate-editing 展開中はカーソル同期をスキップ（収束時の selectionchange で同期される）。 */
     private commitToCm6(): void {
@@ -198,10 +200,27 @@ export class VerticalWritingView extends ItemView {
         const cm6 = this.getCm6Editor();
         if (!cm6) return;
         const content = el.getValue();
-        if (content === cm6.getValue()) return; // 差分なし
-        const lastLine = cm6.lastLine();
-        const lastCh = cm6.getLine(lastLine).length;
-        cm6.replaceRange(content, { line: 0, ch: 0 }, { line: lastLine, ch: lastCh });
+        const cm6Content = cm6.getValue();
+        if (content === cm6Content) return; // 差分なし
+
+        // 変更部分だけを replaceRange する（前後の共通部分を除外）
+        let fromStart = 0;
+        while (fromStart < cm6Content.length && fromStart < content.length
+               && cm6Content[fromStart] === content[fromStart]) {
+            fromStart++;
+        }
+        let fromEndOld = cm6Content.length;
+        let fromEndNew = content.length;
+        while (fromEndOld > fromStart && fromEndNew > fromStart
+               && cm6Content[fromEndOld - 1] === content[fromEndNew - 1]) {
+            fromEndOld--;
+            fromEndNew--;
+        }
+        cm6.replaceRange(
+            content.slice(fromStart, fromEndNew),
+            cm6.offsetToPos(fromStart),
+            cm6.offsetToPos(fromEndOld),
+        );
         // コミット完了 → 確定済み内容を更新（onExternalModify の誤検知防止）
         this.lastCommittedContent = content;
         // tate-editing 展開中はカーソル同期をスキップ（カーソルが生テキスト内にあり

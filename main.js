@@ -1162,7 +1162,9 @@ var VerticalWritingView = class extends import_obsidian.ItemView {
     new import_obsidian.Notice("\u7E26\u66F8\u304D\u30A8\u30C7\u30A3\u30BF\u3092\u4F7F\u7528\u3059\u308B\u306B\u306F\u3001\u5BFE\u5FDC\u3059\u308B Markdown \u30D3\u30E5\u30FC\u3092\u958B\u3044\u3066\u304F\u3060\u3055\u3044");
     return false;
   }
-  /** 縦書きエディタの現在内容を CM6 に全文 replaceRange でコミットする。
+  /** 縦書きエディタの現在内容を CM6 に差分 replaceRange でコミットする。
+   *  変更されていない共通の先頭・末尾を除き、実際に変化した部分だけを置換する。
+   *  これにより CM6 が正確な編集位置を記録し、Undo 後のカーソルが編集箇所に来る。
    *  内容が変化した場合は CM6 カーソルも縦書きビューのカーソル位置に同期する。
    *  tate-editing 展開中はカーソル同期をスキップ（収束時の selectionchange で同期される）。 */
   commitToCm6() {
@@ -1171,10 +1173,23 @@ var VerticalWritingView = class extends import_obsidian.ItemView {
     const cm6 = this.getCm6Editor();
     if (!cm6) return;
     const content = el.getValue();
-    if (content === cm6.getValue()) return;
-    const lastLine = cm6.lastLine();
-    const lastCh = cm6.getLine(lastLine).length;
-    cm6.replaceRange(content, { line: 0, ch: 0 }, { line: lastLine, ch: lastCh });
+    const cm6Content = cm6.getValue();
+    if (content === cm6Content) return;
+    let fromStart = 0;
+    while (fromStart < cm6Content.length && fromStart < content.length && cm6Content[fromStart] === content[fromStart]) {
+      fromStart++;
+    }
+    let fromEndOld = cm6Content.length;
+    let fromEndNew = content.length;
+    while (fromEndOld > fromStart && fromEndNew > fromStart && cm6Content[fromEndOld - 1] === content[fromEndNew - 1]) {
+      fromEndOld--;
+      fromEndNew--;
+    }
+    cm6.replaceRange(
+      content.slice(fromStart, fromEndNew),
+      cm6.offsetToPos(fromStart),
+      cm6.offsetToPos(fromEndOld)
+    );
     this.lastCommittedContent = content;
     if (!el.isInlineExpanded()) {
       const segs = buildSegmentMap(content);
