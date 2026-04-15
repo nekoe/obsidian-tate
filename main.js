@@ -1210,6 +1210,7 @@ var VerticalWritingView = class extends import_obsidian.ItemView {
     if (isRedo) cm6.redo();
     else cm6.undo();
     const newContent = cm6.getValue();
+    if (newContent === prevContent) return;
     const srcOffset = this.deriveUndoRedoCursor(prevContent, newContent);
     editorEl.applyFromCm6(newContent, srcOffset);
   }

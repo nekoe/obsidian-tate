@@ -247,6 +247,8 @@ export class VerticalWritingView extends ItemView {
         // CM6 側で Undo/Redo を実行
         if (isRedo) cm6.redo(); else cm6.undo();
         const newContent = cm6.getValue();
+        // 内容が変化しなかった場合（スタック空など）はカーソルを動かさない
+        if (newContent === prevContent) return;
         // 差分からカーソル位置を算出（復元された/削除されたテキストの末尾）
         const srcOffset = this.deriveUndoRedoCursor(prevContent, newContent);
         editorEl.applyFromCm6(newContent, srcOffset);
