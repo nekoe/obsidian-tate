@@ -77,7 +77,8 @@ export class VerticalWritingView extends ItemView {
                 return;
             }
             // ナビゲーションキーはコミットポイント（次の入力を別の CM6 エントリにする）
-            if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown',
+            // isComposing=true の間は IME 変換候補選択なので除外する
+            if (!e.isComposing && ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown',
                  'Home', 'End', 'PageUp', 'PageDown'].includes(e.key)) {
                 this.commitToCm6();
                 editorEl.resetBurst();

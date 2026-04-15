@@ -1054,7 +1054,7 @@ var VerticalWritingView = class extends import_obsidian.ItemView {
         this.doUndoRedo(editorEl, e.shiftKey);
         return;
       }
-      if ([
+      if (!e.isComposing && [
         "ArrowLeft",
         "ArrowRight",
         "ArrowUp",
