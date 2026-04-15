@@ -846,6 +846,16 @@ export class EditorElement {
         this.setVisibleOffset(viewOffset);
     }
 
+    /** tate-editing スパンが展開中かどうかを返す（view.ts のカーソル同期判定用）。 */
+    isInlineExpanded(): boolean {
+        return this.expandedEl !== null;
+    }
+
+    /** 縦書き表示上の現在カーソル位置（visible offset）を返す（view.ts のカーソル同期用）。 */
+    getViewCursorOffset(): number {
+        return this.getVisibleOffset();
+    }
+
     // カーソルを node の直後に移動する。
     // ライブ変換・コマンドで要素を挿入した直後に呼び、カーソルが要素内に入って
     // selectionchange → expandForEditing() が即発火するのを防ぐ。

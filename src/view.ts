@@ -2,6 +2,7 @@ import { Editor, ItemView, MarkdownView, Notice, TFile, WorkspaceLeaf } from 'ob
 import type TatePlugin from './main';
 import { SyncCoordinator } from './sync/SyncCoordinator';
 import { EditorElement } from './ui/EditorElement';
+import { buildSegmentMap, viewToSrc } from './ui/SegmentMap';
 import { TatePluginSettings } from './settings';
 
 export const TATE_VIEW_TYPE = 'tate-vertical-writing';
@@ -180,7 +181,8 @@ export class VerticalWritingView extends ItemView {
     }
 
     /** 縦書きエディタの現在内容を CM6 に全文 replaceRange でコミットする。
-     *  CM6 と内容が一致している場合はスキップ。 */
+     *  内容が変化した場合は CM6 カーソルも縦書きビューのカーソル位置に同期する。
+     *  tate-editing 展開中はカーソル同期をスキップ（収束時の selectionchange で同期される）。 */
     private commitToCm6(): void {
         const el = this.editorEl;
         if (!el) return;
@@ -191,6 +193,13 @@ export class VerticalWritingView extends ItemView {
         const lastLine = cm6.lastLine();
         const lastCh = cm6.getLine(lastLine).length;
         cm6.replaceRange(content, { line: 0, ch: 0 }, { line: lastLine, ch: lastCh });
+        // tate-editing 展開中はカーソル同期をスキップ（カーソルが生テキスト内にあり
+        // viewToSrc の入力空間と一致しないため）。収束後の commitToCm6 で正しく同期される。
+        if (!el.isInlineExpanded()) {
+            const segs = buildSegmentMap(content);
+            const srcOffset = viewToSrc(segs, el.getViewCursorOffset());
+            cm6.setCursor(cm6.offsetToPos(srcOffset));
+        }
         el.resetBurst();
     }
 

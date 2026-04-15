@@ -108,6 +108,18 @@ function srcToView(segs, srcOffset) {
   const last = segs[segs.length - 1];
   return last.viewStart + last.viewLen;
 }
+function viewToSrc(segs, viewOffset) {
+  for (const seg of segs) {
+    if (seg.viewLen === 0) continue;
+    if (viewOffset < seg.viewStart + seg.viewLen) {
+      const local = Math.max(0, viewOffset - seg.viewStart);
+      return mapViewLocalToSrc(seg, local);
+    }
+  }
+  if (segs.length === 0) return 0;
+  const last = segs[segs.length - 1];
+  return last.srcStart + last.srcLen;
+}
 function mapSrcLocalToView(seg, local) {
   var _a, _b;
   switch (seg.kind) {
@@ -130,6 +142,19 @@ function mapSrcLocalToView(seg, local) {
       if (local <= seg.viewLen) return seg.viewStart + local;
       return seg.viewStart + seg.viewLen;
     }
+  }
+}
+function mapViewLocalToSrc(seg, local) {
+  switch (seg.kind) {
+    case "plain":
+    case "newline":
+      return seg.srcStart + local;
+    case "ruby-explicit":
+      return seg.srcStart + 1 + local;
+    case "ruby-implicit":
+    case "tcy":
+    case "bouten":
+      return seg.srcStart + local;
   }
 }
 function tokenize(source) {
@@ -897,6 +922,14 @@ var EditorElement = class {
     const viewOffset = srcToView(segs, srcOffset);
     this.setVisibleOffset(viewOffset);
   }
+  /** tate-editing スパンが展開中かどうかを返す（view.ts のカーソル同期判定用）。 */
+  isInlineExpanded() {
+    return this.expandedEl !== null;
+  }
+  /** 縦書き表示上の現在カーソル位置（visible offset）を返す（view.ts のカーソル同期用）。 */
+  getViewCursorOffset() {
+    return this.getVisibleOffset();
+  }
   // カーソルを node の直後に移動する。
   // ライブ変換・コマンドで要素を挿入した直後に呼び、カーソルが要素内に入って
   // selectionchange → expandForEditing() が即発火するのを防ぐ。
@@ -1123,7 +1156,8 @@ var VerticalWritingView = class extends import_obsidian.ItemView {
     return false;
   }
   /** 縦書きエディタの現在内容を CM6 に全文 replaceRange でコミットする。
-   *  CM6 と内容が一致している場合はスキップ。 */
+   *  内容が変化した場合は CM6 カーソルも縦書きビューのカーソル位置に同期する。
+   *  tate-editing 展開中はカーソル同期をスキップ（収束時の selectionchange で同期される）。 */
   commitToCm6() {
     const el = this.editorEl;
     if (!el) return;
@@ -1134,6 +1168,11 @@ var VerticalWritingView = class extends import_obsidian.ItemView {
     const lastLine = cm6.lastLine();
     const lastCh = cm6.getLine(lastLine).length;
     cm6.replaceRange(content, { line: 0, ch: 0 }, { line: lastLine, ch: lastCh });
+    if (!el.isInlineExpanded()) {
+      const segs = buildSegmentMap(content);
+      const srcOffset = viewToSrc(segs, el.getViewCursorOffset());
+      cm6.setCursor(cm6.offsetToPos(srcOffset));
+    }
     el.resetBurst();
   }
   /** Undo (isRedo=false) または Redo (isRedo=true) を CM6 に委譲し、
