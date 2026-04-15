@@ -199,12 +199,28 @@ export function viewToSrc(segs: readonly Segment[], viewOffset: number): number;
 
 **差分更新（Incremental Update）— 将来の最適化（Phase 4）**
 
-現状 `buildSegmentMap()` は全文スキャン（O(文書長)）。長編文書でコミットポイントが頻繁に来ると重くなる可能性がある。
+現状 `buildSegmentMap()` は全文スキャン（O(文書長)）。`commitToCm6()` と `applyFromCm6()` から呼ばれる。
 
-最適化案: 変更があった段落（行）だけを再パースし、それ以降のセグメントの `srcStart` / `viewStart` に差分（`offsetDelta`）を加算してずらす。
-- 変更行を特定 → その行のセグメントを再計算 → 後続セグメントを `±delta` でシフト
-- 全文パース不要なので長編でも高速
-- 未変更セグメントの再利用により O(変更行のソース長 + 後続セグメント数) に削減できる
+**実施の必要性（優先度: 低）**
+
+| 文書規模 | 文字数 | 現状コスト | 体感 |
+|---|---|---|---|
+| 短編 | 〜1万字 | < 0.1ms | 問題なし |
+| 中編 | 〜5万字 | 〜0.5ms | 問題なし |
+| 長編 | 〜30万字 | 〜3ms | 気になりうる |
+
+コミットポイントは高頻度ではない（キー入力ごとではなく nav キー・compositionend など）ため、一般的な Obsidian ノートでは問題にならない。将来 View→Source クリック位置マッピングを実装する場合（`viewToSrc` を `selectionchange` 内で毎回呼ぶ）は優先度が上がる。
+
+**設計案**
+
+案A（推奨）: キャッシュ + デルタ更新。`commitToCm6()` が既に計算している `fromStart` / `fromEndOld` / `fromEndNew` を使う。
+1. `fromStart` を含むセグメントを特定
+2. `fromStart`〜`fromEndOld` 範囲のセグメントを削除
+3. `content[fromStart..fromEndNew]` を再パースして新セグメントを挿入
+4. 後続セグメントの `srcStart` / `viewStart` を `±delta` でシフト（`delta = fromEndNew - fromEndOld`）
+→ O(変更行のソース長 + 後続セグメント数) に削減
+
+案B: キャッシュのみ（最小コスト）。前回の結果と内容を保持し、同一内容なら再計算をスキップ。`selectionchange` 連打など同一内容を複数回処理するケースに効くが、内容が変わるたびフルスキャンするのは変わらない。
 
 ### ペーストのプレーンテキスト化
 `contenteditable` div はデフォルトでクリップボードの `text/html` を優先してペーストするため、インライン展開スパンのスタイルや外部 HTML のスタイルが貼り付けられてしまう。`paste` イベントで `e.preventDefault()` した後、`e.clipboardData.getData('text/plain')` でプレーンテキストのみ取得し、`document.execCommand('insertText', false, text)` で挿入する。`execCommand('insertText')` は deprecated だが Electron では動作し、カーソル位置への挿入・選択範囲の置換を一括処理できる。ペースト後は `view.ts` の `paste` ハンドラが `commitToCm6()` を即時呼ぶ。
