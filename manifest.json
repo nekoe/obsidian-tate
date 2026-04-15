@@ -1,10 +1,10 @@
 {
-  "id": "obsidian-tate",
-  "name": "TATE",
-  "version": "1.0.0",
-  "minAppVersion": "0.15.0",
-  "description": "縦書きモードプラグイン for Obsidian",
-  "author": "nekoe",
-  "authorUrl": "https://github.com/nekoe",
-  "isDesktopOnly": false
+	"id": "obsidian-tate",
+	"name": "TATE",
+	"version": "1.0.1",
+	"minAppVersion": "0.15.0",
+	"description": "縦書きモードプラグイン for Obsidian",
+	"author": "nekoe",
+	"authorUrl": "https://github.com/nekoe",
+	"isDesktopOnly": false
 }
