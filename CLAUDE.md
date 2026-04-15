@@ -26,13 +26,11 @@ src/
 ├── view.ts                    # VerticalWritingView（ItemView）
 ├── settings.ts                # TatePluginSettings型 + TateSettingTab
 ├── sync/
-│   ├── SyncCoordinator.ts     # 双方向同期制御（外部変更検出・ファイル読み込み）
-│   └── DebounceQueue.ts       # デバウンス（現在未使用）
+│   └── SyncCoordinator.ts     # 双方向同期制御（外部変更検出・ファイル読み込み）
 └── ui/
     ├── EditorElement.ts       # contenteditable div DOM管理
     ├── SegmentMap.ts          # ソースオフセット ↔ 表示オフセット双方向マッピング
-    ├── SegmentMap.test.ts     # SegmentMap ユニットテスト（vitest）
-    └── UndoManager.ts         # 独自 Undo/Redo スタック（現在未使用）
+    └── SegmentMap.test.ts     # SegmentMap ユニットテスト（vitest）
 styles.css                     # 縦書きCSS（writing-mode: vertical-rl）
 manifest.json                  # プラグインメタデータ（id: obsidian-tate）
 ```
