@@ -1,49 +1,51 @@
-# TATE — 縦書きモード for Obsidian
+# TATE — Vertical Writing Mode for Obsidian
 
-Obsidian 用の縦書きエディタプラグインです。`writing-mode: vertical-rl` による本格的な縦書き表示と編集に対応しています。
+An Obsidian plugin that brings authentic vertical writing (縦書き) to your notes. Built on `writing-mode: vertical-rl`, it renders and edits Japanese text in the traditional top-to-bottom, right-to-left layout.
 
-## 機能
+[日本語版 README はこちら](README-ja.md)
 
-### 青空文庫記法によるルビ・縦中横・傍点
+## Features
 
-[青空文庫](https://www.aozora.gr.jp/)の注記記法に対応しています。
+### Ruby, Tate-chu-yoko, and Emphasis Marks via Aozora Notation
 
-| 記法 | 表示 |
-|------|------|
-| `｜東京《とうきょう》` または `東京《とうきょう》`（漢字連続） | ルビ（振り仮名） |
-| `２０２５［＃「２０２５」は縦中横］` | 縦中横（数字などを横向きに） |
-| `春［＃「春」に傍点］` | 傍点（胡麻点） |
+The plugin supports the annotation syntax used by [Aozora Bunko](https://www.aozora.gr.jp/), a digital library of Japanese literature.
 
-**コマンドパレットから設定する**
+| Notation | Renders as |
+|----------|------------|
+| `｜東京《とうきょう》` or `東京《とうきょう》` (consecutive kanji) | Ruby (furigana) |
+| `２０２５［＃「２０２５」は縦中横］` | Tate-chu-yoko (digits/latin rotated upright) |
+| `春［＃「春」に傍点］` | Emphasis dots (sesame marks) |
 
-テキストを選択してコマンドパレット（`Ctrl+P` / `Cmd+P`）を開き、以下のコマンドを実行します。
+**Applying via Command Palette**
 
-- `Ruby: 選択テキストにルビを設定`
-- `TCY: 選択テキストを縦中横にする`
-- `BT: 選択テキストに傍点を付ける`
+Select text, open the command palette (`Ctrl+P` / `Cmd+P`), and run one of:
 
-**インライン編集**
+- `Ruby: Add ruby to selection`
+- `TCY: Make selection tate-chu-yoko`
+- `BT: Add emphasis marks to selection`
 
-カーソルをルビ・縦中横・傍点の要素に移動すると、Aozora 生テキストがその場で展開されます（Obsidian の Markdown エディタと同様の挙動）。カーソルが要素外に移動すると自動的にレンダリングに戻ります。
+**Inline Editing**
 
-### 自動字下げ
+Moving the cursor into a ruby, tate-chu-yoko, or emphasis mark element expands it into raw Aozora text in place — the same behavior as Obsidian's Markdown editor. Moving the cursor out collapses it back to the rendered form.
 
-各段落の行頭を自動的に1文字分インデントします。設定からON/OFFを切り替えられます（デフォルト: ON）。
+### Auto-indent
 
-### 禁則処理
+The first character of each paragraph is automatically indented by one em. Can be toggled in settings (default: on).
 
-行頭・行末に置けない文字（句読点・括弧など）の扱いをブラウザの `line-break` プロパティで制御します。設定から以下のルールセットを選択できます。
+### Line-break Rules (Kinsoku)
 
-| ルール | 説明 |
-|--------|------|
-| `Normal` | 一般的な禁則ルールを適用（デフォルト） |
-| `Strict` | 最も厳格。小書き仮名（っ・ゅなど）も行頭に置かない |
-| `Loose` | 新聞スタイル。制限を緩めて改行を優先 |
-| `Anywhere` | 禁則なし。どこでも改行を許可 |
+Controls which characters are forbidden at the start or end of a line (punctuation, brackets, etc.) via the CSS `line-break` property.
 
-## インストール（開発版）
+| Rule | Description |
+|------|-------------|
+| `Normal` | Standard kinsoku rules (default) |
+| `Strict` | Strictest — small kana (っ, ゅ, etc.) are also kept from line starts |
+| `Loose` | Newspaper style — relaxed rules that favor tighter wrapping |
+| `Anywhere` | No restrictions — break anywhere |
 
-1. リポジトリをクローンしてビルドします
+## Installation (from source)
+
+1. Clone the repository and build:
 
 ```bash
 git clone https://github.com/nekoe/obsidian-tate
@@ -52,27 +54,27 @@ npm install
 npm run build
 ```
 
-2. ビルド成果物を Obsidian のプラグインフォルダにコピーします
+2. Copy the build output to your Obsidian plugins folder:
 
 ```bash
 cp main.js manifest.json styles.css ~/.obsidian/plugins/obsidian-tate/
 ```
 
-3. Obsidian の「設定 → コミュニティプラグイン」でプラグインを有効化します
+3. Enable the plugin in Obsidian under **Settings → Community Plugins**.
 
-## 使い方
+## Usage
 
-- リボンの **¶** アイコン、またはコマンドパレットの `Open vertical writing view` で縦書きビューを開きます
-- 縦書きビューはタブとして開かれ、アクティブなファイルを自動で読み込みます
-- 編集内容は通常のObsidianファイルと双方向に同期されます
+- Click the **¶** icon in the ribbon, or run `Open vertical writing view` from the command palette.
+- The view opens as a tab and automatically loads the active file.
+- Edits are kept in sync with the underlying Obsidian file in both directions.
 
-## 設定
+## Settings
 
-「設定 → TATE」から以下の項目を変更できます。
+Configure under **Settings → TATE**:
 
-| 項目 | 説明 | デフォルト |
-|------|------|-----------|
-| フォントファミリー | 縦書き表示に使うフォント（CSS font-family 形式） | Hiragino Mincho ProN 系 |
-| フォントサイズ | 縦書きビューのフォントサイズ（px） | 18 |
-| 自動字下げ | 各段落の行頭を1文字インデント | ON |
-| 禁則処理 | 行頭・行末の文字制限ルール | Normal |
+| Setting | Description | Default |
+|---------|-------------|---------|
+| Font family | Font used in the vertical view (CSS `font-family` syntax) | Hiragino Mincho ProN |
+| Font size | Font size in the vertical view (px) | 18 |
+| Auto-indent | Indent the first character of each paragraph by 1 em | On |
+| Line-break rule | Kinsoku rule set for line start/end restrictions | Normal |
