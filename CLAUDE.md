@@ -1,68 +1,68 @@
 # obsidian-tate
 
-Obsidian用の縦書きモードプラグイン。
+Vertical writing mode plugin for Obsidian.
 
-## ビルド
+## Build
 
 ```bash
-npm install       # 初回のみ
-npm run dev       # 開発モード（ファイル変更を監視してリビルド）
-npm run build     # プロダクションビルド（TypeScript型チェック + esbuild）
+npm install       # First time only
+npm run dev       # Development mode (watch and rebuild on file changes)
+npm run build     # Production build (TypeScript type check + esbuild)
 ```
 
-ビルド成果物は `main.js`（プロジェクトルート）。
+Build output: `main.js` (project root).
 
-## Obsidianへのインストール（開発時）
+## Install into Obsidian (development)
 
 ```bash
 cp main.js manifest.json styles.css ~/.obsidian/plugins/obsidian-tate/
 ```
 
-## ファイル構成
+## File Structure
 
 ```
 src/
-├── main.ts                    # TatePlugin（エントリポイント）
-├── view.ts                    # VerticalWritingView（ItemView）
-├── settings.ts                # TatePluginSettings型 + TateSettingTab
+├── main.ts                    # TatePlugin (entry point)
+├── view.ts                    # VerticalWritingView (ItemView)
+├── settings.ts                # TatePluginSettings type + TateSettingTab
 ├── sync/
-│   └── SyncCoordinator.ts     # 双方向同期制御（外部変更検出・ファイル読み込み）
+│   └── SyncCoordinator.ts     # Bidirectional sync control (external change detection, file loading)
 └── ui/
-    ├── EditorElement.ts       # contenteditable div DOM管理
-    ├── SegmentMap.ts          # ソースオフセット ↔ 表示オフセット双方向マッピング
-    └── SegmentMap.test.ts     # SegmentMap ユニットテスト（vitest）
-styles.css                     # 縦書きCSS（writing-mode: vertical-rl）
-manifest.json                  # プラグインメタデータ（id: obsidian-tate）
+    ├── EditorElement.ts       # contenteditable div DOM management
+    ├── SegmentMap.ts          # Source offset ↔ view offset bidirectional mapping
+    └── SegmentMap.test.ts     # SegmentMap unit tests (vitest)
+styles.css                     # Vertical writing CSS (writing-mode: vertical-rl)
+manifest.json                  # Plugin metadata (id: obsidian-tate)
 ```
 
-## 開発ガイド
+## Development Guide
 
-- ソースコード（TypeScript・CSS）のコメントはすべて英語で書くこと。
-- 設計上の重要な決定事項や調査結果はデザインドキュメントとして `docs/design/YYYYMMDD_{テーマ}.md` に保存すること。日付はファイル名に埋め込み、意思決定の変遷を履歴として参照できるようにする。
-- 複数のデザインドキュメント間で記述が競合する場合は、日付が新しいドキュメントの内容が正確である。
+- All source code comments (TypeScript and CSS) must be written in English.
+- Important design decisions and research findings must be saved as design documents under `docs/design/YYYYMMDD_{topic}.md`. Dates are embedded in filenames to preserve a history of decision-making over time.
+- When multiple design documents conflict, the document with the more recent date takes precedence.
 
-## 重要な設計上の決定
+## Key Design Decisions
 
-詳細はデザインドキュメント（`docs/design/`）を参照:
+See the design documents in `docs/design/` for details:
 
-- [Proxy Editor モデル（双方向同期・Undo/Redo 設計）](docs/design/20260415_proxy_editor_model.md)
-- [Aozora 記法のパース・シリアライズ・インライン展開](docs/design/20260415_aozora_inline_editing.md)
-- [SegmentMap — ソース ↔ 表示オフセット変換](docs/design/20260415_segment_map.md)
-- [DOM・UX 設計決定（contenteditable div・イベント・ペースト・字下げ）](docs/design/20260415_dom_and_ux.md)
+- [Proxy Editor Model (bidirectional sync and Undo/Redo design)](docs/design/20260415_proxy_editor_model.md)
+- [Aozora Notation: Parsing, Serialization, and Inline Expansion](docs/design/20260415_aozora_inline_editing.md)
+- [SegmentMap — Source ↔ View Offset Mapping](docs/design/20260415_segment_map.md)
+- [DOM and UX Design Decisions (contenteditable div, events, paste, auto-indent)](docs/design/20260415_dom_and_ux.md)
 
-## 設定
+## Settings
 
-`TatePluginSettings`（`src/settings.ts`）:
-- `fontFamily`: CSS font-family 形式（デフォルト: Hiragino Mincho ProN系）
-- `fontSize`: px数値（デフォルト: 18）
-- `autoIndent`: 自動字下げ ON/OFF（デフォルト: `true`）
-- `lineBreak`: 禁則処理ルール `'normal' | 'strict' | 'loose' | 'anywhere'`（デフォルト: `'normal'`）。CSS `line-break` プロパティに直接渡す
+`TatePluginSettings` (`src/settings.ts`):
+- `fontFamily`: CSS font-family string (default: Hiragino Mincho ProN family)
+- `fontSize`: numeric value in px (default: 18)
+- `autoIndent`: auto-indent ON/OFF (default: `true`)
+- `lineBreak`: line-break rule `'normal' | 'strict' | 'loose' | 'anywhere'` (default: `'normal'`). Passed directly to the CSS `line-break` property.
 
-設定変更後は `plugin.applySettingsToAllViews()` を呼んで開いているビューに即時反映する。
+After changing settings, call `plugin.applySettingsToAllViews()` to apply them immediately to all open views.
 
-## Obsidian API 注意点
+## Obsidian API Notes
 
-- `containerEl.children[1]` がItemViewのコンテンツエリア（Obsidianの慣例）
-- `vault.on('modify/delete/rename')` はすべて `registerEvent` で登録すること
-- `getLeaf('tab')` でタブを開く（非推奨メソッドを使わない）
-- `workspace.getLeavesOfType(TATE_VIEW_TYPE)` で既存の縦書きタブを検索する
+- `containerEl.children[1]` is the ItemView content area (Obsidian convention)
+- All `vault.on('modify/delete/rename')` listeners must be registered with `registerEvent`
+- Use `getLeaf('tab')` to open a tab (avoid deprecated methods)
+- Use `workspace.getLeavesOfType(TATE_VIEW_TYPE)` to find existing vertical writing tabs

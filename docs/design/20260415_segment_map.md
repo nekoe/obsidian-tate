@@ -1,10 +1,10 @@
 # SegmentMap — Source ↔ View Offset Bidirectional Mapping
 
-作成日: 2026-04-15
+Created: 2026-04-15
 
-## 概要
+## Overview
 
-`src/ui/SegmentMap.ts` が Aozora 記法テキストの双方向オフセットマッピングを担う。Aozora 記法では `ruby` / `tcy` / `bouten` の注記部分がファイル上（ソース）には存在するが表示上は不可視になるため、ソースオフセットと表示オフセットのズレを吸収する必要がある。
+`src/ui/SegmentMap.ts` handles bidirectional offset mapping for Aozora notation text. In Aozora notation, annotation parts of `ruby` / `tcy` / `bouten` exist in the file (source) but are not visible in the display, so the offset gap between source and view must be absorbed.
 
 ## API
 
@@ -15,55 +15,55 @@ export function srcToView(segs: readonly Segment[], srcOffset: number): number;
 export function viewToSrc(segs: readonly Segment[], viewOffset: number): number;
 ```
 
-## srcLen ルール（ソース上の文字数）
+## srcLen Rules (character count in source)
 
-| 種別 | 記法例 | srcLen |
-|------|--------|--------|
-| `ruby-explicit` | `｜base《rt》` | baseLen + rtLen + 3（`｜`, `《`, `》`）|
-| `ruby-implicit` | `base《rt》` | baseLen + rtLen + 2（`《`, `》`）|
+| Kind | Example notation | srcLen |
+|------|-----------------|--------|
+| `ruby-explicit` | `｜base《rt》` | baseLen + rtLen + 3 (`｜`, `《`, `》`) |
+| `ruby-implicit` | `base《rt》` | baseLen + rtLen + 2 (`《`, `》`) |
 | `tcy` | `content［＃「content」は縦中横］` | contentLen × 2 + 9 |
 | `bouten` | `content［＃「content」に傍点］` | contentLen × 2 + 8 |
 | `newline` | `\n` | 1 |
 
-## srcToView ルール（ソースオフセット → 表示オフセット）
+## srcToView Rules (source offset → view offset)
 
-- `ruby-explicit`: local=0（`｜`）→ viewStart、1..baseLen（base）→ viewStart + local - 1、≥ baseLen + 1（`《rt》`）→ viewStart + baseLen
-- `ruby-implicit`: local 0..baseLen（base）→ viewStart + local、≥ baseLen（`《rt》`）→ viewStart + baseLen
-- `tcy` / `bouten`: local 0..contentLen（content）→ viewStart + local、≥ contentLen（注記部分）→ viewStart + contentLen
+- `ruby-explicit`: local=0 (`｜`) → viewStart; 1..baseLen (base) → viewStart + local − 1; ≥ baseLen + 1 (`《rt》`) → viewStart + baseLen
+- `ruby-implicit`: local 0..baseLen (base) → viewStart + local; ≥ baseLen (`《rt》`) → viewStart + baseLen
+- `tcy` / `bouten`: local 0..contentLen (content) → viewStart + local; ≥ contentLen (annotation part) → viewStart + contentLen
 
-パーサは `parseInlineToHtml()` と同じ優先順位（明示ルビ → tcy → bouten → 省略ルビ）で処理する。
+The parser processes tokens in the same priority order as `parseInlineToHtml()` (explicit ruby → tcy → bouten → implicit ruby).
 
-## 利用箇所
+## Usage
 
-- `commitToCm6()`（`view.ts`）: `viewToSrc()` で表示カーソル位置をソースオフセットに変換し、CM6 カーソルを同期する
-- `applyFromCm6()`（`EditorElement.ts`）: `srcToView()` でソースオフセットを表示オフセットに変換し、`setVisibleOffset()` でカーソルを復元する
+- `commitToCm6()` (`view.ts`): converts the view cursor position to a source offset via `viewToSrc()` to sync the CM6 cursor.
+- `applyFromCm6()` (`EditorElement.ts`): converts a source offset to a view offset via `srcToView()` and restores the cursor with `setVisibleOffset()`.
 
-## 差分更新（Incremental Update）— 将来の最適化
+## Incremental Update — Future Optimization
 
-現状 `buildSegmentMap()` は全文スキャン（O(文書長)）。`commitToCm6()` と `applyFromCm6()` から呼ばれる。
+`buildSegmentMap()` currently performs a full scan (O(document length)). It is called from `commitToCm6()` and `applyFromCm6()`.
 
-### 実施の必要性（優先度: 低）
+### Necessity (priority: low)
 
-| 文書規模 | 文字数 | 現状コスト | 体感 |
+| Document size | Characters | Current cost | Perception |
 |---|---|---|---|
-| 短編 | 〜1万字 | < 0.1ms | 問題なし |
-| 中編 | 〜5万字 | 〜0.5ms | 問題なし |
-| 長編 | 〜30万字 | 〜3ms | 気になりうる |
+| Short | ~10k | < 0.1ms | No issue |
+| Medium | ~50k | ~0.5ms | No issue |
+| Long | ~300k | ~3ms | May be noticeable |
 
-コミットポイントは高頻度ではない（キー入力ごとではなく nav キー・compositionend など）ため、一般的な Obsidian ノートでは問題にならない。将来 View→Source クリック位置マッピングを実装する場合（`viewToSrc` を `selectionchange` 内で毎回呼ぶ）は優先度が上がる。
+Commit points are infrequent (navigation keys, `compositionend`, etc. — not every keystroke), so this is not a problem for typical Obsidian notes. Priority increases if a View→Source click position mapping is implemented in the future (calling `viewToSrc` on every `selectionchange`).
 
-### 設計案
+### Design Options
 
-**案A（推奨）: キャッシュ + デルタ更新**
+**Option A (recommended): Cache + delta update**
 
-`commitToCm6()` が既に計算している `fromStart` / `fromEndOld` / `fromEndNew` を使う:
-1. `fromStart` を含むセグメントを特定
-2. `fromStart`〜`fromEndOld` 範囲のセグメントを削除
-3. `content[fromStart..fromEndNew]` を再パースして新セグメントを挿入
-4. 後続セグメントの `srcStart` / `viewStart` を `±delta` でシフト（`delta = fromEndNew - fromEndOld`）
+Reuse `fromStart` / `fromEndOld` / `fromEndNew` already computed by `commitToCm6()`:
+1. Identify the segment containing `fromStart`
+2. Remove segments in the `fromStart`–`fromEndOld` range
+3. Re-parse `content[fromStart..fromEndNew]` and insert new segments
+4. Shift `srcStart` / `viewStart` of subsequent segments by `±delta` (`delta = fromEndNew − fromEndOld`)
 
-→ O(変更行のソース長 + 後続セグメント数) に削減
+→ Reduces cost to O(source length of changed line + number of subsequent segments)
 
-**案B: キャッシュのみ（最小コスト）**
+**Option B: Cache only (minimal cost)**
 
-前回の結果と内容を保持し、同一内容なら再計算をスキップ。`selectionchange` 連打など同一内容を複数回処理するケースに効くが、内容が変わるたびフルスキャンするのは変わらない。
+Retain the previous result and content; skip recomputation if content is unchanged. Effective for repeated processing of the same content (e.g., rapid `selectionchange` events), but a full scan is still required whenever content changes.

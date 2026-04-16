@@ -1,80 +1,80 @@
-# Proxy Editor モデル — 双方向同期・Undo/Redo 設計
+# Proxy Editor Model — Bidirectional Sync and Undo/Redo Design
 
-作成日: 2026-04-15
+Created: 2026-04-15
 
-## 概要
+## Overview
 
-縦書きビューは「Proxy Editor」として動作する。ファイルへの書き込みは CM6（Obsidian 標準 Markdown エディタ）の autosave に一本化し、縦書きビュー自身はファイルに直接書き込まない。
+The vertical writing view acts as a "Proxy Editor". All file writes are delegated to CM6 (Obsidian's built-in Markdown editor) via autosave; the vertical writing view never writes to the file directly.
 
-## 双方向同期の競合防止
+## Sync Conflict Prevention
 
-- `SyncCoordinator` は読み取り専用（`vault.modify` / `DebounceQueue` を使用しない）
-- `el.innerHTML` への直接代入は input イベントを発生させないため、`isApplyingExternalChange` フラグは不要
-- `SyncCoordinator.loadFile()` と `onExternalModify()` はどちらも非同期（vault.read）なのでシーケンス番号（`loadSeq`, `externalModifySeq`）を使って古い結果を捨てる
-- CM6 autosave が発火した `modify` イベントは内容比較（`externalContent === getEditorValue()`）でスキップ
+- `SyncCoordinator` is read-only (does not use `vault.modify` / `DebounceQueue`)
+- Direct assignment to `el.innerHTML` does not fire input events, so an `isApplyingExternalChange` flag is unnecessary
+- Both `SyncCoordinator.loadFile()` and `onExternalModify()` are async (vault.read), so sequence numbers (`loadSeq`, `externalModifySeq`) are used to discard stale results
+- `modify` events fired by CM6 autosave are skipped via content comparison (`externalContent === getEditorValue()`)
 
-## ビューを閉じるときのデータロスト防止
+## Data Loss Prevention on Close
 
-`onClose()` の先頭で `commitToCm6()` を呼ぶことで、未コミットのバーストを確実に CM6 に書き込む。CM6 がその後 autosave でファイルに保存する。
+`commitToCm6()` is called at the start of `onClose()` to ensure any uncommitted burst is flushed to CM6 before the view closes. CM6 then saves to the file via autosave.
 
-## `commitToCm6()` — 差分コミット
+## `commitToCm6()` — Differential Commit
 
-縦書きビューへの入力は `commitToCm6()`（`view.ts`）で CM6 に差分 `replaceRange` する。前後の共通プレフィックス・サフィックスを除いた変化部分だけを置換するため、CM6 が正確な編集位置を記録し Undo 後のカーソルが編集箇所に来る。
+Input to the vertical writing view is committed to CM6 via differential `replaceRange()` in `commitToCm6()` (`view.ts`). Only the changed region (excluding identical leading/trailing characters) is replaced, so CM6 records the exact edit position and the cursor lands at the edit site after Undo.
 
-## `lastCommittedContent` — IME 競合防止
+## `lastCommittedContent` — IME Conflict Prevention
 
-`VerticalWritingView` が保持する「最後に CM6 にコミットした確定済みテキスト」。IME 変換中は DOM に未確定テキストが含まれるため、`getEditorValue()` をそのまま `onExternalModify()` の比較に使うと CM6 autosave の `modify` イベントで誤ってビューがリセットされる。`lastCommittedContent` は IME 変換中に更新されないため、autosave 由来の `modify` を正しくスキップできる。
+The last confirmed text committed to CM6, held by `VerticalWritingView`. During IME composition, the DOM contains uncommitted text, so using `getValue()` directly in `onExternalModify()` comparison would cause the CM6 autosave `modify` event to erroneously reset the view. Because `lastCommittedContent` is not updated during IME composition, autosave-triggered `modify` events are correctly skipped.
 
-更新タイミング: `commitToCm6()` 完了時・ロード時・外部変更適用時。
+Update timing: on `commitToCm6()` completion, on file load, and on external change application.
 
-## コミットポイント一覧
+## Commit Points
 
-| 操作 | コミットタイミング |
-|------|-----------------|
-| ペースト | `paste` イベント後に即時 |
-| IME 確定 | `compositionend` 後に即時 |
-| ライブ変換 | `input` イベントで `boolean` 返却が `true` のとき |
-| アノテーション収束 | `selectionchange` で `collapseEditing()` が `true` を返したとき |
-| ナビゲーションキー | `keydown` で矢印・Home/End/PgUp/PgDn 検出時 |
-| mousedown | クリック時（バースト終了） |
-| ビューを閉じる | `onClose()` 先頭 |
-| tcy/bouten コマンド | `applyAnnotation()` 内 |
+| Operation | When committed |
+|-----------|---------------|
+| Paste | Immediately after `paste` event |
+| IME confirmation | Immediately after `compositionend` |
+| Live notation conversion | When `input` event handler returns `true` |
+| Annotation collapse | When `collapseEditing()` returns `true` in `selectionchange` |
+| Navigation keys | On `keydown` detecting arrow / Home / End / PgUp / PgDn |
+| mousedown | On click (ends a burst) |
+| Close view | At the start of `onClose()` |
+| tcy/bouten command | Inside `applyAnnotation()` |
 
-## `inBurst` フラグ
+## `inBurst` Flag
 
-`inBurst = true` は「CM6 に未コミットの変更がある」状態を表す。`onBeforeInput()` で `true` にし、`commitToCm6()` 内の `resetBurst()` で `false` に戻す。
+`inBurst = true` means "there are uncommitted changes in CM6". Set to `true` by `onBeforeInput()`; reset to `false` by `resetBurst()` inside `commitToCm6()`.
 
-## Undo/Redo 対応
+## Undo/Redo
 
-Undo/Redo は CM6 に完全委譲する。縦書きビューは独自の Undo スタックを持たない。
+Undo/Redo is fully delegated to CM6. The vertical writing view maintains no Undo stack of its own.
 
-### 実行フロー（`doUndoRedo()`）
+### Execution Flow (`doUndoRedo()`)
 
 ```
-commitToCm6()                    // 未コミットのバーストを先に CM6 に書き込む
+commitToCm6()                    // flush any uncommitted burst to CM6 first
 prevContent = lastCommittedContent
-cm6.undo() / cm6.redo()          // CM6 側で Undo/Redo を実行
+cm6.undo() / cm6.redo()          // execute Undo/Redo on CM6 side
 newContent = cm6.getValue()
-if newContent === prevContent: return  // スタック空などで変化なし → カーソルそのまま
+if newContent === prevContent: return  // stack empty or no change → leave cursor as-is
 srcOffset = deriveUndoRedoCursor(prevContent, newContent)
 editorEl.applyFromCm6(newContent, srcOffset)
 ```
 
-### `cm6.getCursor()` を使わない理由
+### Why `cm6.getCursor()` Is Not Used
 
-`cm6.undo()` 後の `cm6.getCursor()` は「undo されたトランザクションの直前に `setCursor()` でセットした位置」を返す。これは前回の `commitToCm6()` がセットした位置であり、今回の編集箇所とは無関係なためドキュメント端に飛ぶことがある。
+After `cm6.undo()`, `getCursor()` returns the position set by the last `setCursor()` call before the undone transaction. This is the position set by the previous `commitToCm6()` call and is unrelated to the current edit site, causing the cursor to jump to unexpected locations.
 
 ### `deriveUndoRedoCursor(prev, next)`
 
-prevContent → newContent の差分（共通プレフィックス・サフィックスを除く）から `next` 上の変化領域末尾を返す:
-- undo（テキスト復元）: 復元テキストの末尾 → 例:「うえお」削除の undo → 「お」の直後
-- redo（削除の再実行）: 削除点（変化領域の先頭 = fromStart = fromEndNext）
-- 変化なし（スタック空）: 呼び出し元で early return するため到達しない
+Returns the end of the changed region in `next` from the diff between `prevContent` and `newContent` (excluding common prefix/suffix):
+- undo (text restoration): end of restored text — e.g., undoing deletion of "うえお" → just after "お"
+- redo (re-applying deletion): deletion point (start of changed region = fromStart = fromEndNext)
+- no change (empty stack): handled by early return in the caller; never reached here
 
-### `applyFromCm6()` によるカーソル復元
+### Cursor Restoration via `applyFromCm6()`
 
 `EditorElement.applyFromCm6(content, srcOffset)`:
-1. `expandedEl` / `expandedElOriginalText` / `savedRange` をクリア（stale 参照除去）
-2. 内容変化がある場合 `replaceChildren(sanitizeHTMLToDom(parseToHtml(content)))` で DOM を更新
-3. `buildSegmentMap(content)` + `srcToView(segs, srcOffset)` でソースオフセットを表示オフセットに変換
-4. `setVisibleOffset(viewOffset)` でカーソルを設定
+1. Clear `expandedEl` / `expandedElOriginalText` / `savedRange` (remove stale references)
+2. If content changed, update DOM with `replaceChildren(sanitizeHTMLToDom(parseToHtml(content)))`
+3. Convert source offset to view offset using `buildSegmentMap(content)` + `srcToView(segs, srcOffset)`
+4. Set cursor with `setVisibleOffset(viewOffset)`

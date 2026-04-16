@@ -1,107 +1,107 @@
-# Aozora 記法のパース・シリアライズ・インライン展開
+# Aozora Notation: Parsing, Serialization, and Inline Expansion
 
-作成日: 2026-04-15
+Created: 2026-04-15
 
-## Aozora 記法のパース・シリアライズ
+## Aozora Notation Parsing and Serialization
 
-`AozoraParser.ts` が青空文庫記法と DOM 要素の双方向変換を担う。
+`AozoraParser.ts` handles bidirectional conversion between Aozora notation and DOM elements.
 
-### パースパイプライン（`parseToHtml()` / `parseInlineToHtml()` → DOM）
+### Parse Pipeline (`parseToHtml()` / `parseInlineToHtml()` → DOM)
 
-`parseToHtml()` と `parseInlineToHtml()` の 2 層構造:
-- `parseToHtml(text)`: `setValue()` 用。テキストを `\n` で分割し、各段落を `<div>` で包む（字下げのため）。空文字の場合は `''` を返して `:empty::before` プレースホルダーを有効にする
-- `parseInlineToHtml(text)`: `collapseEditing()` 用。`<div>` で包まずインライン記法のみ変換する
+Two-layer structure with `parseToHtml()` and `parseInlineToHtml()`:
+- `parseToHtml(text)`: Used by `setValue()`. Splits text by `\n` and wraps each paragraph in a `<div>` (for indentation). Returns `''` for empty input to enable the `:empty::before` placeholder.
+- `parseInlineToHtml(text)`: Used by `collapseEditing()`. Converts inline notation only, without wrapping in `<div>`.
 
-`applyParsers()` が `ParseSegment[]`（`text` / `html` の union 型）を順番に変換する。優先順位:
+`applyParsers()` processes `ParseSegment[]` (a union type of `text` / `html`) in priority order:
 
-1. 明示ルビ `｜base《rt》`（`|` 半角も受け付ける）→ `<ruby data-ruby-explicit="true">`
-2. 明示縦中横 `X［＃「X」は縦中横］` → `<span data-tcy="explicit" class="tcy">`
-3. 傍点 `X［＃「X」に傍点］` → `<span data-bouten="sesame" class="bouten">`
-4. 省略ルビ `kanji《rt》`（直前の漢字連続を自動検出）→ `<ruby data-ruby-explicit="false">`
+1. Explicit ruby `｜base《rt》` (also accepts half-width `|`) → `<ruby data-ruby-explicit="true">`
+2. Explicit tcy `X［＃「X」は縦中横］` → `<span data-tcy="explicit" class="tcy">`
+3. Bouten `X［＃「X」に傍点］` → `<span data-bouten="sesame" class="bouten">`
+4. Implicit ruby `kanji《rt》` (auto-detects preceding kanji run) → `<ruby data-ruby-explicit="false">`
 
-縦中横・傍点は同一構造の「前方参照型アノテーション記法」なので `splitByAnnotation()` に共通化されている。
+Tcy and bouten share the same "forward-reference annotation" structure and are unified in `splitByAnnotation()`.
 
-### シリアライズ（`serializeNode()` → ファイルテキスト）
+### Serialization (`serializeNode()` → file text)
 
-- `<ruby data-ruby-explicit="true">` → `｜base《rt》`（全角 `｜` U+FF5C で出力）
+- `<ruby data-ruby-explicit="true">` → `｜base《rt》` (full-width `｜` U+FF5C)
 - `<ruby data-ruby-explicit="false">` → `base《rt》`
 - `<span data-tcy="explicit">` → `X［＃「X」は縦中横］`
 - `<span data-bouten="sesame">` → `X［＃「X」に傍点］`
-- `<span class="tate-editing">` → 子ノードのテキストをそのまま返す（インライン展開中の生テキスト）
+- `<span class="tate-editing">` → returns child node text as-is (raw text while inline-expanded)
 
-**重要**: `getValue()` は tate-editing スパン展開中・収束後いずれの状態でも同じ Aozora 生テキストを返す。
+**Important**: `getValue()` returns the same Aozora raw text regardless of whether a tate-editing span is expanded or collapsed.
 
-**ルビ区切り文字 `｜` の表示制御**: シリアライズは全角 `｜` で統一し、収束時は `<ruby>` 要素内なので不可視。インライン展開時の生テキストとしてのみ可視になる。
+**`｜` visibility control**: Serialization always uses full-width `｜`; it is invisible when collapsed inside a `<ruby>` element and only becomes visible as raw text during inline expansion.
 
-### ライブ変換
+### Live Conversion
 
-`》`/`］` 入力時に `handleRubyCompletion()` / `handleTcyCompletion()` / `handleBoutenCompletion()` が記法を要素に変換する。IME 対応のため `input`（`isComposing=false`）と `compositionend` の両方で呼ぶ。全操作は `insertAnnotationElement()` による直接 DOM 操作で統一（`execCommand` 不使用）。`handleTcyCompletion` と `handleBoutenCompletion` は `handleAnnotationCompletion()` に共通化。これらのメソッドは `boolean`（変換が発生したか）を返し、`view.ts` が `true` のとき `commitToCm6()` を呼ぶ。展開中（`expandedEl` が非 null）または DOM 操作中（`isModifyingDom` が true）はライブ変換を行わない（再入防止）。
+On `》` / `］` input, `handleRubyCompletion()` / `handleTcyCompletion()` / `handleBoutenCompletion()` convert the notation into elements. Both `input` (with `isComposing=false`) and `compositionend` are handled for IME support. All operations use `insertAnnotationElement()` for direct DOM manipulation (no `execCommand`). `handleTcyCompletion` and `handleBoutenCompletion` are unified in `handleAnnotationCompletion()`. These methods return `boolean` (whether conversion occurred); `view.ts` calls `commitToCm6()` when `true`. Live conversion is suppressed when inline-expanded (`expandedEl` is non-null) or during DOM manipulation (`isModifyingDom` is true) to prevent reentrancy.
 
-## インライン展開（Obsidian Markdown エディタ風）
+## Inline Expansion (Obsidian Markdown Editor Style)
 
-`document` の `selectionchange` イベントを `registerDomEvent(document, 'selectionchange', ...)` で登録し、カーソル位置に応じて ruby/tcy/bouten 要素をその場で展開・収束する。
+A `selectionchange` event on `document` is registered via `registerDomEvent(document, 'selectionchange', ...)` to expand/collapse ruby/tcy/bouten elements in-place based on cursor position.
 
-### 展開
+### Expansion
 
-カーソルが `<ruby>`・`<span data-tcy="explicit">`・`<span data-bouten>` に入ると `expandForEditing()` が要素を `<span class="tate-editing">` に置換し、Aozora 生テキストを表示する。このとき `expandedElOriginalText` に展開前のテキストを保存する（変化検出用）。`inBurst = false` もリセットする。
+When the cursor enters a `<ruby>`, `<span data-tcy="explicit">`, or `<span data-bouten>` element, `expandForEditing()` replaces it with `<span class="tate-editing">` and displays the Aozora raw text. The original text is saved in `expandedElOriginalText` for change detection. `inBurst = false` is also reset.
 
-### 収束
+### Collapse
 
-カーソルが外れると `collapseEditing()` が `parseInlineToHtml()` で再パースして元の要素に戻す。編集内容は反映される（`parseToHtml()` を使うと段落 `<div>` の中に `<div>` がネストするため禁止）。収束は常に直接 DOM 操作で統一（`execCommand` 不使用）。`collapseEditing()` は `boolean`（内容変化の有無）を返す。`view.ts` の `selectionchange` ハンドラが `true` のとき `commitToCm6()` を呼ぶ。
+When the cursor leaves, `collapseEditing()` re-parses with `parseInlineToHtml()` and restores the original element, incorporating any edits. (`parseToHtml()` is prohibited here as it would nest `<div>` inside a paragraph `<div>`.) Collapse always uses direct DOM manipulation (no `execCommand`). `collapseEditing()` returns `boolean` (whether content changed). The `selectionchange` handler in `view.ts` calls `commitToCm6()` when `true`.
 
-### `collapseEditing()` の前方テキスト取り込み
+### Forward Text Absorption in `collapseEditing()`
 
-`getExtraCharsFromAnnotation()` が「」内容とスパン内前方テキストを比較し、「」内容が長い場合（例: content=`130`, leading=`30` → 差分=`1`文字）は直前テキストノードの末尾から一致する文字を取り込む（例: テキスト `A1` + tcy `30` → 「30」→「130」編集 → テキスト `A` + tcy `130`）。
+`getExtraCharsFromAnnotation()` compares the annotation bracket content against the leading text inside the span. If the bracket content is longer (e.g., content=`130`, leading=`30` → diff=1 char), matching characters are absorbed from the end of the preceding text node (e.g., text `A1` + tcy `30` → edit to `130` → text `A` + tcy `130`).
 
-### `collapseEditing()` の detached ノード対策
+### Detached Node Guard in `collapseEditing()`
 
-`collapseEditing()` の先頭で `expandedEl.isConnected` を確認し、false の場合は `expandedEl` / `expandedElOriginalText` をクリアして即リターンする。detached ノードに `parentNode` / `selectNode` を呼ぶと例外が発生するため。
+At the start of `collapseEditing()`, `expandedEl.isConnected` is checked. If `false`, `expandedEl` / `expandedElOriginalText` are cleared and the method returns immediately. Calling `parentNode` / `selectNode` on a detached node would throw an exception.
 
-### 孤立スパン（orphan span）の検出と再追跡
+### Orphan Span Detection and Re-tracking
 
-`handleSelectionChange()` の `!isModifyingDom` ブロック先頭で `expandedEl` が null または detached のとき `this.el.querySelector('span.tate-editing')` を実行して DOM の実態と同期する。予期せぬ経路で編集スパンが DOM に残った場合のロバストネス対策。再追跡後 `expandedElOriginalText = null` にして `hasChanged = true` とすることで確実に収束させる。
+At the start of the `!isModifyingDom` block in `handleSelectionChange()`, if `expandedEl` is null or detached, `this.el.querySelector('span.tate-editing')` is run to sync with the actual DOM state. This is a robustness measure for cases where an editing span remains in the DOM via an unexpected path. After re-tracking, `expandedElOriginalText = null` and `hasChanged = true` are set to ensure collapse.
 
-### カーソル位置
+### Cursor Position
 
-`rawOffsetForExpand()` が ruby（base/rt それぞれ）・tcy・bouten のカーソル位置を raw テキスト上のオフセットに変換する（tcy/bouten はコンテンツが先頭にあるため `return offset` のみ）。
+`rawOffsetForExpand()` converts the cursor position inside ruby (base/rt separately), tcy, and bouten elements to an offset in the raw text. For tcy/bouten, the content is at the start, so it simply `return offset`.
 
-### 再入防止
+### Reentrancy Prevention
 
-`isModifyingDom` フラグで DOM 操作中の `selectionchange` 再入をブロックする。
+The `isModifyingDom` flag blocks `selectionchange` reentrancy during DOM manipulation.
 
-### `setValue()` との競合防止
+### Conflict Prevention with `setValue()`
 
-`this.expandedEl = null` / `this.expandedElOriginalText = null` / `this.savedRange = null` は `getValue() === content` の早期リターン**より前**に実行すること（detach 済みノード参照を防ぐ）。
+`this.expandedEl = null` / `this.expandedElOriginalText = null` / `this.savedRange = null` must be executed **before** the `getValue() === content` early return (to prevent stale detached node references).
 
-### `collapseEditing()` 後の `savedRange` クリア
+### `savedRange` Cleanup After `collapseEditing()`
 
-`collapseEditing()` は DOM を再構築するため、その直後に `this.savedRange = null` を実行して stale ノード参照を破棄する。
+`collapseEditing()` reconstructs the DOM, so `this.savedRange = null` must be executed immediately after to discard stale node references.
 
-### 複数ビュー対策
+### Multiple View Guard
 
-`handleSelectionChange()` 先頭で `expandedEl` が null かつカーソルがエディタ外の場合は即リターンする。
+At the start of `handleSelectionChange()`, if `expandedEl` is null and the cursor is outside the editor, return immediately.
 
-## コマンドパレットからの記法適用
+## Applying Notation from the Command Palette
 
-`add-ruby` / `add-tcy` / `add-bouten` コマンドで選択テキストに記法を適用できる。
+The `add-ruby` / `add-tcy` / `add-bouten` commands apply notation to the selected text.
 
-### 選択範囲キャッシュ
+### Selection Range Cache
 
-`handleSelectionChange()` の先頭（`isModifyingDom` チェックより前）で、エディタ内に非 collapsed 選択があるとき `savedRange` フィールドに保存する。コマンドパレットを開くとフォーカスが離れるが、エディタ外の selectionchange ではキャッシュを**更新しない**（保持する）ことで、コマンド実行時に選択を復元できる。
+At the start of `handleSelectionChange()` (before the `isModifyingDom` check), if there is a non-collapsed selection inside the editor, it is saved to the `savedRange` field. Opening the command palette moves focus away, but `selectionchange` events outside the editor do **not** update the cache (it is retained), allowing the selection to be restored when the command executes.
 
-### ルビ
+### Ruby
 
-`wrapSelectionWithRuby()` が直接 DOM 操作で `<span class="tate-editing">｜text《》</span>` を挿入する。`expandedEl` と `expandedElOriginalText` を直接セットしてインライン展開状態にする。ユーザーがルビ文字を入力後カーソルを外すと `collapseEditing()` が `<ruby>` 要素に収束し、`view.ts` の selectionchange ハンドラが `commitToCm6()` を呼ぶ。
+`wrapSelectionWithRuby()` inserts `<span class="tate-editing">｜text《》</span>` via direct DOM manipulation. `expandedEl` and `expandedElOriginalText` are set directly to enter inline-expanded state. When the user types the ruby text and moves the cursor away, `collapseEditing()` collapses to a `<ruby>` element, and the `selectionchange` handler in `view.ts` calls `commitToCm6()`.
 
-### 縦中横・傍点
+### Tcy and Bouten
 
-`wrapSelectionWith()` に共通化。`insertAnnotationElement()` で直接 DOM 操作により選択テキストを要素に置換する。`setCursorAfter()` でカーソルを要素の**直後**に置く。カーソルが要素内にあると `selectionchange → expandForEditing()` が呼ばれ意図しない展開が発生するため。
+Unified in `wrapSelectionWith()`. `insertAnnotationElement()` replaces the selected text with an element via direct DOM manipulation. `setCursorAfter()` places the cursor **just after** the element. If the cursor were inside the element, `selectionchange → expandForEditing()` would fire and cause unintended expansion.
 
-### ライブ変換後のカーソル移動
+### Cursor Placement After Live Conversion
 
-`handleRubyCompletion()` / `handleAnnotationCompletion()` でも同様に、`insertAnnotationElement()` + `setCursorAfter()` でカーソルを要素の**直後**に置く。これがないと直後の `selectionchange` で `expandForEditing()` が即発火して記法が展開状態のまま残るように見えてしまう。
+Similarly in `handleRubyCompletion()` / `handleAnnotationCompletion()`, `insertAnnotationElement()` + `setCursorAfter()` places the cursor just after the element. Without this, the immediate `selectionchange` would fire `expandForEditing()` and leave the notation in expanded state.
 
-### エラー通知・CM6 同期
+### Error Notification and CM6 Sync
 
-- 選択なし・ビュー未開は `new Notice(...)` で通知。`editorEl` が null のときは `applyAnnotation()` が早期リターンする（誤メッセージを出さない）
-- ラップ成功後に `view.ts` の `applyAnnotation()` が `commitToCm6()` を呼ぶ（tcy/bouten のみ。ルビは collapseEditing 時に selectionchange 経由でコミット）
+- No selection or view not open: notified via `new Notice(...)`. When `editorEl` is null, `applyAnnotation()` returns early (prevents spurious messages).
+- After a successful wrap, `applyAnnotation()` in `view.ts` calls `commitToCm6()` (tcy/bouten only; ruby is committed via `selectionchange` on `collapseEditing`).
