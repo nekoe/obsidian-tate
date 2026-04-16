@@ -1,7 +1,7 @@
 {
   "name": "obsidian-tate",
   "version": "1.1.0",
-  "description": "縦書きモードプラグイン for Obsidian",
+  "description": "Vertical writing mode for Japanese text.",
   "main": "main.js",
   "scripts": {
     "dev": "node esbuild.config.mjs",
