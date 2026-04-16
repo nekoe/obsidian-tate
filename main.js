@@ -28,10 +28,10 @@ __export(main_exports, {
   default: () => TatePlugin
 });
 module.exports = __toCommonJS(main_exports);
-var import_obsidian3 = require("obsidian");
+var import_obsidian5 = require("obsidian");
 
 // src/view.ts
-var import_obsidian = require("obsidian");
+var import_obsidian3 = require("obsidian");
 
 // src/sync/SyncCoordinator.ts
 var SyncCoordinator = class {
@@ -73,6 +73,9 @@ var SyncCoordinator = class {
     this.currentFile = null;
   }
 };
+
+// src/ui/EditorElement.ts
+var import_obsidian2 = require("obsidian");
 
 // src/ui/SegmentMap.ts
 var KANJI_RE_STR = "[\u4E00-\u9FFF\u3400-\u4DBF\u{20000}-\u{2A6DF}\u3005\u3006\u3024]+";
@@ -412,6 +415,7 @@ function serializeNode(node, rootEl) {
 }
 
 // src/ui/InlineEditor.ts
+var import_obsidian = require("obsidian");
 var InlineEditor = class {
   constructor(el) {
     this.el = el;
@@ -770,10 +774,9 @@ var InlineEditor = class {
     parent.removeChild(this.expandedEl);
     this.expandedEl = null;
     this.expandedElOriginalText = null;
-    const tempDiv = document.createElement("div");
-    tempDiv.innerHTML = html;
-    while (tempDiv.firstChild) {
-      parent.insertBefore(tempDiv.firstChild, nextSibling);
+    const fragment = (0, import_obsidian.sanitizeHTMLToDom)(html);
+    while (fragment.firstChild) {
+      parent.insertBefore(fragment.firstChild, nextSibling);
     }
     this.inBurst = false;
     return hasChanged;
@@ -911,10 +914,10 @@ var EditorElement = class {
     if (this.getValue() === content) return;
     if (preserveCursor && document.activeElement === this.el) {
       const pos = this.getVisibleOffset();
-      this.el.innerHTML = parseToHtml(content);
+      this.el.replaceChildren((0, import_obsidian2.sanitizeHTMLToDom)(parseToHtml(content)));
       this.setVisibleOffset(pos);
     } else {
-      this.el.innerHTML = parseToHtml(content);
+      this.el.replaceChildren((0, import_obsidian2.sanitizeHTMLToDom)(parseToHtml(content)));
     }
   }
   // ---- インライン展開/収束（selectionchange から呼ぶ） ----
@@ -994,7 +997,7 @@ var EditorElement = class {
   applyFromCm6(content, srcOffset) {
     this.inlineEditor.reset();
     if (this.getValue() !== content) {
-      this.el.innerHTML = parseToHtml(content);
+      this.el.replaceChildren((0, import_obsidian2.sanitizeHTMLToDom)(parseToHtml(content)));
     }
     const segs = buildSegmentMap(content);
     const viewOffset = srcToView(segs, srcOffset);
@@ -1064,7 +1067,7 @@ var EditorElement = class {
 
 // src/view.ts
 var TATE_VIEW_TYPE = "tate-vertical-writing";
-var VerticalWritingView = class extends import_obsidian.ItemView {
+var VerticalWritingView = class extends import_obsidian3.ItemView {
   constructor(leaf, plugin) {
     super(leaf);
     this.plugin = plugin;
@@ -1151,17 +1154,17 @@ var VerticalWritingView = class extends import_obsidian.ItemView {
     });
     this.registerEvent(
       this.app.vault.on("modify", (file) => {
-        if (file instanceof import_obsidian.TFile) void syncCoordinator.onExternalModify(file);
+        if (file instanceof import_obsidian3.TFile) void syncCoordinator.onExternalModify(file);
       })
     );
     this.registerEvent(
       this.app.vault.on("delete", (file) => {
-        if (file instanceof import_obsidian.TFile) syncCoordinator.onFileDelete(file);
+        if (file instanceof import_obsidian3.TFile) syncCoordinator.onFileDelete(file);
       })
     );
     this.registerEvent(
       this.app.vault.on("rename", (file, oldPath) => {
-        if (file instanceof import_obsidian.TFile) syncCoordinator.onFileRename(file, oldPath);
+        if (file instanceof import_obsidian3.TFile) syncCoordinator.onFileRename(file, oldPath);
       })
     );
     this.registerEvent(
@@ -1179,7 +1182,7 @@ var VerticalWritingView = class extends import_obsidian.ItemView {
       return;
     }
     for (const leaf of this.app.workspace.getLeavesOfType("markdown")) {
-      if (leaf.view instanceof import_obsidian.MarkdownView && leaf.view.file) {
+      if (leaf.view instanceof import_obsidian3.MarkdownView && leaf.view.file) {
         await syncCoordinator.loadFile(leaf.view.file);
         return;
       }
@@ -1198,7 +1201,7 @@ var VerticalWritingView = class extends import_obsidian.ItemView {
   applyRuby() {
     if (!this.editorEl) return;
     if (!this.editorEl.wrapSelectionWithRuby()) {
-      new import_obsidian.Notice("\u30C6\u30AD\u30B9\u30C8\u3092\u9078\u629E\u3057\u3066\u304F\u3060\u3055\u3044");
+      new import_obsidian3.Notice("\u30C6\u30AD\u30B9\u30C8\u3092\u9078\u629E\u3057\u3066\u304F\u3060\u3055\u3044");
     }
   }
   applyTcy() {
@@ -1210,7 +1213,7 @@ var VerticalWritingView = class extends import_obsidian.ItemView {
   applyAnnotation(wrap) {
     if (!this.editorEl) return;
     if (!wrap(this.editorEl)) {
-      new import_obsidian.Notice("\u30C6\u30AD\u30B9\u30C8\u3092\u9078\u629E\u3057\u3066\u304F\u3060\u3055\u3044");
+      new import_obsidian3.Notice("\u30C6\u30AD\u30B9\u30C8\u3092\u9078\u629E\u3057\u3066\u304F\u3060\u3055\u3044");
     } else {
       this.commitToCm6();
     }
@@ -1223,7 +1226,7 @@ var VerticalWritingView = class extends import_obsidian.ItemView {
     if (!file) return null;
     for (const leaf of this.app.workspace.getLeavesOfType("markdown")) {
       const mv = leaf.view;
-      if (mv instanceof import_obsidian.MarkdownView && mv.file === file) {
+      if (mv instanceof import_obsidian3.MarkdownView && mv.file === file) {
         return mv.editor;
       }
     }
@@ -1234,7 +1237,7 @@ var VerticalWritingView = class extends import_obsidian.ItemView {
   guardCm6(e) {
     if (this.getCm6Editor()) return true;
     e.preventDefault();
-    new import_obsidian.Notice("\u7E26\u66F8\u304D\u30A8\u30C7\u30A3\u30BF\u3092\u4F7F\u7528\u3059\u308B\u306B\u306F\u3001\u5BFE\u5FDC\u3059\u308B Markdown \u30D3\u30E5\u30FC\u3092\u958B\u3044\u3066\u304F\u3060\u3055\u3044");
+    new import_obsidian3.Notice("\u7E26\u66F8\u304D\u30A8\u30C7\u30A3\u30BF\u3092\u4F7F\u7528\u3059\u308B\u306B\u306F\u3001\u5BFE\u5FDC\u3059\u308B Markdown \u30D3\u30E5\u30FC\u3092\u958B\u3044\u3066\u304F\u3060\u3055\u3044");
     return false;
   }
   /** 縦書きエディタの現在内容を CM6 に差分 replaceRange でコミットする。
@@ -1310,14 +1313,14 @@ var VerticalWritingView = class extends import_obsidian.ItemView {
 };
 
 // src/settings.ts
-var import_obsidian2 = require("obsidian");
+var import_obsidian4 = require("obsidian");
 var DEFAULT_SETTINGS = {
   fontFamily: '"Hiragino Mincho ProN", "Yu Mincho", "YuMincho", "MS Mincho", serif',
   fontSize: 18,
   autoIndent: true,
   lineBreak: "normal"
 };
-var TateSettingTab = class extends import_obsidian2.PluginSettingTab {
+var TateSettingTab = class extends import_obsidian4.PluginSettingTab {
   constructor(app, plugin) {
     super(app, plugin);
     this.plugin = plugin;
@@ -1325,23 +1328,23 @@ var TateSettingTab = class extends import_obsidian2.PluginSettingTab {
   display() {
     const { containerEl } = this;
     containerEl.empty();
-    new import_obsidian2.Setting(containerEl).setName("\u7E26\u66F8\u304D\u30D3\u30E5\u30FC \u8A2D\u5B9A").setHeading();
-    new import_obsidian2.Setting(containerEl).setName("\u30D5\u30A9\u30F3\u30C8\u30D5\u30A1\u30DF\u30EA\u30FC").setDesc("\u7E26\u66F8\u304D\u8868\u793A\u306B\u4F7F\u3046\u30D5\u30A9\u30F3\u30C8\uFF08CSS font-family \u5F62\u5F0F\uFF09").addText((text) => text.setPlaceholder('"Hiragino Mincho ProN", serif').setValue(this.plugin.settings.fontFamily).onChange(async (value) => {
+    new import_obsidian4.Setting(containerEl).setName("\u7E26\u66F8\u304D\u30D3\u30E5\u30FC \u8A2D\u5B9A").setHeading();
+    new import_obsidian4.Setting(containerEl).setName("\u30D5\u30A9\u30F3\u30C8\u30D5\u30A1\u30DF\u30EA\u30FC").setDesc("\u7E26\u66F8\u304D\u8868\u793A\u306B\u4F7F\u3046\u30D5\u30A9\u30F3\u30C8\uFF08CSS font-family \u5F62\u5F0F\uFF09").addText((text) => text.setPlaceholder('"Hiragino Mincho ProN", serif').setValue(this.plugin.settings.fontFamily).onChange(async (value) => {
       this.plugin.settings.fontFamily = value;
       await this.plugin.saveSettings();
       this.plugin.applySettingsToAllViews();
     }));
-    new import_obsidian2.Setting(containerEl).setName("\u30D5\u30A9\u30F3\u30C8\u30B5\u30A4\u30BA (px)").setDesc("\u7E26\u66F8\u304D\u30D3\u30E5\u30FC\u306E\u30D5\u30A9\u30F3\u30C8\u30B5\u30A4\u30BA\uFF08\u30D4\u30AF\u30BB\u30EB\uFF09").addSlider((slider) => slider.setLimits(10, 48, 1).setValue(this.plugin.settings.fontSize).setDynamicTooltip().onChange(async (value) => {
+    new import_obsidian4.Setting(containerEl).setName("\u30D5\u30A9\u30F3\u30C8\u30B5\u30A4\u30BA (px)").setDesc("\u7E26\u66F8\u304D\u30D3\u30E5\u30FC\u306E\u30D5\u30A9\u30F3\u30C8\u30B5\u30A4\u30BA\uFF08\u30D4\u30AF\u30BB\u30EB\uFF09").addSlider((slider) => slider.setLimits(10, 48, 1).setValue(this.plugin.settings.fontSize).setDynamicTooltip().onChange(async (value) => {
       this.plugin.settings.fontSize = value;
       await this.plugin.saveSettings();
       this.plugin.applySettingsToAllViews();
     }));
-    new import_obsidian2.Setting(containerEl).setName("\u81EA\u52D5\u5B57\u4E0B\u3052").setDesc("\u5404\u6BB5\u843D\u306E\u884C\u982D\u30921\u6587\u5B57\u5206\u30A4\u30F3\u30C7\u30F3\u30C8\u3059\u308B").addToggle((toggle) => toggle.setValue(this.plugin.settings.autoIndent).onChange(async (value) => {
+    new import_obsidian4.Setting(containerEl).setName("\u81EA\u52D5\u5B57\u4E0B\u3052").setDesc("\u5404\u6BB5\u843D\u306E\u884C\u982D\u30921\u6587\u5B57\u5206\u30A4\u30F3\u30C7\u30F3\u30C8\u3059\u308B").addToggle((toggle) => toggle.setValue(this.plugin.settings.autoIndent).onChange(async (value) => {
       this.plugin.settings.autoIndent = value;
       await this.plugin.saveSettings();
       this.plugin.applySettingsToAllViews();
     }));
-    new import_obsidian2.Setting(containerEl).setName("\u7981\u5247\u51E6\u7406").setDesc("\u884C\u982D\u30FB\u884C\u672B\u306B\u7F6E\u3051\u306A\u3044\u6587\u5B57\u306E\u30EB\u30FC\u30EB\u30BB\u30C3\u30C8\uFF08CSS line-break \u30D7\u30ED\u30D1\u30C6\u30A3\uFF09").addDropdown((dropdown) => dropdown.addOption("normal", "Normal   \u2014 \u4E00\u822C\u7684\u306A\u7981\u5247\u30EB\u30FC\u30EB").addOption("strict", "Strict   \u2014 \u6700\u3082\u53B3\u683C\uFF08\u5C0F\u66F8\u304D\u4EEE\u540D\u3082\u884C\u982D\u4E0D\u53EF\uFF09").addOption("loose", "Loose    \u2014 \u65B0\u805E\u30B9\u30BF\u30A4\u30EB\uFF08\u6539\u884C\u3092\u512A\u5148\uFF09").addOption("anywhere", "Anywhere \u2014 \u7981\u5247\u306A\u3057\uFF08\u3069\u3053\u3067\u3082\u6539\u884C\uFF09").setValue(this.plugin.settings.lineBreak).onChange(async (value) => {
+    new import_obsidian4.Setting(containerEl).setName("\u7981\u5247\u51E6\u7406").setDesc("\u884C\u982D\u30FB\u884C\u672B\u306B\u7F6E\u3051\u306A\u3044\u6587\u5B57\u306E\u30EB\u30FC\u30EB\u30BB\u30C3\u30C8\uFF08CSS line-break \u30D7\u30ED\u30D1\u30C6\u30A3\uFF09").addDropdown((dropdown) => dropdown.addOption("normal", "Normal   \u2014 \u4E00\u822C\u7684\u306A\u7981\u5247\u30EB\u30FC\u30EB").addOption("strict", "Strict   \u2014 \u6700\u3082\u53B3\u683C\uFF08\u5C0F\u66F8\u304D\u4EEE\u540D\u3082\u884C\u982D\u4E0D\u53EF\uFF09").addOption("loose", "Loose    \u2014 \u65B0\u805E\u30B9\u30BF\u30A4\u30EB\uFF08\u6539\u884C\u3092\u512A\u5148\uFF09").addOption("anywhere", "Anywhere \u2014 \u7981\u5247\u306A\u3057\uFF08\u3069\u3053\u3067\u3082\u6539\u884C\uFF09").setValue(this.plugin.settings.lineBreak).onChange(async (value) => {
       this.plugin.settings.lineBreak = value;
       await this.plugin.saveSettings();
       this.plugin.applySettingsToAllViews();
@@ -1350,7 +1353,7 @@ var TateSettingTab = class extends import_obsidian2.PluginSettingTab {
 };
 
 // src/main.ts
-var TatePlugin = class extends import_obsidian3.Plugin {
+var TatePlugin = class extends import_obsidian5.Plugin {
   constructor() {
     super(...arguments);
     this.settings = DEFAULT_SETTINGS;
@@ -1399,7 +1402,7 @@ var TatePlugin = class extends import_obsidian3.Plugin {
   dispatchToView(action) {
     const leaves = this.app.workspace.getLeavesOfType(TATE_VIEW_TYPE);
     if (leaves.length === 0) {
-      new import_obsidian3.Notice("\u7E26\u66F8\u304D\u30D3\u30E5\u30FC\u304C\u958B\u3044\u3066\u3044\u307E\u305B\u3093");
+      new import_obsidian5.Notice("\u7E26\u66F8\u304D\u30D3\u30E5\u30FC\u304C\u958B\u3044\u3066\u3044\u307E\u305B\u3093");
       return;
     }
     action(leaves[0].view);

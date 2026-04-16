@@ -1,3 +1,4 @@
+import { sanitizeHTMLToDom } from 'obsidian';
 import { TatePluginSettings } from '../settings';
 import { buildSegmentMap, srcToView } from './SegmentMap';
 import { parseToHtml, serializeNode } from './AozoraParser';
@@ -29,10 +30,10 @@ export class EditorElement {
 
         if (preserveCursor && document.activeElement === this.el) {
             const pos = this.getVisibleOffset();
-            this.el.innerHTML = parseToHtml(content);
+            this.el.replaceChildren(sanitizeHTMLToDom(parseToHtml(content)));
             this.setVisibleOffset(pos);
         } else {
-            this.el.innerHTML = parseToHtml(content);
+            this.el.replaceChildren(sanitizeHTMLToDom(parseToHtml(content)));
         }
     }
 
@@ -136,7 +137,7 @@ export class EditorElement {
         this.inlineEditor.reset();
         // DOM を更新（差分がある場合のみ）
         if (this.getValue() !== content) {
-            this.el.innerHTML = parseToHtml(content);
+            this.el.replaceChildren(sanitizeHTMLToDom(parseToHtml(content)));
         }
         // CM6 のソースオフセットを可視オフセットに変換してカーソルを復元
         const segs = buildSegmentMap(content);

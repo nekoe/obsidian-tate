@@ -1,3 +1,4 @@
+import { sanitizeHTMLToDom } from 'obsidian';
 import { KANJI_RE_STR, parseInlineToHtml, serializeNode } from './AozoraParser';
 
 export class InlineEditor {
@@ -447,10 +448,9 @@ export class InlineEditor {
         parent.removeChild(this.expandedEl);
         this.expandedEl = null;
         this.expandedElOriginalText = null;
-        const tempDiv = document.createElement('div');
-        tempDiv.innerHTML = html;
-        while (tempDiv.firstChild) {
-            parent.insertBefore(tempDiv.firstChild, nextSibling);
+        const fragment = sanitizeHTMLToDom(html);
+        while (fragment.firstChild) {
+            parent.insertBefore(fragment.firstChild, nextSibling);
         }
 
         // 収束後は次の入力を新バーストとして扱う
