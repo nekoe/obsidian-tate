@@ -20,9 +20,9 @@ The plugin supports the annotation syntax used by [Aozora Bunko](https://www.aoz
 
 Select text, open the command palette (`Ctrl+P` / `Cmd+P`), and run one of:
 
-- `Ruby: Add ruby to selection`
-- `TCY: Make selection tate-chu-yoko`
-- `BT: Add emphasis marks to selection`
+- `Add ruby to selection (Ruby)`
+- `Make selection tate-chu-yoko (Tate-Chuu-Yoko: TCY)`
+- `Add emphasis marks to selection (Bouten)`
 
 **Inline Editing**
 
@@ -64,7 +64,7 @@ cp main.js manifest.json styles.css ~/.obsidian/plugins/obsidian-tate/
 
 ## Usage
 
-- Click the **¶** icon in the ribbon, or run `Open vertical writing view` from the command palette.
+- Run `縦書きViewを開く` from the command palette (`Ctrl+P` / `Cmd+P`).
 - The view opens as a tab and automatically loads the active file.
 - Edits are kept in sync with the underlying Obsidian file in both directions.
 

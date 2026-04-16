@@ -18,9 +18,9 @@ Obsidian 用の縦書きエディタプラグインです。`writing-mode: verti
 
 テキストを選択してコマンドパレット（`Ctrl+P` / `Cmd+P`）を開き、以下のコマンドを実行します。
 
-- `Ruby: 選択テキストにルビを設定`
-- `TCY: 選択テキストを縦中横にする`
-- `BT: 選択テキストに傍点を付ける`
+- `選択テキストにルビを設定 (Ruby)`
+- `選択テキストを縦中横にする (Tate-Chuu-Yoko: TCY)`
+- `選択テキストに傍点を付ける (Bouten)`
 
 **インライン編集**
 
@@ -62,7 +62,7 @@ cp main.js manifest.json styles.css ~/.obsidian/plugins/obsidian-tate/
 
 ## 使い方
 
-- リボンの **¶** アイコン、またはコマンドパレットの `Open vertical writing view` で縦書きビューを開きます
+- コマンドパレット（`Ctrl+P` / `Cmd+P`）から `縦書きViewを開く` を実行して縦書きビューを開きます
 - 縦書きビューはタブとして開かれ、アクティブなファイルを自動で読み込みます
 - 編集内容は通常のObsidianファイルと双方向に同期されます
 
