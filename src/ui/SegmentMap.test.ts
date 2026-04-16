@@ -145,7 +145,7 @@ describe('buildSegmentMap', () => {
     });
 
     it('invalid tcy (content mismatch) is output as plain text', () => {
-        // ZAB where 注記内は AB だが "Z" + AB の直前テキストは "Z" であり "AB" で終わる → valid
+        // ZAB where annotation content is AB and "ZAB" ends with "AB" → valid
         // Let's use a case that actually is invalid: content="XY" but preceding text ends with "AB"
         const src = 'AB［＃「XY」は縦中横］';
         // "AB" does NOT end with "XY" → invalid match
