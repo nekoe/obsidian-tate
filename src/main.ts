@@ -13,8 +13,6 @@ export default class TatePlugin extends Plugin {
             (leaf) => new VerticalWritingView(leaf, this)
         );
 
-        this.addRibbonIcon('pilcrow', '縦書きで開く', () => this.activateView());
-
         this.addCommand({
             id: 'open-tate-view',
             name: 'Open vertical writing view',
