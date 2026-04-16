@@ -947,7 +947,28 @@ var EditorElement = class {
     e.preventDefault();
     const text = (_b = (_a = e.clipboardData) == null ? void 0 : _a.getData("text/plain")) != null ? _b : "";
     if (!text) return;
-    document.execCommand("insertText", false, text);
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return;
+    const range = sel.getRangeAt(0);
+    range.deleteContents();
+    const lines = text.split("\n");
+    for (let i = 0; i < lines.length; i++) {
+      if (i > 0) {
+        const br = document.createElement("br");
+        range.insertNode(br);
+        range.setStartAfter(br);
+        range.collapse(true);
+      }
+      if (lines[i]) {
+        const textNode = document.createTextNode(lines[i]);
+        range.insertNode(textNode);
+        range.setStartAfter(textNode);
+        range.collapse(true);
+      }
+    }
+    sel.removeAllRanges();
+    sel.addRange(range);
+    this.onBeforeInput();
   }
   applySettings(settings) {
     this.el.style.fontFamily = settings.fontFamily;

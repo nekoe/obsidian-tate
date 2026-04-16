@@ -75,10 +75,34 @@ export class EditorElement {
         e.preventDefault();
         const text = e.clipboardData?.getData('text/plain') ?? '';
         if (!text) return;
-        // execCommand('insertText') はカーソル位置へのプレーンテキスト挿入・選択範囲の置換を
-        // 一括処理する（deprecated だが Electron では動作する）。
-        // beforeinput イベントが発火して onBeforeInput() が inBurst = true にする。
-        document.execCommand('insertText', false, text);
+
+        const sel = window.getSelection();
+        if (!sel || sel.rangeCount === 0) return;
+
+        const range = sel.getRangeAt(0);
+        range.deleteContents();
+
+        // 複数行テキストをテキストノードと <br> に分解してカーソル位置に順次挿入する
+        const lines = text.split('\n');
+        for (let i = 0; i < lines.length; i++) {
+            if (i > 0) {
+                const br = document.createElement('br');
+                range.insertNode(br);
+                range.setStartAfter(br);
+                range.collapse(true);
+            }
+            if (lines[i]) {
+                const textNode = document.createTextNode(lines[i]);
+                range.insertNode(textNode);
+                range.setStartAfter(textNode);
+                range.collapse(true);
+            }
+        }
+        sel.removeAllRanges();
+        sel.addRange(range);
+
+        // beforeinput が発火しないため inBurst を手動でセット
+        this.onBeforeInput();
         // view.ts が paste 後に commitToCm6() を呼ぶ
     }
 
