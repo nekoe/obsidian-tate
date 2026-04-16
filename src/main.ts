@@ -27,7 +27,7 @@ export default class TatePlugin extends Plugin {
 
         this.addCommand({
             id: 'add-tcy',
-            name: '選択テキストを縦中横にする (Tate-Chuu-Yoko: TCY)',
+            name: '選択テキストを縦中横にする (Tate-Chu-Yoko: TCY)',
             callback: () => this.dispatchToView(v => v.applyTcy()),
         });
 
