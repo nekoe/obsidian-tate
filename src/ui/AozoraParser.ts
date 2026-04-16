@@ -1,13 +1,13 @@
 // Unicode range for kanji characters (used for implicit ruby detection)
-// CJK Unified Ideographs (U+4E00–U+9FFF) + Extension A (U+3400–U+4DBF) + 繰り返し記号
+// CJK Unified Ideographs (U+4E00–U+9FFF) + Extension A (U+3400–U+4DBF) + iteration marks
 export const KANJI_RE_STR = '[\u4E00-\u9FFF\u3400-\u4DBF\u{20000}-\u{2A6DF}々〆〤]+';
 
-// パーサーパイプラインの中間表現
+// Intermediate representation for the parser pipeline
 type ParseSegment = { type: 'text'; text: string } | { type: 'html'; html: string };
 
-// ---- パーサー（Aozora 記法 → innerHTML） ----
+// ---- Parser (Aozora notation → innerHTML) ----
 
-// ドキュメント全体用: 各段落を <div> で包む（text-indent を段落ごとに適用するため）
+// For full document: wraps each paragraph in a <div> (so text-indent applies per paragraph)
 export function parseToHtml(text: string): string {
     if (!text) return '';
     return text
@@ -16,7 +16,7 @@ export function parseToHtml(text: string): string {
         .join('');
 }
 
-// インライン要素用: <div> で包まずAozora記法をHTML変換する（collapseEditing で使用）
+// For inline elements: converts Aozora notation to HTML without wrapping in <div> (used by collapseEditing)
 export function parseInlineToHtml(text: string): string {
     return applyParsers(text, [
         splitByExplicitRuby,
@@ -26,7 +26,7 @@ export function parseInlineToHtml(text: string): string {
     ]);
 }
 
-// テキストにパーサーを順番に適用し、HTML 文字列を返す
+// Applies parsers in sequence to text and returns an HTML string
 function applyParsers(
     text: string,
     parsers: Array<(t: string) => ParseSegment[]>,
@@ -42,7 +42,7 @@ function applyParsers(
         .join('');
 }
 
-// 明示ルビ ｜base《rt》（または |base《rt》）を分割する
+// Splits explicit ruby ｜base《rt》 (or |base《rt》)
 function splitByExplicitRuby(text: string): ParseSegment[] {
     const result: ParseSegment[] = [];
     const re = /[|｜]([^|｜《》\n]+)《([^《》\n]*)》/g;
@@ -65,7 +65,7 @@ function splitByExplicitRuby(text: string): ParseSegment[] {
     return result;
 }
 
-// 明示縦中横 X［＃「X」は縦中横］ を分割する
+// Splits explicit tate-chu-yoko X［＃「X」は縦中横］
 function splitByExplicitTcy(text: string): ParseSegment[] {
     return splitByAnnotation(
         text,
@@ -74,7 +74,7 @@ function splitByExplicitTcy(text: string): ParseSegment[] {
     );
 }
 
-// 傍点 base［＃「base」に傍点］ を分割する
+// Splits bouten base［＃「base」に傍点］
 function splitByExplicitBouten(text: string): ParseSegment[] {
     return splitByAnnotation(
         text,
@@ -83,7 +83,7 @@ function splitByExplicitBouten(text: string): ParseSegment[] {
     );
 }
 
-// 前方参照型アノテーション記法「content［＃「content」...］」の共通分割ロジック
+// Shared split logic for forward-reference annotation notation: content［＃「content」...］
 function splitByAnnotation(
     text: string,
     re: RegExp,
@@ -97,7 +97,7 @@ function splitByAnnotation(
         const content = m[1];
         const annotationStart = m.index;
 
-        // 注記の直前が content で終わっていなければ無効: マッチ全体を平文として出力
+        // Invalid if the text before the annotation does not end with content: output the whole match as plain text
         if (!text.slice(lastIndex, annotationStart).endsWith(content)) {
             result.push({ type: 'text', text: text.slice(lastIndex, re.lastIndex) });
             lastIndex = re.lastIndex;
@@ -117,7 +117,7 @@ function splitByAnnotation(
     return result;
 }
 
-// 省略ルビ kanji《rt》 を分割する
+// Splits implicit ruby kanji《rt》
 function splitByImplicitRuby(text: string): ParseSegment[] {
     const re = new RegExp(`(${KANJI_RE_STR})《([^《》\\n]*)》`, 'gu');
     const result: ParseSegment[] = [];
@@ -144,11 +144,11 @@ function esc(text: string): string {
     return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-// ---- DOM シリアライザ（innerHTML → Aozora 記法） ----
+// ---- DOM serializer (innerHTML → Aozora notation) ----
 
 /**
- * DOM ノードを Aozora 記法テキストにシリアライズする。
- * rootEl: contenteditable のルート要素（段落末尾 <br> の判定に使用）
+ * Serializes a DOM node to Aozora notation text.
+ * rootEl: root element of the contenteditable div (used to detect trailing <br> at paragraph end)
  */
 export function serializeNode(node: Node, rootEl: HTMLElement): string {
     if (node.nodeType === Node.TEXT_NODE) {
@@ -176,13 +176,13 @@ export function serializeNode(node: Node, rootEl: HTMLElement): string {
                 const content = node.textContent ?? '';
                 return `${content}［＃「${content}」に傍点］`;
             }
-            // tate-editing スパンや不明なスパン: 子ノードをシリアライズ
+            // tate-editing span or unknown span: serialize child nodes
             return Array.from(node.childNodes)
                 .map(n => serializeNode(n, rootEl))
                 .join('');
         }
         case 'BR':
-            // Chrome が contenteditable div の末尾に追加する表示用 <br> はスキップ
+            // Skip the decorative <br> Chrome appends at the end of a contenteditable div
             if (
                 node.parentElement !== rootEl &&
                 node.parentElement?.tagName === 'DIV' &&
@@ -192,7 +192,7 @@ export function serializeNode(node: Node, rootEl: HTMLElement): string {
             }
             return '\n';
         case 'DIV': {
-            // Chrome の contenteditable が生成するブロック div
+            // Block div generated by Chrome's contenteditable
             const content = Array.from(node.childNodes)
                 .map(n => serializeNode(n, rootEl))
                 .join('');

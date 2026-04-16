@@ -39,7 +39,7 @@ var SyncCoordinator = class {
     this.vault = vault;
     this.getEditorValue = getEditorValue;
     this.setEditorValue = setEditorValue;
-    // シーケンス番号: loadFile/onExternalModifyが並走したとき古い結果を捨てる
+    // Sequence numbers: discard stale results when loadFile/onExternalModify run concurrently
     this.loadSeq = 0;
     this.externalModifySeq = 0;
     this.currentFile = null;
@@ -419,19 +419,19 @@ var import_obsidian = require("obsidian");
 var InlineEditor = class {
   constructor(el) {
     this.el = el;
-    // インライン展開中の編集スパン。null なら展開なし。
+    // The editing span currently expanded inline. null if not expanded.
     this.expandedEl = null;
-    // selectionchange ハンドラ内での DOM 操作中に再入しないためのガード
+    // Guard to prevent re-entry during DOM manipulation inside the selectionchange handler
     this.isModifyingDom = false;
-    // expandForEditing 時のシリアライズ済みテキスト（collapseEditing での変化検出用）
+    // Serialized text captured at expandForEditing time (used to detect changes in collapseEditing)
     this.expandedElOriginalText = null;
-    // コマンド実行時に使う選択範囲キャッシュ（コマンドパレット起動でフォーカスが外れた後も保持）
+    // Cached selection range for command execution (retained even after focus leaves due to command palette)
     this.savedRange = null;
-    // CM6 への未コミット変更があることを示すフラグ。
-    // onBeforeInput でセット、commitToCm6() 完了時（resetBurst()）にクリアされる。
+    // Flag indicating there are uncommitted changes pending for CM6.
+    // Set by onBeforeInput, cleared by resetBurst() when commitToCm6() completes.
     this.inBurst = false;
   }
-  // 展開状態・選択キャッシュ・バーストフラグをリセットする（setValue / applyFromCm6 から呼ぶ）
+  // Resets expansion state, selection cache, and burst flag (called from setValue / applyFromCm6)
   reset() {
     this.expandedEl = null;
     this.expandedElOriginalText = null;
@@ -441,9 +441,9 @@ var InlineEditor = class {
   isExpanded() {
     return this.expandedEl !== null;
   }
-  // ---- インライン展開/収束（selectionchange から呼ぶ） ----
-  // カーソル移動のたびに呼ばれ、ruby/tcy 要素を展開・収束する。
-  // collapse によって内容が変化した場合 true を返す（view.ts が commitToCm6 を呼ぶ目安）。
+  // ---- Inline expand/collapse (call from selectionchange) ----
+  // Called on every cursor movement to expand or collapse ruby/tcy elements.
+  // Returns true if collapse changed the content (signal for view.ts to call commitToCm6).
   handleSelectionChange() {
     if (!this.isModifyingDom) {
       if (!this.expandedEl || !this.expandedEl.isConnected) {
@@ -507,9 +507,9 @@ var InlineEditor = class {
     }
     return contentChanged;
   }
-  // ---- ルビ・縦中横ライブ変換（input/compositionend から呼ぶ） ----
-  // 》が入力されたときに直前のルビ記法を <ruby> 要素に変換する。
-  // 変換が行われた場合 true を返す（view.ts が commitToCm6 を呼ぶ目安）。
+  // ---- Ruby / tcy live conversion (call from input/compositionend) ----
+  // Converts a ruby notation just before the cursor to a <ruby> element when 》 is typed.
+  // Returns true if a conversion occurred (signal for view.ts to call commitToCm6).
   handleRubyCompletion() {
     var _a, _b;
     if (this.expandedEl) return false;
@@ -571,19 +571,19 @@ var InlineEditor = class {
       this.isModifyingDom = false;
     }
   }
-  // ］が入力されたときに直前の縦中横記法を <span class="tcy"> 要素に変換する。
-  // 変換が行われた場合 true を返す。
+  // Converts a tate-chu-yoko notation just before the cursor to a <span class="tcy"> when ］ is typed.
+  // Returns true if a conversion occurred.
   handleTcyCompletion() {
     return this.handleAnnotationCompletion("\uFF3D", /［＃「([^「」\n]+)」は縦中横］$/, (c) => this.createTcyEl(c));
   }
-  // ］が入力されたときに直前の傍点記法を <span class="bouten"> 要素に変換する。
-  // 変換が行われた場合 true を返す。
+  // Converts a bouten notation just before the cursor to a <span class="bouten"> when ］ is typed.
+  // Returns true if a conversion occurred.
   handleBoutenCompletion() {
     return this.handleAnnotationCompletion("\uFF3D", /［＃「([^「」\n]+)」に傍点］$/, (c) => this.createBoutenEl(c));
   }
-  // ---- コマンドパレットから呼ぶ選択ラップメソッド ----
-  // 選択テキストを tate-editing スパンとして展開し、カーソルを《》の間に置く
-  // カーソルがスパン外に出ると collapseEditing() が <ruby> 要素に収束する
+  // ---- Selection wrap methods called from the command palette ----
+  // Wraps the selected text in a tate-editing span and places the cursor between 《 and 》
+  // When the cursor leaves the span, collapseEditing() collapses it to a <ruby> element
   wrapSelectionWithRuby() {
     if (this.expandedEl) return false;
     const resolved = this.resolveSelectionRange();
@@ -622,25 +622,25 @@ var InlineEditor = class {
     this.savedRange = null;
     return true;
   }
-  // 選択テキストを縦中横要素に変換する
+  // Wraps the selected text in a tate-chu-yoko element
   wrapSelectionWithTcy() {
     return this.wrapSelectionWith((c) => this.createTcyEl(c));
   }
-  // 選択テキストを傍点要素に変換する
+  // Wraps the selected text in a bouten element
   wrapSelectionWithBouten() {
     return this.wrapSelectionWith((c) => this.createBoutenEl(c));
   }
-  // beforeinput イベントで呼ぶ（view.ts から登録）。
-  // CM6 への未コミット変更があることを示す inBurst フラグをセットする。
+  // Called on the beforeinput event (registered from view.ts).
+  // Sets the inBurst flag to indicate there are uncommitted changes pending for CM6.
   onBeforeInput() {
     this.inBurst = true;
   }
-  // バーストをリセットする（commitToCm6() 完了後・view.ts のナビゲーション処理時に呼ぶ）。
+  // Resets the burst flag (call after commitToCm6() completes or on navigation in view.ts).
   resetBurst() {
     this.inBurst = false;
   }
-  // ---- 選択ラップ・アノテーション完了の共通ロジック ----
-  // tcy/bouten など要素置換型ラップの共通実装
+  // ---- Shared logic for selection wrap and annotation completion ----
+  // Shared implementation for element-replacement wraps (tcy, bouten, etc.)
   wrapSelectionWith(createElement) {
     if (this.expandedEl) return false;
     const resolved = this.resolveSelectionRange();
@@ -664,8 +664,8 @@ var InlineEditor = class {
     this.savedRange = null;
     return true;
   }
-  // tcy/bouten など終端文字で確定するライブ変換の共通実装。
-  // 変換が行われた場合 true を返す。
+  // Shared implementation for live conversions that complete on a terminal character (tcy, bouten, etc.).
+  // Returns true if a conversion occurred.
   handleAnnotationCompletion(endChar, re, createElement) {
     var _a, _b;
     if (this.expandedEl) return false;
@@ -698,8 +698,8 @@ var InlineEditor = class {
       this.isModifyingDom = false;
     }
   }
-  // ---- インライン展開/収束 プライベートヘルパー ----
-  // node の祖先を遡って最初の展開可能要素（ruby/明示tcy）を返す
+  // ---- Private helpers for inline expand/collapse ----
+  // Walks up ancestors from node and returns the first expandable element (ruby or explicit tcy)
   findExpandableAncestor(node) {
     let el = node instanceof HTMLElement ? node : node.parentElement;
     while (el && el !== this.el) {
@@ -710,7 +710,7 @@ var InlineEditor = class {
     }
     return null;
   }
-  // target を生テキストの編集スパンに展開し、カーソルを対応位置に設定する
+  // Expands target into a raw-text editing span and sets the cursor to the corresponding position
   expandForEditing(target, range) {
     const rawText = serializeNode(target, this.el);
     const cursorOffset = this.rawOffsetForExpand(
@@ -737,8 +737,8 @@ var InlineEditor = class {
       }
     }
   }
-  // 編集スパンを収束し、内容を再パースして元の位置に挿入する（カーソルは呼び出し元が処理）。
-  // 内容が変化した場合 true を返す（view.ts が commitToCm6 を呼ぶ目安）。
+  // Collapses the editing span, re-parses its content, and inserts the result at the original position (caller handles cursor).
+  // Returns true if content changed (signal for view.ts to call commitToCm6).
   collapseEditing() {
     var _a, _b, _c;
     if (!this.expandedEl) return false;
@@ -781,7 +781,7 @@ var InlineEditor = class {
     this.inBurst = false;
     return hasChanged;
   }
-  // 要素内のカーソル位置を raw テキスト上の文字オフセットに変換する
+  // Converts the cursor position inside an element to a character offset in raw text
   rawOffsetForExpand(el, node, offset) {
     if (el.tagName === "RUBY") {
       const explicit = el.getAttribute("data-ruby-explicit") !== "false";
@@ -800,7 +800,7 @@ var InlineEditor = class {
       return offset;
     }
   }
-  // savedRange を正規化して { textNode, startOffset, endOffset } を返す。
+  // Normalizes savedRange and returns { textNode, startOffset, endOffset }.
   resolveSelectionRange() {
     const r = this.savedRange;
     if (!r || r.startContainer.nodeType !== Node.TEXT_NODE) return null;
@@ -822,7 +822,7 @@ var InlineEditor = class {
     }
     return null;
   }
-  // テキストノードの [matchStart, matchEnd) を element で置き換える直接 DOM 操作。
+  // Direct DOM operation: replaces the range [matchStart, matchEnd) of the text node with element.
   insertAnnotationElement(textNode, matchStart, matchEnd, element) {
     const parentEl = textNode.parentNode;
     const precedingText = textNode.textContent.slice(0, matchStart);
@@ -834,7 +834,7 @@ var InlineEditor = class {
     if (followingText) parentEl.insertBefore(document.createTextNode(followingText), next);
     return element;
   }
-  // カーソルを node の直後に移動する。
+  // Moves the cursor to just after node.
   setCursorAfter(node) {
     const sel = window.getSelection();
     if (!sel) return;
@@ -844,8 +844,8 @@ var InlineEditor = class {
     sel.removeAllRanges();
     sel.addRange(r);
   }
-  // インライン編集後の収束時に、アノテーション「」内容がスパン内の前方テキストより
-  // 長い場合に直前テキストノードから取り込むべき文字列を返す。
+  // After inline editing, on collapse: returns the characters to absorb from the preceding text node
+  // when the annotation 「」content is longer than the leading text inside the span.
   getExtraCharsFromAnnotation(rawText) {
     const patterns = [
       /［＃「([^「」\n]+)」は縦中横］/,
@@ -920,11 +920,11 @@ var EditorElement = class {
       this.el.replaceChildren((0, import_obsidian2.sanitizeHTMLToDom)(parseToHtml(content)));
     }
   }
-  // ---- インライン展開/収束（selectionchange から呼ぶ） ----
+  // ---- Inline expand/collapse (call from selectionchange) ----
   handleSelectionChange() {
     return this.inlineEditor.handleSelectionChange();
   }
-  // ---- ルビ・縦中横ライブ変換（input/compositionend から呼ぶ） ----
+  // ---- Ruby / tcy live conversion (call from input/compositionend) ----
   handleRubyCompletion() {
     return this.inlineEditor.handleRubyCompletion();
   }
@@ -934,7 +934,7 @@ var EditorElement = class {
   handleBoutenCompletion() {
     return this.inlineEditor.handleBoutenCompletion();
   }
-  // ---- コマンドパレットから呼ぶ選択ラップメソッド ----
+  // ---- Selection wrap methods called from the command palette ----
   wrapSelectionWithRuby() {
     return this.inlineEditor.wrapSelectionWithRuby();
   }
@@ -944,7 +944,7 @@ var EditorElement = class {
   wrapSelectionWithBouten() {
     return this.inlineEditor.wrapSelectionWithBouten();
   }
-  // paste イベントハンドラ: リッチテキストを排除してプレーンテキストのみを挿入する
+  // Paste handler: strips rich text and inserts plain text only
   handlePaste(e) {
     var _a, _b;
     e.preventDefault();
@@ -984,16 +984,16 @@ var EditorElement = class {
   focus() {
     this.el.focus();
   }
-  // beforeinput イベントで呼ぶ（view.ts から登録）。
+  // Called on beforeinput event (registered from view.ts).
   onBeforeInput() {
     this.inlineEditor.onBeforeInput();
   }
-  // バーストをリセットする（commitToCm6() 完了後・view.ts のナビゲーション処理時に呼ぶ）。
+  // Resets the burst flag (call after commitToCm6() completes or on navigation in view.ts).
   resetBurst() {
     this.inlineEditor.resetBurst();
   }
-  // CM6 の Undo/Redo 後に呼ぶ。content を縦書きビューに適用し、
-  // srcOffset（CM6 のカーソル位置）を srcToView で変換してカーソルを復元する。
+  // Called after CM6 Undo/Redo. Applies content to the vertical writing view and
+  // restores the cursor by converting srcOffset (CM6 cursor position) via srcToView.
   applyFromCm6(content, srcOffset) {
     this.inlineEditor.reset();
     if (this.getValue() !== content) {
@@ -1003,15 +1003,15 @@ var EditorElement = class {
     const viewOffset = srcToView(segs, srcOffset);
     this.setVisibleOffset(viewOffset);
   }
-  /** tate-editing スパンが展開中かどうかを返す（view.ts のカーソル同期判定用）。 */
+  /** Returns whether a tate-editing span is currently expanded (used by view.ts to decide cursor sync). */
   isInlineExpanded() {
     return this.inlineEditor.isExpanded();
   }
-  /** 縦書き表示上の現在カーソル位置（visible offset）を返す（view.ts のカーソル同期用）。 */
+  /** Returns the current cursor position in the vertical writing view as a visible offset (used by view.ts for cursor sync). */
   getViewCursorOffset() {
     return this.getVisibleOffset();
   }
-  // ---- カーソル操作（<rt> 内を除いた visible 文字数でオフセット管理） ----
+  // ---- Cursor operations (offset managed in visible character count, excluding <rt>) ----
   getVisibleOffset() {
     const sel = window.getSelection();
     if (!sel || sel.rangeCount === 0) return 0;
@@ -1073,8 +1073,8 @@ var VerticalWritingView = class extends import_obsidian3.ItemView {
     this.plugin = plugin;
     this.editorEl = null;
     this.syncCoordinator = null;
-    // CM6 に最後にコミットした確定済みテキスト。
-    // onExternalModify の比較に使い、IME 未確定テキストを含む getValue() との混同を防ぐ。
+    // Last committed text written to CM6.
+    // Used for comparison in onExternalModify to avoid confusion with getValue() which may contain uncommitted IME text.
     this.lastCommittedContent = "";
   }
   getViewType() {
@@ -1095,7 +1095,7 @@ var VerticalWritingView = class extends import_obsidian3.ItemView {
     editorEl.applySettings(this.plugin.settings);
     const syncCoordinator = new SyncCoordinator(
       this.app.vault,
-      // 比較には確定済みテキストを使う（IME 未確定テキストを含む getValue() ではない）
+      // Use committed text for comparison (not getValue() which may contain uncommitted IME text)
       () => this.lastCommittedContent,
       (content, preserveCursor) => {
         this.lastCommittedContent = content;
@@ -1218,8 +1218,8 @@ var VerticalWritingView = class extends import_obsidian3.ItemView {
       this.commitToCm6();
     }
   }
-  // ---- CM6 連携ヘルパー ----
-  /** currentFile を開いている MarkdownView の CM6 エディタを返す。見つからなければ null。 */
+  // ---- CM6 integration helpers ----
+  /** Returns the CM6 editor for the MarkdownView currently showing currentFile, or null if not found. */
   getCm6Editor() {
     var _a;
     const file = (_a = this.syncCoordinator) == null ? void 0 : _a.currentFile;
@@ -1232,19 +1232,19 @@ var VerticalWritingView = class extends import_obsidian3.ItemView {
     }
     return null;
   }
-  /** CM6 エディタが利用できない場合、入力イベントをキャンセルして Notice を出す。
-   *  CM6 が利用可能なら true を返す。 */
+  /** Cancels the input event and shows a Notice if the CM6 editor is unavailable.
+   *  Returns true if CM6 is available. */
   guardCm6(e) {
     if (this.getCm6Editor()) return true;
     e.preventDefault();
     new import_obsidian3.Notice("\u7E26\u66F8\u304D\u30A8\u30C7\u30A3\u30BF\u3092\u4F7F\u7528\u3059\u308B\u306B\u306F\u3001\u5BFE\u5FDC\u3059\u308B Markdown \u30D3\u30E5\u30FC\u3092\u958B\u3044\u3066\u304F\u3060\u3055\u3044");
     return false;
   }
-  /** 縦書きエディタの現在内容を CM6 に差分 replaceRange でコミットする。
-   *  変更されていない共通の先頭・末尾を除き、実際に変化した部分だけを置換する。
-   *  これにより CM6 が正確な編集位置を記録し、Undo 後のカーソルが編集箇所に来る。
-   *  内容が変化した場合は CM6 カーソルも縦書きビューのカーソル位置に同期する。
-   *  tate-editing 展開中はカーソル同期をスキップ（収束時の selectionchange で同期される）。 */
+  /** Commits the current content of the vertical writing editor to CM6 using differential replaceRange.
+   *  Only the changed region (excluding identical leading/trailing characters) is replaced.
+   *  This lets CM6 record the exact edit position so the cursor lands at the edit site after Undo.
+   *  When content changes, the CM6 cursor is also synced to the vertical writing view cursor.
+   *  Cursor sync is skipped while tate-editing is expanded (synced via selectionchange on collapse). */
   commitToCm6() {
     const el = this.editorEl;
     if (!el) return;
@@ -1276,10 +1276,10 @@ var VerticalWritingView = class extends import_obsidian3.ItemView {
     }
     el.resetBurst();
   }
-  /** Undo (isRedo=false) または Redo (isRedo=true) を CM6 に委譲し、
-   *  コンテンツ差分からカーソル位置を算出して復元する。
-   *  cm6.getCursor() は使わない: undo 後のカーソルは「undo したトランザクションの
-   *  直前に setCursor() で置いた位置」になるため、編集箇所と無関係な位置になり得る。 */
+  /** Delegates Undo (isRedo=false) or Redo (isRedo=true) to CM6 and restores
+   *  the cursor position derived from the content diff.
+   *  cm6.getCursor() is not used: after undo, getCursor() returns the position set by the
+   *  last setCursor() call before the undone transaction, which may be unrelated to the edit site. */
   doUndoRedo(editorEl, isRedo) {
     const cm6 = this.getCm6Editor();
     if (!cm6) return;
@@ -1293,10 +1293,10 @@ var VerticalWritingView = class extends import_obsidian3.ItemView {
     editorEl.applyFromCm6(newContent, srcOffset);
     this.lastCommittedContent = newContent;
   }
-  /** undo/redo 前後のコンテンツ差分から適切なカーソル位置を算出する。
-   *  prev→next の変化領域の末尾（next 上のオフセット）を返す。
-   *  undo（テキスト復元）: 復元テキストの末尾 → 例:「うえお」削除のundo → 「お」の直後
-   *  redo（削除の再実行）: 削除点（変化領域の先頭）→ 次の入力位置として自然 */
+  /** Derives the appropriate cursor position from the content diff before and after undo/redo.
+   *  Returns the end of the changed region in next (offset in next).
+   *  undo (text restoration): end of restored text — e.g., undoing deletion of "うえお" → just after "お"
+   *  redo (re-applying deletion): deletion point (start of changed region) — natural position for next input */
   deriveUndoRedoCursor(prev, next) {
     let fromStart = 0;
     while (fromStart < prev.length && fromStart < next.length && prev[fromStart] === next[fromStart]) {

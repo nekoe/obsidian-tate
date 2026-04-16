@@ -10,8 +10,8 @@ export const TATE_VIEW_TYPE = 'tate-vertical-writing';
 export class VerticalWritingView extends ItemView {
     private editorEl: EditorElement | null = null;
     private syncCoordinator: SyncCoordinator | null = null;
-    // CM6 に最後にコミットした確定済みテキスト。
-    // onExternalModify の比較に使い、IME 未確定テキストを含む getValue() との混同を防ぐ。
+    // Last committed text written to CM6.
+    // Used for comparison in onExternalModify to avoid confusion with getValue() which may contain uncommitted IME text.
     private lastCommittedContent = '';
 
     constructor(leaf: WorkspaceLeaf, private readonly plugin: TatePlugin) {
@@ -27,32 +27,32 @@ export class VerticalWritingView extends ItemView {
         container.empty();
         container.addClass('tate-container');
 
-        // ローカル変数に代入することでクロージャ内での ! 不要を排除
+        // Assign to local variables to avoid non-null assertions inside closures
         const editorEl = new EditorElement(container);
         this.editorEl = editorEl;
         editorEl.applySettings(this.plugin.settings);
 
         const syncCoordinator = new SyncCoordinator(
             this.app.vault,
-            // 比較には確定済みテキストを使う（IME 未確定テキストを含む getValue() ではない）
+            // Use committed text for comparison (not getValue() which may contain uncommitted IME text)
             () => this.lastCommittedContent,
             (content, preserveCursor) => {
-                // ロード・外部変更適用時は確定済み内容も更新する
+                // Update committed content on file load and external change application
                 this.lastCommittedContent = content;
                 editorEl.setValue(content, preserveCursor);
             },
         );
         this.syncCoordinator = syncCoordinator;
 
-        // registerDomEvent で登録することで onClose 時に自動解除される
+        // Registered via registerDomEvent so listeners are automatically removed on onClose
 
         this.registerDomEvent(editorEl.el, 'paste', (e: ClipboardEvent) => {
-            if (!this.guardCm6(e)) return; // CM6 がなければブロック
+            if (!this.guardCm6(e)) return; // Block if CM6 is unavailable
             editorEl.handlePaste(e);
-            this.commitToCm6(); // ペーストは即時コミット
+            this.commitToCm6(); // Paste is an immediate commit point
         });
         this.registerDomEvent(editorEl.el, 'beforeinput', (e: InputEvent) => {
-            if (!this.guardCm6(e)) return; // CM6 がなければ入力をブロック（readonly）
+            if (!this.guardCm6(e)) return; // Block input if CM6 is unavailable (read-only)
             editorEl.onBeforeInput();
         });
         this.registerDomEvent(editorEl.el, 'input', (e: Event) => {
@@ -60,32 +60,32 @@ export class VerticalWritingView extends ItemView {
                 const annotated = editorEl.handleRubyCompletion()
                                || editorEl.handleTcyCompletion()
                                || editorEl.handleBoutenCompletion();
-                if (annotated) this.commitToCm6(); // 記法変換は即時コミット
+                if (annotated) this.commitToCm6(); // Notation conversion is an immediate commit point
             }
         });
         this.registerDomEvent(editorEl.el, 'compositionend', () => {
             editorEl.handleRubyCompletion();
             editorEl.handleTcyCompletion();
             editorEl.handleBoutenCompletion();
-            this.commitToCm6(); // IME 確定はコミットポイント
+            this.commitToCm6(); // IME confirmation is a commit point
         });
         this.registerDomEvent(document, 'selectionchange', () => {
             const contentChanged = editorEl.handleSelectionChange();
-            if (contentChanged) this.commitToCm6(); // collapse で内容が変わった場合のみ
+            if (contentChanged) this.commitToCm6(); // Commit only if collapse changed content
         });
         this.registerDomEvent(editorEl.el, 'mousedown', () => {
-            this.commitToCm6(); // クリックはバースト終了 = コミットポイント
+            this.commitToCm6(); // Click ends a burst = commit point
             editorEl.resetBurst();
         });
         this.registerDomEvent(editorEl.el, 'keydown', (e: KeyboardEvent) => {
-            // Ctrl+Z / Cmd+Z: Undo、Ctrl+Shift+Z / Cmd+Shift+Z: Redo
+            // Ctrl+Z / Cmd+Z: Undo,  Ctrl+Shift+Z / Cmd+Shift+Z: Redo
             if ((e.metaKey || e.ctrlKey) && !e.altKey && e.key === 'z') {
                 e.preventDefault();
                 this.doUndoRedo(editorEl, e.shiftKey);
                 return;
             }
-            // ナビゲーションキーはコミットポイント（次の入力を別の CM6 エントリにする）
-            // isComposing=true の間は IME 変換候補選択なので除外する
+            // Navigation keys are commit points (to record the next input as a separate CM6 history entry)
+            // Skip while isComposing=true (user is selecting IME candidates)
             if (!e.isComposing && ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown',
                  'Home', 'End', 'PageUp', 'PageDown'].includes(e.key)) {
                 this.commitToCm6();
@@ -109,7 +109,7 @@ export class VerticalWritingView extends ItemView {
             })
         );
 
-        // file-open は active-leaf-change より正確にファイル切り替えを検知できる
+        // file-open detects file switches more reliably than active-leaf-change
         this.registerEvent(
             this.app.workspace.on('file-open', (file) => {
                 if (!file || file === syncCoordinator.currentFile) return;
@@ -121,13 +121,13 @@ export class VerticalWritingView extends ItemView {
     }
 
     private async loadInitialFile(syncCoordinator: SyncCoordinator): Promise<void> {
-        // 縦書きビューを開く直前にアクティブだったファイルを使う
+        // Use the file that was active just before the vertical writing view was opened
         const activeFile = this.app.workspace.getActiveFile();
         if (activeFile) {
             await syncCoordinator.loadFile(activeFile);
             return;
         }
-        // アクティブファイルがなければ開いている Markdown ビューの先頭ファイルを使う
+        // If no active file, fall back to the first file in an open Markdown view
         for (const leaf of this.app.workspace.getLeavesOfType('markdown')) {
             if (leaf.view instanceof MarkdownView && leaf.view.file) {
                 await syncCoordinator.loadFile(leaf.view.file);
@@ -137,7 +137,7 @@ export class VerticalWritingView extends ItemView {
     }
 
     onClose(): Promise<void> {
-        // 閉じる前に未コミットの変更を CM6 に書き込む
+        // Flush any uncommitted changes to CM6 before closing
         this.commitToCm6();
         this.syncCoordinator?.dispose();
         return Promise.resolve();
@@ -152,7 +152,7 @@ export class VerticalWritingView extends ItemView {
         if (!this.editorEl.wrapSelectionWithRuby()) {
             new Notice('テキストを選択してください');
         }
-        // Ruby はインライン展開状態になるため、collapseEditing 完了時に commitToCm6 が呼ばれる
+        // Ruby enters inline-expand state; commitToCm6 is called when collapseEditing completes
     }
     applyTcy(): void    { this.applyAnnotation(el => el.wrapSelectionWithTcy()); }
     applyBouten(): void { this.applyAnnotation(el => el.wrapSelectionWithBouten()); }
@@ -162,13 +162,13 @@ export class VerticalWritingView extends ItemView {
         if (!wrap(this.editorEl)) {
             new Notice('テキストを選択してください');
         } else {
-            this.commitToCm6(); // tcy/bouten は即時確定するのでコミット
+            this.commitToCm6(); // tcy/bouten finalize immediately, so commit
         }
     }
 
-    // ---- CM6 連携ヘルパー ----
+    // ---- CM6 integration helpers ----
 
-    /** currentFile を開いている MarkdownView の CM6 エディタを返す。見つからなければ null。 */
+    /** Returns the CM6 editor for the MarkdownView currently showing currentFile, or null if not found. */
     private getCm6Editor(): Editor | null {
         const file = this.syncCoordinator?.currentFile;
         if (!file) return null;
@@ -181,8 +181,8 @@ export class VerticalWritingView extends ItemView {
         return null;
     }
 
-    /** CM6 エディタが利用できない場合、入力イベントをキャンセルして Notice を出す。
-     *  CM6 が利用可能なら true を返す。 */
+    /** Cancels the input event and shows a Notice if the CM6 editor is unavailable.
+     *  Returns true if CM6 is available. */
     private guardCm6(e: Event): boolean {
         if (this.getCm6Editor()) return true;
         e.preventDefault();
@@ -190,11 +190,11 @@ export class VerticalWritingView extends ItemView {
         return false;
     }
 
-    /** 縦書きエディタの現在内容を CM6 に差分 replaceRange でコミットする。
-     *  変更されていない共通の先頭・末尾を除き、実際に変化した部分だけを置換する。
-     *  これにより CM6 が正確な編集位置を記録し、Undo 後のカーソルが編集箇所に来る。
-     *  内容が変化した場合は CM6 カーソルも縦書きビューのカーソル位置に同期する。
-     *  tate-editing 展開中はカーソル同期をスキップ（収束時の selectionchange で同期される）。 */
+    /** Commits the current content of the vertical writing editor to CM6 using differential replaceRange.
+     *  Only the changed region (excluding identical leading/trailing characters) is replaced.
+     *  This lets CM6 record the exact edit position so the cursor lands at the edit site after Undo.
+     *  When content changes, the CM6 cursor is also synced to the vertical writing view cursor.
+     *  Cursor sync is skipped while tate-editing is expanded (synced via selectionchange on collapse). */
     private commitToCm6(): void {
         const el = this.editorEl;
         if (!el) return;
@@ -202,9 +202,9 @@ export class VerticalWritingView extends ItemView {
         if (!cm6) return;
         const content = el.getValue();
         const cm6Content = cm6.getValue();
-        if (content === cm6Content) return; // 差分なし
+        if (content === cm6Content) return; // No diff
 
-        // 変更部分だけを replaceRange する（前後の共通部分を除外）
+        // Replace only the changed region (skip identical leading/trailing characters)
         let fromStart = 0;
         while (fromStart < cm6Content.length && fromStart < content.length
                && cm6Content[fromStart] === content[fromStart]) {
@@ -222,10 +222,10 @@ export class VerticalWritingView extends ItemView {
             cm6.offsetToPos(fromStart),
             cm6.offsetToPos(fromEndOld),
         );
-        // コミット完了 → 確定済み内容を更新（onExternalModify の誤検知防止）
+        // Commit complete — update last committed content (prevents false positives in onExternalModify)
         this.lastCommittedContent = content;
-        // tate-editing 展開中はカーソル同期をスキップ（カーソルが生テキスト内にあり
-        // viewToSrc の入力空間と一致しないため）。収束後の commitToCm6 で正しく同期される。
+        // Skip cursor sync while tate-editing is expanded (the cursor is inside raw text,
+        // which is not in the same space as viewToSrc input). Sync happens in the next commitToCm6 after collapse.
         if (!el.isInlineExpanded()) {
             const segs = buildSegmentMap(content);
             const srcOffset = viewToSrc(segs, el.getViewCursorOffset());
@@ -234,43 +234,43 @@ export class VerticalWritingView extends ItemView {
         el.resetBurst();
     }
 
-    /** Undo (isRedo=false) または Redo (isRedo=true) を CM6 に委譲し、
-     *  コンテンツ差分からカーソル位置を算出して復元する。
-     *  cm6.getCursor() は使わない: undo 後のカーソルは「undo したトランザクションの
-     *  直前に setCursor() で置いた位置」になるため、編集箇所と無関係な位置になり得る。 */
+    /** Delegates Undo (isRedo=false) or Redo (isRedo=true) to CM6 and restores
+     *  the cursor position derived from the content diff.
+     *  cm6.getCursor() is not used: after undo, getCursor() returns the position set by the
+     *  last setCursor() call before the undone transaction, which may be unrelated to the edit site. */
     private doUndoRedo(editorEl: EditorElement, isRedo: boolean): void {
         const cm6 = this.getCm6Editor();
         if (!cm6) return;
-        // 未コミットの変更があれば先にコミット（CM6 undo/redo の基準を揃える）
+        // Commit any uncommitted changes first (to align the CM6 undo/redo baseline)
         this.commitToCm6();
-        // commitToCm6 後の lastCommittedContent が「undo/redo 前の確定済み内容」
+        // lastCommittedContent after commitToCm6 is the confirmed content before undo/redo
         const prevContent = this.lastCommittedContent;
-        // CM6 側で Undo/Redo を実行
+        // Execute Undo/Redo on the CM6 side
         if (isRedo) cm6.redo(); else cm6.undo();
         const newContent = cm6.getValue();
-        // 内容が変化しなかった場合（スタック空など）はカーソルを動かさない
+        // If content did not change (empty stack etc.), leave cursor as-is
         if (newContent === prevContent) return;
-        // 差分からカーソル位置を算出（復元された/削除されたテキストの末尾）
+        // Derive cursor position from the diff (end of the restored/deleted text)
         const srcOffset = this.deriveUndoRedoCursor(prevContent, newContent);
         editorEl.applyFromCm6(newContent, srcOffset);
-        // CM6 の新状態に合わせて確定済み内容を更新する。
-        // これをしないと CM6 autosave の modify イベントで onExternalModify() が誤検知し、
-        // undo 直後の入力中に tate view の DOM がリセットされてカーソルジャンプが発生する。
+        // Update last committed content to reflect the new CM6 state.
+        // Without this, onExternalModify() would misfire on the CM6 autosave modify event,
+        // causing the tate view DOM to reset and the cursor to jump during input right after undo.
         this.lastCommittedContent = newContent;
     }
 
-    /** undo/redo 前後のコンテンツ差分から適切なカーソル位置を算出する。
-     *  prev→next の変化領域の末尾（next 上のオフセット）を返す。
-     *  undo（テキスト復元）: 復元テキストの末尾 → 例:「うえお」削除のundo → 「お」の直後
-     *  redo（削除の再実行）: 削除点（変化領域の先頭）→ 次の入力位置として自然 */
+    /** Derives the appropriate cursor position from the content diff before and after undo/redo.
+     *  Returns the end of the changed region in next (offset in next).
+     *  undo (text restoration): end of restored text — e.g., undoing deletion of "うえお" → just after "お"
+     *  redo (re-applying deletion): deletion point (start of changed region) — natural position for next input */
     private deriveUndoRedoCursor(prev: string, next: string): number {
-        // 共通プレフィックスを飛ばす
+        // Skip common prefix
         let fromStart = 0;
         while (fromStart < prev.length && fromStart < next.length
                && prev[fromStart] === next[fromStart]) {
             fromStart++;
         }
-        // 共通サフィックスを飛ばす
+        // Skip common suffix
         let fromEndPrev = prev.length;
         let fromEndNext = next.length;
         while (fromEndPrev > fromStart && fromEndNext > fromStart
@@ -278,7 +278,7 @@ export class VerticalWritingView extends ItemView {
             fromEndPrev--;
             fromEndNext--;
         }
-        // next 上の変化領域末尾を返す
+        // Return the end of the changed region in next
         return fromEndNext;
     }
 }

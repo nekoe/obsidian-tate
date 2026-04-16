@@ -2,24 +2,24 @@ import { sanitizeHTMLToDom } from 'obsidian';
 import { KANJI_RE_STR, parseInlineToHtml, serializeNode } from './AozoraParser';
 
 export class InlineEditor {
-    // インライン展開中の編集スパン。null なら展開なし。
+    // The editing span currently expanded inline. null if not expanded.
     private expandedEl: HTMLSpanElement | null = null;
-    // selectionchange ハンドラ内での DOM 操作中に再入しないためのガード
+    // Guard to prevent re-entry during DOM manipulation inside the selectionchange handler
     private isModifyingDom = false;
-    // expandForEditing 時のシリアライズ済みテキスト（collapseEditing での変化検出用）
+    // Serialized text captured at expandForEditing time (used to detect changes in collapseEditing)
     private expandedElOriginalText: string | null = null;
-    // コマンド実行時に使う選択範囲キャッシュ（コマンドパレット起動でフォーカスが外れた後も保持）
+    // Cached selection range for command execution (retained even after focus leaves due to command palette)
     private savedRange: {
         startContainer: Node; startOffset: number;
         endContainer: Node; endOffset: number;
     } | null = null;
-    // CM6 への未コミット変更があることを示すフラグ。
-    // onBeforeInput でセット、commitToCm6() 完了時（resetBurst()）にクリアされる。
+    // Flag indicating there are uncommitted changes pending for CM6.
+    // Set by onBeforeInput, cleared by resetBurst() when commitToCm6() completes.
     private inBurst = false;
 
     constructor(private readonly el: HTMLDivElement) {}
 
-    // 展開状態・選択キャッシュ・バーストフラグをリセットする（setValue / applyFromCm6 から呼ぶ）
+    // Resets expansion state, selection cache, and burst flag (called from setValue / applyFromCm6)
     reset(): void {
         this.expandedEl = null;
         this.expandedElOriginalText = null;
@@ -31,20 +31,20 @@ export class InlineEditor {
         return this.expandedEl !== null;
     }
 
-    // ---- インライン展開/収束（selectionchange から呼ぶ） ----
+    // ---- Inline expand/collapse (call from selectionchange) ----
 
-    // カーソル移動のたびに呼ばれ、ruby/tcy 要素を展開・収束する。
-    // collapse によって内容が変化した場合 true を返す（view.ts が commitToCm6 を呼ぶ目安）。
+    // Called on every cursor movement to expand or collapse ruby/tcy elements.
+    // Returns true if collapse changed the content (signal for view.ts to call commitToCm6).
     handleSelectionChange(): boolean {
-        // DOM操作外かつエディタ内に非collapsed選択があるときのみキャッシュを更新
-        // （外れたときは保持することでコマンドパレット起動後も参照できる）
+        // Update the cache only when not in DOM manipulation and there is a non-collapsed selection inside the editor
+        // (retaining it when focus leaves allows access after the command palette is opened)
         if (!this.isModifyingDom) {
-            // expandedEl と DOM の tate-editing スパンを同期させる
+            // Synchronize expandedEl with the actual tate-editing span in the DOM
             if (!this.expandedEl || !this.expandedEl.isConnected) {
                 const actualSpan = this.el.querySelector('span.tate-editing') as HTMLSpanElement | null;
                 if (actualSpan !== this.expandedEl) {
                     this.expandedEl = actualSpan;
-                    // 元テキスト不明のため null にして hasChanged = true にする
+                    // Original text is unknown, so set to null to force hasChanged = true
                     this.expandedElOriginalText = null;
                 }
             }
@@ -65,7 +65,7 @@ export class InlineEditor {
             }
         }
         if (this.isModifyingDom) return false;
-        // エディタ外の selectionchange は展開中でない限り早期リターン（複数ビュー対策）
+        // Early return for selectionchange outside the editor unless expanded (guards against multiple views)
         const sel0 = window.getSelection();
         if (!this.expandedEl && (!sel0 || sel0.rangeCount === 0 ||
             !this.el.contains(sel0.getRangeAt(0).startContainer))) return false;
@@ -76,20 +76,20 @@ export class InlineEditor {
             if (!sel || sel.rangeCount === 0) return false;
             const range = sel.getRangeAt(0);
 
-            // カーソルがまだ展開スパン内にある → 何もしない
+            // Cursor is still inside the expanded span — do nothing
             if (this.expandedEl && this.expandedEl.contains(range.startContainer)) {
                 return false;
             }
 
-            // カーソルが展開スパン外に出た → 収束してから意図した位置を復元
+            // Cursor moved outside the expanded span — collapse, then restore the intended position
             if (this.expandedEl) {
                 const savedNode = range.startContainer;
                 const savedOffset = range.startOffset;
 
                 contentChanged = this.collapseEditing();
-                this.savedRange = null; // 収束後は stale ノード参照を破棄
+                this.savedRange = null; // Discard stale node reference after collapse
 
-                // ユーザーがカーソルを移動した先（savedNode）を復元する
+                // Restore the cursor to the position the user moved to (savedNode)
                 if (savedNode.isConnected && this.el.contains(savedNode)) {
                     try {
                         const maxOffset = savedNode.nodeType === Node.TEXT_NODE
@@ -100,16 +100,16 @@ export class InlineEditor {
                         r.collapse(true);
                         sel.removeAllRanges();
                         sel.addRange(r);
-                    } catch { /* ノードが切り離されている場合は無視 */ }
+                    } catch { /* ignore if node was detached */ }
                 }
             }
 
-            // カーソルがエディタ内にあるか確認
+            // Check if cursor is still inside the editor
             if (sel.rangeCount === 0) return contentChanged;
             const currentRange = sel.getRangeAt(0);
             if (!this.el.contains(currentRange.startContainer)) return contentChanged;
 
-            // 展開可能な要素（ruby/tcy）の中にいれば展開
+            // Expand if the cursor is inside an expandable element (ruby/tcy)
             const target = this.findExpandableAncestor(currentRange.startContainer);
             if (target) {
                 this.expandForEditing(target, currentRange);
@@ -120,12 +120,12 @@ export class InlineEditor {
         return contentChanged;
     }
 
-    // ---- ルビ・縦中横ライブ変換（input/compositionend から呼ぶ） ----
+    // ---- Ruby / tcy live conversion (call from input/compositionend) ----
 
-    // 》が入力されたときに直前のルビ記法を <ruby> 要素に変換する。
-    // 変換が行われた場合 true を返す（view.ts が commitToCm6 を呼ぶ目安）。
+    // Converts a ruby notation just before the cursor to a <ruby> element when 》 is typed.
+    // Returns true if a conversion occurred (signal for view.ts to call commitToCm6).
     handleRubyCompletion(): boolean {
-        // 展開中、または DOM 操作中（execCommand の再入）はスキップ
+        // Skip if a span is already expanded or if a DOM modification is in progress
         if (this.expandedEl) return false;
         if (this.isModifyingDom) return false;
 
@@ -139,11 +139,11 @@ export class InlineEditor {
         const textBefore = textNode.textContent?.slice(0, range.startOffset) ?? '';
         if (!textBefore.endsWith('》')) return false;
 
-        // 明示形式を優先: ｜base《rt》 または |base《rt》
+        // Explicit form takes priority: ｜base《rt》 or |base《rt》
         let match = textBefore.match(/[|｜]([^|｜《》\n]+)《([^《》\n]*)》$/);
         let explicit = true;
         if (!match) {
-            // 省略形式: 直前の漢字連続部分《rt》
+            // Implicit form: preceding run of kanji followed by 《rt》
             match = textBefore.match(new RegExp(`(${KANJI_RE_STR})《([^《》\\n]*)》$`, 'u'));
             explicit = false;
         }
@@ -153,8 +153,8 @@ export class InlineEditor {
         const rt = match[2];
         const matchStart = range.startOffset - match[0].length;
 
-        // rt が空（《》と入力された）場合: tate-editing スパンに展開してカーソルを《》の間に置く。
-        // ユーザーがルビ文字を入力してカーソルを外すと collapseEditing() が <ruby> に収束する。
+        // If rt is empty (user typed 《》): expand to a tate-editing span and place cursor between 《 and 》.
+        // When the user types the ruby text and moves the cursor away, collapseEditing() collapses it to a <ruby>.
         if (rt === '') {
             const rawText = explicit ? `｜${base}《》` : `${base}《》`;
             const span = document.createElement('span');
@@ -167,7 +167,7 @@ export class InlineEditor {
                 this.expandedEl = span;
                 this.expandedElOriginalText = rawText;
 
-                // カーソルを《と》の間（rawText.length - 1 = 》の直前）に置く
+                // Place cursor between 《 and 》 (rawText.length - 1 = just before 》)
                 const spanText = span.firstChild as Text | null;
                 if (spanText) {
                     const r = document.createRange();
@@ -190,8 +190,8 @@ export class InlineEditor {
                 textNode, matchStart, range.startOffset, rubyEl,
             );
 
-            // カーソルを要素の直後に置く
-            // カーソルが ruby 内にあると selectionchange → expandForEditing() が即座に発火するため
+            // Place cursor just after the element
+            // If the cursor is inside the ruby, selectionchange fires expandForEditing() immediately
             this.setCursorAfter(inserted);
             return true;
         } finally {
@@ -199,22 +199,22 @@ export class InlineEditor {
         }
     }
 
-    // ］が入力されたときに直前の縦中横記法を <span class="tcy"> 要素に変換する。
-    // 変換が行われた場合 true を返す。
+    // Converts a tate-chu-yoko notation just before the cursor to a <span class="tcy"> when ］ is typed.
+    // Returns true if a conversion occurred.
     handleTcyCompletion(): boolean {
         return this.handleAnnotationCompletion('］', /［＃「([^「」\n]+)」は縦中横］$/, c => this.createTcyEl(c));
     }
 
-    // ］が入力されたときに直前の傍点記法を <span class="bouten"> 要素に変換する。
-    // 変換が行われた場合 true を返す。
+    // Converts a bouten notation just before the cursor to a <span class="bouten"> when ］ is typed.
+    // Returns true if a conversion occurred.
     handleBoutenCompletion(): boolean {
         return this.handleAnnotationCompletion('］', /［＃「([^「」\n]+)」に傍点］$/, c => this.createBoutenEl(c));
     }
 
-    // ---- コマンドパレットから呼ぶ選択ラップメソッド ----
+    // ---- Selection wrap methods called from the command palette ----
 
-    // 選択テキストを tate-editing スパンとして展開し、カーソルを《》の間に置く
-    // カーソルがスパン外に出ると collapseEditing() が <ruby> 要素に収束する
+    // Wraps the selected text in a tate-editing span and places the cursor between 《 and 》
+    // When the cursor leaves the span, collapseEditing() collapses it to a <ruby> element
     wrapSelectionWithRuby(): boolean {
         if (this.expandedEl) return false;
         const resolved = this.resolveSelectionRange();
@@ -232,7 +232,7 @@ export class InlineEditor {
 
         this.isModifyingDom = true;
         try {
-            // 直接 DOM 操作でスパンを挿入（行頭・行末・行中の区別なし）
+            // Direct DOM manipulation: insert span (handles start, end, and middle of line uniformly)
             const precedingText = textNode.textContent!.slice(0, startOffset);
             const followingText = textNode.textContent!.slice(endOffset);
             const next = textNode.nextSibling;
@@ -244,7 +244,7 @@ export class InlineEditor {
             this.expandedEl = span;
             this.expandedElOriginalText = rawText;
 
-            // カーソルを《と》の間（rawText.length - 1 = 》の直前）に設定
+            // Place cursor between 《 and 》 (rawText.length - 1 = just before 》)
             const spanText = span.firstChild as Text | null;
             if (spanText) {
                 const sel = window.getSelection()!;
@@ -262,30 +262,30 @@ export class InlineEditor {
         return true;
     }
 
-    // 選択テキストを縦中横要素に変換する
+    // Wraps the selected text in a tate-chu-yoko element
     wrapSelectionWithTcy(): boolean {
         return this.wrapSelectionWith(c => this.createTcyEl(c));
     }
 
-    // 選択テキストを傍点要素に変換する
+    // Wraps the selected text in a bouten element
     wrapSelectionWithBouten(): boolean {
         return this.wrapSelectionWith(c => this.createBoutenEl(c));
     }
 
-    // beforeinput イベントで呼ぶ（view.ts から登録）。
-    // CM6 への未コミット変更があることを示す inBurst フラグをセットする。
+    // Called on the beforeinput event (registered from view.ts).
+    // Sets the inBurst flag to indicate there are uncommitted changes pending for CM6.
     onBeforeInput(): void {
         this.inBurst = true;
     }
 
-    // バーストをリセットする（commitToCm6() 完了後・view.ts のナビゲーション処理時に呼ぶ）。
+    // Resets the burst flag (call after commitToCm6() completes or on navigation in view.ts).
     resetBurst(): void {
         this.inBurst = false;
     }
 
-    // ---- 選択ラップ・アノテーション完了の共通ロジック ----
+    // ---- Shared logic for selection wrap and annotation completion ----
 
-    // tcy/bouten など要素置換型ラップの共通実装
+    // Shared implementation for element-replacement wraps (tcy, bouten, etc.)
     private wrapSelectionWith(createElement: (content: string) => HTMLElement): boolean {
         if (this.expandedEl) return false;
         const resolved = this.resolveSelectionRange();
@@ -302,8 +302,8 @@ export class InlineEditor {
                 textNode, startOffset, endOffset, newEl,
             );
 
-            // カーソルを挿入要素の直後に置く
-            // カーソルが要素内にあると selectionchange → expandForEditing() が呼ばれるため
+            // Place cursor just after the inserted element
+            // If the cursor is inside the element, selectionchange would trigger expandForEditing()
             this.setCursorAfter(inserted);
         } finally {
             this.isModifyingDom = false;
@@ -312,14 +312,14 @@ export class InlineEditor {
         return true;
     }
 
-    // tcy/bouten など終端文字で確定するライブ変換の共通実装。
-    // 変換が行われた場合 true を返す。
+    // Shared implementation for live conversions that complete on a terminal character (tcy, bouten, etc.).
+    // Returns true if a conversion occurred.
     private handleAnnotationCompletion(
         endChar: string,
         re: RegExp,
         createElement: (content: string) => HTMLElement,
     ): boolean {
-        // 展開中、または DOM 操作中（execCommand の再入）はスキップ
+        // Skip if a span is already expanded or if a DOM modification is in progress
         if (this.expandedEl) return false;
         if (this.isModifyingDom) return false;
         const sel = window.getSelection();
@@ -346,8 +346,8 @@ export class InlineEditor {
                 textNode, annotationStart - content.length, range.startOffset, newEl,
             );
 
-            // カーソルを要素の直後に置く
-            // カーソルが要素内にあると selectionchange → expandForEditing() が即座に発火するため
+            // Place cursor just after the element
+            // If the cursor is inside the element, selectionchange fires expandForEditing() immediately
             this.setCursorAfter(inserted);
             return true;
         } finally {
@@ -355,9 +355,9 @@ export class InlineEditor {
         }
     }
 
-    // ---- インライン展開/収束 プライベートヘルパー ----
+    // ---- Private helpers for inline expand/collapse ----
 
-    // node の祖先を遡って最初の展開可能要素（ruby/明示tcy）を返す
+    // Walks up ancestors from node and returns the first expandable element (ruby or explicit tcy)
     private findExpandableAncestor(node: Node): HTMLElement | null {
         let el: HTMLElement | null = node instanceof HTMLElement ? node : node.parentElement;
         while (el && el !== this.el) {
@@ -369,7 +369,7 @@ export class InlineEditor {
         return null;
     }
 
-    // target を生テキストの編集スパンに展開し、カーソルを対応位置に設定する
+    // Expands target into a raw-text editing span and sets the cursor to the corresponding position
     private expandForEditing(target: HTMLElement, range: Range): void {
         const rawText = serializeNode(target, this.el);
         const cursorOffset = this.rawOffsetForExpand(
@@ -382,8 +382,8 @@ export class InlineEditor {
 
         target.parentNode!.replaceChild(span, target);
         this.expandedEl = span;
-        this.expandedElOriginalText = rawText; // collapseEditing での変化検出用
-        this.inBurst = false; // 展開はナビゲーション操作。直後の入力を新バーストとして扱う。
+        this.expandedElOriginalText = rawText; // Saved for change detection in collapseEditing
+        this.inBurst = false; // Expansion is a navigation action; treat subsequent input as a new burst.
 
         const textNode = span.firstChild as Text | null;
         if (textNode) {
@@ -398,12 +398,12 @@ export class InlineEditor {
         }
     }
 
-    // 編集スパンを収束し、内容を再パースして元の位置に挿入する（カーソルは呼び出し元が処理）。
-    // 内容が変化した場合 true を返す（view.ts が commitToCm6 を呼ぶ目安）。
+    // Collapses the editing span, re-parses its content, and inserts the result at the original position (caller handles cursor).
+    // Returns true if content changed (signal for view.ts to call commitToCm6).
     private collapseEditing(): boolean {
         if (!this.expandedEl) return false;
-        // detached ノードは単純にクリアして終了
-        // （parentNode / selectNode を呼ぶと例外が発生するため）
+        // A detached node must be cleared and returned immediately
+        // (calling parentNode / selectNode on a detached node throws an exception)
         if (!this.expandedEl.isConnected) {
             this.expandedEl = null;
             this.expandedElOriginalText = null;
@@ -417,7 +417,7 @@ export class InlineEditor {
         const parent = this.expandedEl.parentNode!;
         const nextSibling = this.expandedEl.nextSibling;
 
-        // 前方テキスト取り込み補正（hasChanged の場合のみ意味あり）
+        // Leading text absorption correction (only meaningful when hasChanged)
         let precedingTextNode: Text | null = null;
         let precedingChars = '';
         if (hasChanged) {
@@ -435,16 +435,16 @@ export class InlineEditor {
             }
         }
 
-        // parseToHtml は使わない（<div> で包むため段落 <div> 内でネストする）
+        // Do not use parseToHtml (it wraps in <div>, which would nest inside the paragraph <div>)
         const html = parseInlineToHtml(rawText);
 
-        // 前方テキストから取り込んだ分を削除
+        // Remove the absorbed leading characters from the preceding text node
         if (precedingTextNode?.isConnected) {
             precedingTextNode.textContent = (precedingTextNode.textContent ?? '')
                 .slice(0, -precedingChars.length);
         }
 
-        // 直接 DOM 操作（行頭・行末・行中の区別なし）
+        // Direct DOM manipulation (handles start of line, end of line, and middle uniformly)
         parent.removeChild(this.expandedEl);
         this.expandedEl = null;
         this.expandedElOriginalText = null;
@@ -453,12 +453,12 @@ export class InlineEditor {
             parent.insertBefore(fragment.firstChild, nextSibling);
         }
 
-        // 収束後は次の入力を新バーストとして扱う
+        // After collapse, treat the next input as a new burst
         this.inBurst = false;
         return hasChanged;
     }
 
-    // 要素内のカーソル位置を raw テキスト上の文字オフセットに変換する
+    // Converts the cursor position inside an element to a character offset in raw text
     private rawOffsetForExpand(el: HTMLElement, node: Node, offset: number): number {
         if (el.tagName === 'RUBY') {
             const explicit = el.getAttribute('data-ruby-explicit') !== 'false';
@@ -469,32 +469,32 @@ export class InlineEditor {
             const rt = el.querySelector('rt');
 
             if (rt && rt.contains(node)) {
-                // カーソルが <rt> 内: prefix + base + '《' + offset
+                // Cursor is inside <rt>: prefix + base + '《' + offset
                 return prefix + baseLen + 1 + offset;
             } else {
-                // カーソルがベーステキスト内: prefix + offset
+                // Cursor is inside the base text: prefix + offset
                 return prefix + offset;
             }
         } else {
             // <span data-tcy="explicit"> / <span data-bouten>: raw = 'X［＃「X」は縦中横/に傍点］'
-            // コンテンツ部分 (X) は先頭にある
+            // The content part (X) is at the beginning
             return offset;
         }
     }
 
-    // savedRange を正規化して { textNode, startOffset, endOffset } を返す。
+    // Normalizes savedRange and returns { textNode, startOffset, endOffset }.
     private resolveSelectionRange(): { textNode: Text; startOffset: number; endOffset: number } | null {
         const r = this.savedRange;
         if (!r || r.startContainer.nodeType !== Node.TEXT_NODE) return null;
         const textNode = r.startContainer as Text;
 
-        // 理想ケース: 同一テキストノード内の選択
+        // Ideal case: selection within the same text node
         if (r.endContainer === r.startContainer) {
-            if (r.startOffset === r.endOffset) return null; // 空選択
+            if (r.startOffset === r.endOffset) return null; // Empty selection
             return { textNode, startOffset: r.startOffset, endOffset: r.endOffset };
         }
 
-        // Chrome のブロック末尾選択: endContainer が親要素（<div>）の場合
+        // Chrome block-end selection: endContainer is the parent element (<div>)
         const parent = textNode.parentNode;
         if (!parent) return null;
         if (r.endContainer === parent) {
@@ -503,7 +503,7 @@ export class InlineEditor {
                 return { textNode, startOffset: r.startOffset, endOffset: textNode.length };
             }
         }
-        // Chrome のブロック末尾選択: endContainer が同じ親の <br> 兄弟の場合
+        // Chrome block-end selection: endContainer is a sibling <br> under the same parent
         if (r.endContainer.nodeType === Node.ELEMENT_NODE &&
             (r.endContainer as Element).tagName === 'BR' &&
             r.endContainer.parentNode === parent) {
@@ -513,7 +513,7 @@ export class InlineEditor {
         return null;
     }
 
-    // テキストノードの [matchStart, matchEnd) を element で置き換える直接 DOM 操作。
+    // Direct DOM operation: replaces the range [matchStart, matchEnd) of the text node with element.
     private insertAnnotationElement(
         textNode: Text,
         matchStart: number,
@@ -533,7 +533,7 @@ export class InlineEditor {
         return element;
     }
 
-    // カーソルを node の直後に移動する。
+    // Moves the cursor to just after node.
     private setCursorAfter(node: Node): void {
         const sel = window.getSelection();
         if (!sel) return;
@@ -544,8 +544,8 @@ export class InlineEditor {
         sel.addRange(r);
     }
 
-    // インライン編集後の収束時に、アノテーション「」内容がスパン内の前方テキストより
-    // 長い場合に直前テキストノードから取り込むべき文字列を返す。
+    // After inline editing, on collapse: returns the characters to absorb from the preceding text node
+    // when the annotation 「」content is longer than the leading text inside the span.
     private getExtraCharsFromAnnotation(rawText: string): string {
         const patterns = [
             /［＃「([^「」\n]+)」は縦中横］/,

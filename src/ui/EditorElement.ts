@@ -24,7 +24,7 @@ export class EditorElement {
     }
 
     setValue(content: string, preserveCursor: boolean): void {
-        // 外部更新時は展開状態・選択キャッシュをリセット（早期リターンより先に実行）
+        // Reset expansion state and selection cache on external update (must run before the early return)
         this.inlineEditor.reset();
         if (this.getValue() === content) return;
 
@@ -37,13 +37,13 @@ export class EditorElement {
         }
     }
 
-    // ---- インライン展開/収束（selectionchange から呼ぶ） ----
+    // ---- Inline expand/collapse (call from selectionchange) ----
 
     handleSelectionChange(): boolean {
         return this.inlineEditor.handleSelectionChange();
     }
 
-    // ---- ルビ・縦中横ライブ変換（input/compositionend から呼ぶ） ----
+    // ---- Ruby / tcy live conversion (call from input/compositionend) ----
 
     handleRubyCompletion(): boolean {
         return this.inlineEditor.handleRubyCompletion();
@@ -57,7 +57,7 @@ export class EditorElement {
         return this.inlineEditor.handleBoutenCompletion();
     }
 
-    // ---- コマンドパレットから呼ぶ選択ラップメソッド ----
+    // ---- Selection wrap methods called from the command palette ----
 
     wrapSelectionWithRuby(): boolean {
         return this.inlineEditor.wrapSelectionWithRuby();
@@ -71,7 +71,7 @@ export class EditorElement {
         return this.inlineEditor.wrapSelectionWithBouten();
     }
 
-    // paste イベントハンドラ: リッチテキストを排除してプレーンテキストのみを挿入する
+    // Paste handler: strips rich text and inserts plain text only
     handlePaste(e: ClipboardEvent): void {
         e.preventDefault();
         const text = e.clipboardData?.getData('text/plain') ?? '';
@@ -83,7 +83,7 @@ export class EditorElement {
         const range = sel.getRangeAt(0);
         range.deleteContents();
 
-        // 複数行テキストをテキストノードと <br> に分解してカーソル位置に順次挿入する
+        // Split multi-line text into text nodes and <br> elements and insert them at the cursor
         const lines = text.split('\n');
         for (let i = 0; i < lines.length; i++) {
             if (i > 0) {
@@ -102,9 +102,9 @@ export class EditorElement {
         sel.removeAllRanges();
         sel.addRange(range);
 
-        // beforeinput が発火しないため inBurst を手動でセット
+        // beforeinput does not fire, so set inBurst manually
         this.onBeforeInput();
-        // view.ts が paste 後に commitToCm6() を呼ぶ
+        // view.ts calls commitToCm6() after paste
     }
 
     applySettings(settings: TatePluginSettings): void {
@@ -120,42 +120,42 @@ export class EditorElement {
         this.el.focus();
     }
 
-    // beforeinput イベントで呼ぶ（view.ts から登録）。
+    // Called on beforeinput event (registered from view.ts).
     onBeforeInput(): void {
         this.inlineEditor.onBeforeInput();
     }
 
-    // バーストをリセットする（commitToCm6() 完了後・view.ts のナビゲーション処理時に呼ぶ）。
+    // Resets the burst flag (call after commitToCm6() completes or on navigation in view.ts).
     resetBurst(): void {
         this.inlineEditor.resetBurst();
     }
 
-    // CM6 の Undo/Redo 後に呼ぶ。content を縦書きビューに適用し、
-    // srcOffset（CM6 のカーソル位置）を srcToView で変換してカーソルを復元する。
+    // Called after CM6 Undo/Redo. Applies content to the vertical writing view and
+    // restores the cursor by converting srcOffset (CM6 cursor position) via srcToView.
     applyFromCm6(content: string, srcOffset: number): void {
-        // 展開中スパンをクリア（CM6 の状態が真実なので強制リセット）
+        // Clear any expanded span (CM6 state is the source of truth, so force reset)
         this.inlineEditor.reset();
-        // DOM を更新（差分がある場合のみ）
+        // Update DOM only if content changed
         if (this.getValue() !== content) {
             this.el.replaceChildren(sanitizeHTMLToDom(parseToHtml(content)));
         }
-        // CM6 のソースオフセットを可視オフセットに変換してカーソルを復元
+        // Convert CM6 source offset to visible offset and restore cursor
         const segs = buildSegmentMap(content);
         const viewOffset = srcToView(segs, srcOffset);
         this.setVisibleOffset(viewOffset);
     }
 
-    /** tate-editing スパンが展開中かどうかを返す（view.ts のカーソル同期判定用）。 */
+    /** Returns whether a tate-editing span is currently expanded (used by view.ts to decide cursor sync). */
     isInlineExpanded(): boolean {
         return this.inlineEditor.isExpanded();
     }
 
-    /** 縦書き表示上の現在カーソル位置（visible offset）を返す（view.ts のカーソル同期用）。 */
+    /** Returns the current cursor position in the vertical writing view as a visible offset (used by view.ts for cursor sync). */
     getViewCursorOffset(): number {
         return this.getVisibleOffset();
     }
 
-    // ---- カーソル操作（<rt> 内を除いた visible 文字数でオフセット管理） ----
+    // ---- Cursor operations (offset managed in visible character count, excluding <rt>) ----
 
     private getVisibleOffset(): number {
         const sel = window.getSelection();

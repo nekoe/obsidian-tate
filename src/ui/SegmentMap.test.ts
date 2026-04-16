@@ -3,7 +3,7 @@ import { buildSegmentMap, srcToView, viewToSrc, Segment } from './SegmentMap';
 
 // ---- helpers ----
 
-/** セグメントの srcStart+srcLen が連続していることを検証 */
+/** Asserts that srcStart+srcLen values are contiguous across segments */
 function assertContiguous(segs: Segment[], srcLen: number): void {
     let pos = 0;
     for (const s of segs) {
@@ -13,7 +13,7 @@ function assertContiguous(segs: Segment[], srcLen: number): void {
     expect(pos).toBe(srcLen);
 }
 
-/** セグメントの viewStart+viewLen が連続していることを検証 */
+/** Asserts that viewStart+viewLen values are contiguous across segments */
 function assertViewContiguous(segs: Segment[]): void {
     let pos = 0;
     for (const s of segs) {
@@ -27,12 +27,12 @@ function assertViewContiguous(segs: Segment[]): void {
 // ================================================================
 
 describe('buildSegmentMap', () => {
-    it('空文字列', () => {
+    it('empty string', () => {
         const segs = buildSegmentMap('');
         expect(segs).toHaveLength(0);
     });
 
-    it('plain テキストのみ', () => {
+    it('plain text only', () => {
         const src = 'Hello世界';
         const segs = buildSegmentMap(src);
         expect(segs).toHaveLength(1);
@@ -42,7 +42,7 @@ describe('buildSegmentMap', () => {
         assertContiguous(segs, src.length);
     });
 
-    it('改行のみ', () => {
+    it('newline only', () => {
         const src = '\n';
         const segs = buildSegmentMap(src);
         expect(segs).toHaveLength(1);
@@ -51,7 +51,7 @@ describe('buildSegmentMap', () => {
         });
     });
 
-    it('改行を含む複数段落', () => {
+    it('multiple paragraphs with newline', () => {
         const src = 'ABC\nDEF';
         const segs = buildSegmentMap(src);
         expect(segs).toHaveLength(3);
@@ -62,7 +62,7 @@ describe('buildSegmentMap', () => {
         assertViewContiguous(segs);
     });
 
-    it('明示ルビ ｜漢字《かんじ》', () => {
+    it('explicit ruby ｜漢字《かんじ》', () => {
         const src = '｜漢字《かんじ》'; // ｜(1) + 漢字(2) + 《(1) + かんじ(3) + 》(1) = 8 chars
         const segs = buildSegmentMap(src);
         expect(segs).toHaveLength(1);
@@ -75,7 +75,7 @@ describe('buildSegmentMap', () => {
         assertContiguous(segs, src.length);
     });
 
-    it('明示ルビ（半角パイプ）|base《rt》', () => {
+    it('explicit ruby with half-width pipe |base《rt》', () => {
         const src = '|AB《cd》'; // |(1)+AB(2)+《(1)+cd(2)+》(1) = 7
         const segs = buildSegmentMap(src);
         expect(segs).toHaveLength(1);
@@ -86,7 +86,7 @@ describe('buildSegmentMap', () => {
         expect(segs[0].rtLen).toBe(2);
     });
 
-    it('省略ルビ 漢字《かんじ》', () => {
+    it('implicit ruby 漢字《かんじ》', () => {
         const src = '漢字《かんじ》'; // 漢字(2)+《(1)+かんじ(3)+》(1) = 7
         const segs = buildSegmentMap(src);
         expect(segs).toHaveLength(1);
@@ -98,7 +98,7 @@ describe('buildSegmentMap', () => {
         expect(s.rtLen).toBe(3);
     });
 
-    it('縦中横 AB［＃「AB」は縦中横］', () => {
+    it('tcy AB［＃「AB」は縦中横］', () => {
         // AB + ［＃「AB」は縦中横］ = 2 + (2*2+9) = 2 + 13 = 15? No wait:
         // srcLen = contentLen*2 + 9 = 2*2+9 = 13
         const src = 'AB［＃「AB」は縦中横］';
@@ -110,7 +110,7 @@ describe('buildSegmentMap', () => {
         assertContiguous(segs, src.length);
     });
 
-    it('傍点 AB［＃「AB」に傍点］', () => {
+    it('bouten AB［＃「AB」に傍点］', () => {
         // srcLen = 2*2+8 = 12
         const src = 'AB［＃「AB」に傍点］';
         const segs = buildSegmentMap(src);
@@ -121,7 +121,7 @@ describe('buildSegmentMap', () => {
         assertContiguous(segs, src.length);
     });
 
-    it('明示ルビ前後に plain テキスト', () => {
+    it('explicit ruby surrounded by plain text', () => {
         const src = 'ABC｜DE《fg》XYZ';
         const segs = buildSegmentMap(src);
         expect(segs).toHaveLength(3);
@@ -132,7 +132,7 @@ describe('buildSegmentMap', () => {
         assertViewContiguous(segs);
     });
 
-    it('縦中横の前に別の plain テキストがある場合', () => {
+    it('plain text before tcy', () => {
         // "AX" where X tcy, not "A" matches "AX" — invalid content check
         const src = 'AAB［＃「AB」は縦中横］';
         // "AAB" ends with "AB" → valid, contentStart=1
@@ -144,7 +144,7 @@ describe('buildSegmentMap', () => {
         assertContiguous(segs, src.length);
     });
 
-    it('無効な縦中横（前方テキスト不一致）は平文として出力', () => {
+    it('invalid tcy (content mismatch) is output as plain text', () => {
         // ZAB where 注記内は AB だが "Z" + AB の直前テキストは "Z" であり "AB" で終わる → valid
         // Let's use a case that actually is invalid: content="XY" but preceding text ends with "AB"
         const src = 'AB［＃「XY」は縦中横］';
@@ -156,7 +156,7 @@ describe('buildSegmentMap', () => {
         expect(segs[0].srcLen).toBe(src.length);
     });
 
-    it('複合: plain + ルビ + 改行 + tcy', () => {
+    it('mixed: plain + ruby + newline + tcy', () => {
         const ruby = '｜漢《かん》'; // 1+1+1+2+1=6
         const tcy  = 'A［＃「A」は縦中横］'; // 1*2+9=11
         const src  = `前${ruby}\n${tcy}後`;
@@ -168,10 +168,10 @@ describe('buildSegmentMap', () => {
         expect(kinds).toEqual(['plain', 'ruby-explicit', 'newline', 'tcy', 'plain']);
     });
 
-    it('省略ルビは漢字連続のみにマッチする（ひらがなにはマッチしない）', () => {
+    it('implicit ruby matches kanji runs only (not hiragana)', () => {
         const src = 'あいう《ふりがな》';
         const segs = buildSegmentMap(src);
-        // ひらがなは KANJI_RE にマッチしないので plain のまま
+        // hiragana does not match KANJI_RE, so stays as plain
         expect(segs).toHaveLength(1);
         expect(segs[0].kind).toBe('plain');
     });
@@ -182,32 +182,32 @@ describe('buildSegmentMap', () => {
 // ================================================================
 
 describe('srcToView', () => {
-    it('plain: 1:1 対応', () => {
+    it('plain: 1:1 mapping', () => {
         const segs = buildSegmentMap('ABCDE');
         expect(srcToView(segs, 0)).toBe(0);
         expect(srcToView(segs, 3)).toBe(3);
         expect(srcToView(segs, 5)).toBe(5);
     });
 
-    it('空の segs → 0 を返す', () => {
+    it('empty segs returns 0', () => {
         expect(srcToView([], 0)).toBe(0);
         expect(srcToView([], 10)).toBe(0);
     });
 
-    it('明示ルビ ｜AB《cd》: 各位置のマッピング', () => {
+    it('explicit ruby ｜AB《cd》: mapping at each position', () => {
         // src: ｜(0) A(1) B(2) 《(3) c(4) d(5) 》(6)
         // view: A(0) B(1)
         const segs = buildSegmentMap('｜AB《cd》');
         expect(srcToView(segs, 0)).toBe(0); // ｜ → viewStart
         expect(srcToView(segs, 1)).toBe(0); // A → view 0
         expect(srcToView(segs, 2)).toBe(1); // B → view 1
-        expect(srcToView(segs, 3)).toBe(2); // 《 → base末尾（viewLen=2）
-        expect(srcToView(segs, 4)).toBe(2); // c → base末尾
-        expect(srcToView(segs, 5)).toBe(2); // d → base末尾
-        expect(srcToView(segs, 6)).toBe(2); // 》→ base末尾
+        expect(srcToView(segs, 3)).toBe(2); // 《 → end of base (viewLen=2)
+        expect(srcToView(segs, 4)).toBe(2); // c → end of base
+        expect(srcToView(segs, 5)).toBe(2); // d → end of base
+        expect(srcToView(segs, 6)).toBe(2); // 》→ end of base
     });
 
-    it('省略ルビ AB《cd》: 各位置のマッピング', () => {
+    it('implicit ruby 漢字《かんじ》: mapping at each position', () => {
         // src: A(0) B(1) 《(2) c(3) d(4) 》(5)  — but AB must be kanji
         // Use kanji for implicit ruby
         const segs = buildSegmentMap('漢字《かんじ》');
@@ -215,11 +215,11 @@ describe('srcToView', () => {
         // src: 漢(0) 字(1) 《(2) か(3) ん(4) じ(5) 》(6)
         expect(srcToView(segs, 0)).toBe(0); // 漢 → view 0
         expect(srcToView(segs, 1)).toBe(1); // 字 → view 1
-        expect(srcToView(segs, 2)).toBe(2); // 《 → base末尾
-        expect(srcToView(segs, 6)).toBe(2); // 》→ base末尾
+        expect(srcToView(segs, 2)).toBe(2); // 《 → end of base
+        expect(srcToView(segs, 6)).toBe(2); // 》→ end of base
     });
 
-    it('縦中横 AB[...]: 各位置のマッピング', () => {
+    it('tcy AB[...]: mapping at each position', () => {
         const segs = buildSegmentMap('AB［＃「AB」は縦中横］');
         // content=AB(0..1), annotation starts at 2
         expect(srcToView(segs, 0)).toBe(0);
@@ -228,24 +228,24 @@ describe('srcToView', () => {
         expect(srcToView(segs, 12)).toBe(2);
     });
 
-    it('改行: 改行位置は viewStart を返す', () => {
+    it('newline: returns viewStart at newline position', () => {
         // "AB\nCD"
         // segs: plain(AB, srcStart=0, viewStart=0), newline(srcStart=2, viewStart=2), plain(CD, srcStart=3, viewStart=2)
         const segs = buildSegmentMap('AB\nCD');
         expect(srcToView(segs, 0)).toBe(0); // A
         expect(srcToView(segs, 1)).toBe(1); // B
         expect(srcToView(segs, 2)).toBe(2); // \n → viewStart=2
-        expect(srcToView(segs, 3)).toBe(2); // C → viewStart=2（改行後）
+        expect(srcToView(segs, 3)).toBe(2); // C → viewStart=2 (after newline)
         expect(srcToView(segs, 4)).toBe(3); // D
     });
 
-    it('ソース末尾の場合: 全 viewLen を返す', () => {
+    it('past end of source: returns total viewLen', () => {
         const s2 = buildSegmentMap('ABCDE');
         expect(srcToView(s2, 5)).toBe(5);
         expect(srcToView(s2, 99)).toBe(5); // beyond end
     });
 
-    it('前後に plain がある明示ルビ', () => {
+    it('explicit ruby surrounded by plain text', () => {
         const src = 'X｜AB《cd》Y';
         // plain(X, src=0..0), ruby-explicit(src=1..7), plain(Y, src=8..8)
         const segs = buildSegmentMap(src);
@@ -262,73 +262,73 @@ describe('srcToView', () => {
 // ================================================================
 
 describe('viewToSrc', () => {
-    it('plain: 1:1 対応', () => {
+    it('plain: 1:1 mapping', () => {
         const segs = buildSegmentMap('ABCDE');
         expect(viewToSrc(segs, 0)).toBe(0);
         expect(viewToSrc(segs, 3)).toBe(3);
         expect(viewToSrc(segs, 5)).toBe(5);
     });
 
-    it('空の segs → 0 を返す', () => {
+    it('empty segs returns 0', () => {
         expect(viewToSrc([], 0)).toBe(0);
     });
 
-    it('明示ルビ ｜AB《cd》: view → src（｜の分 +1 シフト）', () => {
+    it('explicit ruby ｜AB《cd》: view → src (+1 shift for ｜)', () => {
         const segs = buildSegmentMap('｜AB《cd》');
-        // view 0 → src 1（A）、view 1 → src 2（B）
+        // view 0 → src 1 (A), view 1 → src 2 (B)
         expect(viewToSrc(segs, 0)).toBe(1);
         expect(viewToSrc(segs, 1)).toBe(2);
         expect(viewToSrc(segs, 2)).toBe(7); // end of segment
     });
 
-    it('省略ルビ 漢字《かんじ》: view → src（そのまま）', () => {
+    it('implicit ruby 漢字《かんじ》: view → src (no shift)', () => {
         const segs = buildSegmentMap('漢字《かんじ》');
         expect(viewToSrc(segs, 0)).toBe(0);
         expect(viewToSrc(segs, 1)).toBe(1);
         expect(viewToSrc(segs, 2)).toBe(7); // end of segment
     });
 
-    it('縦中横 AB[...]: view → src（content 先頭から）', () => {
+    it('tcy AB[...]: view → src (from start of content)', () => {
         const segs = buildSegmentMap('AB［＃「AB」は縦中横］');
         expect(viewToSrc(segs, 0)).toBe(0);
         expect(viewToSrc(segs, 1)).toBe(1);
         expect(viewToSrc(segs, 2)).toBe(13); // end of segment
     });
 
-    it('改行をまたぐ場合', () => {
+    it('spanning a newline', () => {
         const segs = buildSegmentMap('AB\nCD');
         // view 0=A, 1=B, 2=C(srcStart=3), 3=D
         expect(viewToSrc(segs, 0)).toBe(0);
         expect(viewToSrc(segs, 1)).toBe(1);
-        expect(viewToSrc(segs, 2)).toBe(3); // Cはsrcオフセット3
+        expect(viewToSrc(segs, 2)).toBe(3); // C is at src offset 3
         expect(viewToSrc(segs, 3)).toBe(4);
     });
 
-    it('前後に plain がある明示ルビ（srcToView の逆）', () => {
+    it('explicit ruby surrounded by plain text (inverse of srcToView)', () => {
         const src = 'X｜AB《cd》Y';
         const segs = buildSegmentMap(src);
         // srcToView: src1→view1, src2→view1, src3→view2, src8→view3
         // viewToSrc: view1→src2(A), view2→src3(B), view3→src8(Y)
         expect(viewToSrc(segs, 0)).toBe(0); // X
-        expect(viewToSrc(segs, 1)).toBe(2); // A（｜の分ずれる）
+        expect(viewToSrc(segs, 1)).toBe(2); // A (shifted by ｜)
         expect(viewToSrc(segs, 2)).toBe(3); // B
         expect(viewToSrc(segs, 3)).toBe(8); // Y
     });
 });
 
 // ================================================================
-// srcToView / viewToSrc の連携（カーソル復元のユースケース）
+// srcToView / viewToSrc round-trip (cursor restoration use case)
 // ================================================================
 
-describe('srcToView + viewToSrc 連携', () => {
-    it('plain テキスト: srcToView → viewToSrc がほぼ元に戻る', () => {
+describe('srcToView / viewToSrc round-trip (cursor restoration use case)', () => {
+    it('plain text: srcToView → viewToSrc round-trips correctly', () => {
         const segs = buildSegmentMap('ABCDE');
         for (let i = 0; i <= 5; i++) {
             expect(viewToSrc(segs, srcToView(segs, i))).toBe(i);
         }
     });
 
-    it('明示ルビ: base 内の src は往復が成立する', () => {
+    it('explicit ruby: src positions within base round-trip correctly', () => {
         // src: ｜(0)A(1)B(2)《(3)cd(4,5)》(6)
         // base chars are at src 1 and 2
         const segs = buildSegmentMap('｜AB《cd》');
@@ -336,7 +336,7 @@ describe('srcToView + viewToSrc 連携', () => {
         expect(viewToSrc(segs, srcToView(segs, 2))).toBe(2); // B
     });
 
-    it('縦中横: content 内の src は往復が成立する', () => {
+    it('tcy: src positions within content round-trip correctly', () => {
         const segs = buildSegmentMap('AB［＃「AB」は縦中横］');
         expect(viewToSrc(segs, srcToView(segs, 0))).toBe(0);
         expect(viewToSrc(segs, srcToView(segs, 1))).toBe(1);

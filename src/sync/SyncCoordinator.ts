@@ -1,7 +1,7 @@
 import { TFile, Vault } from 'obsidian';
 
 export class SyncCoordinator {
-    // シーケンス番号: loadFile/onExternalModifyが並走したとき古い結果を捨てる
+    // Sequence numbers: discard stale results when loadFile/onExternalModify run concurrently
     private loadSeq = 0;
     private externalModifySeq = 0;
     currentFile: TFile | null = null;
@@ -16,7 +16,7 @@ export class SyncCoordinator {
         const seq = ++this.loadSeq;
         this.currentFile = file;
         const content = await this.vault.read(file);
-        // await 後に別の loadFile が呼ばれていたら破棄
+        // Discard if another loadFile was called after this await
         if (seq !== this.loadSeq) return;
         this.setEditorValue(content, false);
     }
@@ -25,9 +25,9 @@ export class SyncCoordinator {
         if (file !== this.currentFile) return;
         const seq = ++this.externalModifySeq;
         const externalContent = await this.vault.read(file);
-        // await 後に別の onExternalModify が並走していたら古い結果を捨てる
+        // Discard stale result if another onExternalModify ran concurrently after this await
         if (seq !== this.externalModifySeq || file !== this.currentFile) return;
-        // CM6 の autosave が発火した modify イベントは内容比較でスキップ
+        // Skip modify events triggered by CM6 autosave (content is identical)
         if (externalContent === this.getEditorValue()) return;
         this.setEditorValue(externalContent, true);
     }
@@ -45,7 +45,7 @@ export class SyncCoordinator {
     }
 
     dispose(): void {
-        // vault.modify は CM6 autosave に一本化されたため、flush 処理は不要
+        // No flush needed: writes are delegated entirely to CM6 autosave
         this.currentFile = null;
     }
 }

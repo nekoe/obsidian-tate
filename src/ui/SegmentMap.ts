@@ -5,12 +5,12 @@ export type SegmentKind = 'plain' | 'ruby-explicit' | 'ruby-implicit' | 'tcy' | 
 
 export interface Segment {
     readonly kind: SegmentKind;
-    readonly srcStart: number;   // ソーステキスト上の開始オフセット
-    readonly srcLen: number;     // ソーステキスト上の長さ
-    readonly viewStart: number;  // 可視オフセット（RT 除外）上の開始位置
-    readonly viewLen: number;    // 可視文字数（plain=srcLen, ruby=baseLen, tcy/bouten=contentLen, newline=0）
-    readonly baseLen?: number;   // ruby のみ: base テキストの文字数
-    readonly rtLen?: number;     // ruby のみ: RT テキストの文字数
+    readonly srcStart: number;   // Start offset in the source text
+    readonly srcLen: number;     // Length in the source text
+    readonly viewStart: number;  // Start position in visible offset space (excluding RT)
+    readonly viewLen: number;    // Visible character count (plain=srcLen, ruby=baseLen, tcy/bouten=contentLen, newline=0)
+    readonly baseLen?: number;   // ruby only: character count of the base text
+    readonly rtLen?: number;     // ruby only: character count of the RT text
 }
 
 // ---- Internal pipeline types ----
@@ -34,13 +34,13 @@ type PipelineItem = ResolvedItem | UnresolvedItem;
 // ---- Public API ----
 
 /**
- * Aozora ソーステキストから Segment 配列を構築する。
- * parseInlineToHtml() と同じ優先順位・パターンで記法を認識する:
- *   1. 明示ルビ ｜base《rt》
- *   2. 縦中横 content［＃「content」は縦中横］
- *   3. 傍点 content［＃「content」に傍点］
- *   4. 省略ルビ 漢字《rt》
- *   5. 改行 \n
+ * Builds a Segment array from Aozora source text.
+ * Recognizes notations in the same priority order as parseInlineToHtml():
+ *   1. Explicit ruby ｜base《rt》
+ *   2. Tate-chu-yoko content［＃「content」は縦中横］
+ *   3. Bouten content［＃「content」に傍点］
+ *   4. Implicit ruby kanji《rt》
+ *   5. Newline \n
  */
 export function buildSegmentMap(source: string): Segment[] {
     const tokens = tokenize(source);
@@ -56,7 +56,7 @@ export function buildSegmentMap(source: string): Segment[] {
             viewStart: viewPos,
             viewLen: tok.viewLen,
         };
-        // Optional fields: spread は型安全でないため明示的に代入
+        // Optional fields: assigned explicitly because spread is not type-safe here
         if (tok.baseLen !== undefined) (seg as { baseLen?: number }).baseLen = tok.baseLen;
         if (tok.rtLen !== undefined) (seg as { rtLen?: number }).rtLen = tok.rtLen;
         segments.push(seg);
@@ -68,9 +68,9 @@ export function buildSegmentMap(source: string): Segment[] {
 }
 
 /**
- * ソーステキストのオフセット → 可視オフセット に変換する。
+ * Converts a source text offset to a visible offset.
  *
- * plain:         1:1 対応
+ * plain:         1:1 mapping
  * ruby-explicit: local=0(｜) → viewStart,
  *                local=1..baseLen(base) → viewStart+(local-1),
  *                local≥baseLen+1(《rt》) → viewStart+baseLen
@@ -78,7 +78,7 @@ export function buildSegmentMap(source: string): Segment[] {
  *                local≥baseLen+1(《rt》) → viewStart+baseLen
  * tcy/bouten:    local=0..viewLen(content) → viewStart+local,
  *                local≥viewLen+1(annotation) → viewStart+viewLen
- * newline:       → viewStart（viewLen=0 なのでそのまま）
+ * newline:       → viewStart (viewLen=0, passed through as-is)
  */
 export function srcToView(segs: readonly Segment[], srcOffset: number): number {
     for (const seg of segs) {
@@ -93,13 +93,13 @@ export function srcToView(segs: readonly Segment[], srcOffset: number): number {
 }
 
 /**
- * 可視オフセット → ソーステキストのオフセット に変換する。
- * newline セグメント（viewLen=0）はスキップし、最初に含む非ゼロセグメントで解決する。
+ * Converts a visible offset to a source text offset.
+ * Skips newline segments (viewLen=0) and resolves using the first non-zero segment that contains the offset.
  *
- * plain:         1:1 対応
- * ruby-explicit: view local 0..baseLen → src local 1..baseLen+1（｜の分 +1）
- * ruby-implicit: view local 0..baseLen → src local 0..baseLen（そのまま）
- * tcy/bouten:    view local 0..contentLen → src local 0..contentLen（content が先頭）
+ * plain:         1:1 mapping
+ * ruby-explicit: view local 0..baseLen → src local 1..baseLen+1 (+1 for ｜)
+ * ruby-implicit: view local 0..baseLen → src local 0..baseLen (no shift)
+ * tcy/bouten:    view local 0..contentLen → src local 0..contentLen (content is at the front)
  */
 export function viewToSrc(segs: readonly Segment[], viewOffset: number): number {
     for (const seg of segs) {
@@ -149,7 +149,7 @@ function mapViewLocalToSrc(seg: Segment, local: number): number {
         case 'newline':
             return seg.srcStart + local;
         case 'ruby-explicit':
-            // view local 0..baseLen → src local 1..baseLen+1（｜の分シフト）
+            // view local 0..baseLen → src local 1..baseLen+1 (shifted by 1 for ｜)
             return seg.srcStart + 1 + local;
         case 'ruby-implicit':
         case 'tcy':
@@ -166,14 +166,14 @@ function tokenize(source: string): ResolvedItem[] {
     const tcyRe    = /［＃「([^「」\n]+)」は縦中横］/g;
     const boutenRe = /［＃「([^「」\n]+)」に傍点］/g;
 
-    // parseInlineToHtml() と同じ適用順で各記法を認識する
+    // Recognize each notation in the same order as parseInlineToHtml()
     items = flatScan(items, scanExplicitRuby);
     items = flatScan(items, raw => scanAnnotation(raw, tcyRe,    'tcy',    9));
     items = flatScan(items, raw => scanAnnotation(raw, boutenRe, 'bouten', 8));
     items = flatScan(items, scanImplicitRuby);
     items = flatScan(items, scanNewlines);
 
-    // 未解決の残りは plain テキスト（scanNewlines 後に残る改行なし平文）
+    // Remaining unresolved items are plain text (non-newline text left after scanNewlines)
     return items.map(item => {
         if (!item.resolved) {
             const len = item.raw.length;
@@ -217,7 +217,7 @@ function scanAnnotation(
     raw: string,
     re: RegExp,
     kind: 'tcy' | 'bouten',
-    bracketFixedLen: number, // 9=tcy, 8=bouten （「」とキーワード含む固定文字数）
+    bracketFixedLen: number, // 9=tcy, 8=bouten (fixed character count including 「」 and keyword)
 ): PipelineItem[] {
     re.lastIndex = 0;
     const result: PipelineItem[] = [];
@@ -226,9 +226,9 @@ function scanAnnotation(
 
     while ((m = re.exec(raw)) !== null) {
         const content        = m[1];
-        const annotationStart = m.index; // ［ の位置
+        const annotationStart = m.index; // position of ［
 
-        // content が直前に存在しない無効なマッチは平文として出力
+        // Invalid match (content not present just before annotation): output as plain text
         if (!raw.slice(lastIndex, annotationStart).endsWith(content)) {
             result.push({ resolved: false, raw: raw.slice(lastIndex, re.lastIndex) });
             lastIndex = re.lastIndex;
