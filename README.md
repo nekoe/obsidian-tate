@@ -21,7 +21,7 @@ The plugin supports the annotation syntax used by [Aozora Bunko](https://www.aoz
 Select text, open the command palette (`Ctrl+P` / `Cmd+P`), and run one of:
 
 - `Add ruby to selection (Ruby)`
-- `Make selection tate-chu-yoko (Tate-Chuu-Yoko: TCY)`
+- `Make selection tate-chu-yoko (Tate-Chu-Yoko: TCY)`
 - `Add emphasis marks to selection (Bouten)`
 
 **Inline Editing**
