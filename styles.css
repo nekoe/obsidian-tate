@@ -1,4 +1,4 @@
-/* 縦書きビュー コンテナ */
+/* Vertical writing view container */
 .tate-container {
     width: 100%;
     height: 100%;
@@ -6,7 +6,7 @@
     overflow-y: hidden;
 }
 
-/* 縦書きエディタ（contenteditable div） */
+/* Vertical writing editor (contenteditable div) */
 .tate-editor {
     writing-mode: vertical-rl;
     text-orientation: mixed;
@@ -24,30 +24,30 @@
     cursor: text;
 }
 
-/* プレースホルダー（ファイル未選択時） */
+/* Placeholder (shown when no file is selected) */
 .tate-editor:empty::before {
     content: attr(data-placeholder);
     color: var(--text-faint);
     pointer-events: none;
 }
 
-/* 自動字下げ（text-indent は子 div に継承されるため、各段落の行頭が揃う） */
+/* Auto indent (text-indent is inherited by child divs, aligning the first character of each paragraph) */
 .tate-editor.tate-auto-indent {
     text-indent: 1em;
 }
 
-/* 縦中横 */
+/* Tate-chu-yoko (horizontal-in-vertical) */
 .tate-editor .tcy {
     text-combine-upright: all;
 }
 
-/* 傍点（胡麻） */
+/* Bouten (sesame emphasis marks) */
 .tate-editor .bouten {
     text-emphasis: sesame;
     text-emphasis-position: over right;
 }
 
-/* インライン展開中の編集スパン */
+/* Editing span while inline-expanded */
 .tate-editor .tate-editing {
     background: var(--text-highlight-bg, rgba(255, 208, 0, 0.35));
     border-radius: 2px;
@@ -55,7 +55,7 @@
     outline-offset: 2px;
 }
 
-/* スクロールバー調整 */
+/* Scrollbar styling */
 .tate-container::-webkit-scrollbar {
     height: 8px;
 }
