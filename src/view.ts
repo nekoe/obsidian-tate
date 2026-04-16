@@ -95,7 +95,7 @@ export class VerticalWritingView extends ItemView {
 
         this.registerEvent(
             this.app.vault.on('modify', (file) => {
-                if (file instanceof TFile) syncCoordinator.onExternalModify(file);
+                if (file instanceof TFile) void syncCoordinator.onExternalModify(file);
             })
         );
         this.registerEvent(
@@ -113,7 +113,7 @@ export class VerticalWritingView extends ItemView {
         this.registerEvent(
             this.app.workspace.on('file-open', (file) => {
                 if (!file || file === syncCoordinator.currentFile) return;
-                syncCoordinator.loadFile(file);
+                void syncCoordinator.loadFile(file);
             })
         );
 
@@ -136,10 +136,11 @@ export class VerticalWritingView extends ItemView {
         }
     }
 
-    async onClose(): Promise<void> {
+    onClose(): Promise<void> {
         // 閉じる前に未コミットの変更を CM6 に書き込む
         this.commitToCm6();
         this.syncCoordinator?.dispose();
+        return Promise.resolve();
     }
 
     applySettings(settings: TatePluginSettings): void {

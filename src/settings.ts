@@ -26,7 +26,7 @@ export class TateSettingTab extends PluginSettingTab {
     display(): void {
         const { containerEl } = this;
         containerEl.empty();
-        containerEl.createEl('h2', { text: '縦書きビュー 設定' });
+        new Setting(containerEl).setName('縦書きビュー 設定').setHeading();
 
         new Setting(containerEl)
             .setName('フォントファミリー')

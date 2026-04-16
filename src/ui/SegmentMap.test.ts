@@ -240,8 +240,6 @@ describe('srcToView', () => {
     });
 
     it('ソース末尾の場合: 全 viewLen を返す', () => {
-        const segs = buildSegmentMap('AB《cd》'); // implicit ruby: base=AB? No, AB is not kanji...
-        // Use plain
         const s2 = buildSegmentMap('ABCDE');
         expect(srcToView(s2, 5)).toBe(5);
         expect(srcToView(s2, 99)).toBe(5); // beyond end

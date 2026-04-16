@@ -14,7 +14,7 @@ export default class TatePlugin extends Plugin {
         );
 
         this.addCommand({
-            id: 'open-tate-view',
+            id: 'open-view',
             name: '縦書きViewを開く',
             callback: () => this.activateView(),
         });
@@ -68,11 +68,11 @@ export default class TatePlugin extends Plugin {
     private async activateView(): Promise<void> {
         const existing = this.app.workspace.getLeavesOfType(TATE_VIEW_TYPE);
         if (existing.length > 0) {
-            this.app.workspace.revealLeaf(existing[0]);
+            void this.app.workspace.revealLeaf(existing[0]);
             return;
         }
         const leaf = this.app.workspace.getLeaf('tab');
         await leaf.setViewState({ type: TATE_VIEW_TYPE, active: true });
-        this.app.workspace.revealLeaf(leaf);
+        void this.app.workspace.revealLeaf(leaf);
     }
 }

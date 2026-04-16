@@ -1130,7 +1130,7 @@ var VerticalWritingView = class extends import_obsidian.ItemView {
     });
     this.registerEvent(
       this.app.vault.on("modify", (file) => {
-        if (file instanceof import_obsidian.TFile) syncCoordinator.onExternalModify(file);
+        if (file instanceof import_obsidian.TFile) void syncCoordinator.onExternalModify(file);
       })
     );
     this.registerEvent(
@@ -1146,7 +1146,7 @@ var VerticalWritingView = class extends import_obsidian.ItemView {
     this.registerEvent(
       this.app.workspace.on("file-open", (file) => {
         if (!file || file === syncCoordinator.currentFile) return;
-        syncCoordinator.loadFile(file);
+        void syncCoordinator.loadFile(file);
       })
     );
     await this.loadInitialFile(syncCoordinator);
@@ -1164,10 +1164,11 @@ var VerticalWritingView = class extends import_obsidian.ItemView {
       }
     }
   }
-  async onClose() {
+  onClose() {
     var _a;
     this.commitToCm6();
     (_a = this.syncCoordinator) == null ? void 0 : _a.dispose();
+    return Promise.resolve();
   }
   applySettings(settings) {
     var _a;
@@ -1303,7 +1304,7 @@ var TateSettingTab = class extends import_obsidian2.PluginSettingTab {
   display() {
     const { containerEl } = this;
     containerEl.empty();
-    containerEl.createEl("h2", { text: "\u7E26\u66F8\u304D\u30D3\u30E5\u30FC \u8A2D\u5B9A" });
+    new import_obsidian2.Setting(containerEl).setName("\u7E26\u66F8\u304D\u30D3\u30E5\u30FC \u8A2D\u5B9A").setHeading();
     new import_obsidian2.Setting(containerEl).setName("\u30D5\u30A9\u30F3\u30C8\u30D5\u30A1\u30DF\u30EA\u30FC").setDesc("\u7E26\u66F8\u304D\u8868\u793A\u306B\u4F7F\u3046\u30D5\u30A9\u30F3\u30C8\uFF08CSS font-family \u5F62\u5F0F\uFF09").addText((text) => text.setPlaceholder('"Hiragino Mincho ProN", serif').setValue(this.plugin.settings.fontFamily).onChange(async (value) => {
       this.plugin.settings.fontFamily = value;
       await this.plugin.saveSettings();
@@ -1340,7 +1341,7 @@ var TatePlugin = class extends import_obsidian3.Plugin {
       (leaf) => new VerticalWritingView(leaf, this)
     );
     this.addCommand({
-      id: "open-tate-view",
+      id: "open-view",
       name: "\u7E26\u66F8\u304DView\u3092\u958B\u304F",
       callback: () => this.activateView()
     });
@@ -1385,11 +1386,11 @@ var TatePlugin = class extends import_obsidian3.Plugin {
   async activateView() {
     const existing = this.app.workspace.getLeavesOfType(TATE_VIEW_TYPE);
     if (existing.length > 0) {
-      this.app.workspace.revealLeaf(existing[0]);
+      void this.app.workspace.revealLeaf(existing[0]);
       return;
     }
     const leaf = this.app.workspace.getLeaf("tab");
     await leaf.setViewState({ type: TATE_VIEW_TYPE, active: true });
-    this.app.workspace.revealLeaf(leaf);
+    void this.app.workspace.revealLeaf(leaf);
   }
 };
