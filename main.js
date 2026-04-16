@@ -528,6 +528,30 @@ var InlineEditor = class {
     const base = match[1];
     const rt = match[2];
     const matchStart = range.startOffset - match[0].length;
+    if (rt === "") {
+      const rawText = explicit ? `\uFF5C${base}\u300A\u300B` : `${base}\u300A\u300B`;
+      const span = document.createElement("span");
+      span.className = "tate-editing";
+      span.textContent = rawText;
+      this.isModifyingDom = true;
+      try {
+        this.insertAnnotationElement(textNode, matchStart, range.startOffset, span);
+        this.expandedEl = span;
+        this.expandedElOriginalText = rawText;
+        const spanText = span.firstChild;
+        if (spanText) {
+          const r = document.createRange();
+          r.setStart(spanText, rawText.length - 1);
+          r.collapse(true);
+          const s = window.getSelection();
+          s.removeAllRanges();
+          s.addRange(r);
+        }
+      } finally {
+        this.isModifyingDom = false;
+      }
+      return true;
+    }
     this.isModifyingDom = true;
     try {
       const rubyEl = this.createRubyEl(base, rt, explicit);

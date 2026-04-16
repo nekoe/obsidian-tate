@@ -152,6 +152,36 @@ export class InlineEditor {
         const rt = match[2];
         const matchStart = range.startOffset - match[0].length;
 
+        // rt が空（《》と入力された）場合: tate-editing スパンに展開してカーソルを《》の間に置く。
+        // ユーザーがルビ文字を入力してカーソルを外すと collapseEditing() が <ruby> に収束する。
+        if (rt === '') {
+            const rawText = explicit ? `｜${base}《》` : `${base}《》`;
+            const span = document.createElement('span');
+            span.className = 'tate-editing';
+            span.textContent = rawText;
+
+            this.isModifyingDom = true;
+            try {
+                this.insertAnnotationElement(textNode, matchStart, range.startOffset, span);
+                this.expandedEl = span;
+                this.expandedElOriginalText = rawText;
+
+                // カーソルを《と》の間（rawText.length - 1 = 》の直前）に置く
+                const spanText = span.firstChild as Text | null;
+                if (spanText) {
+                    const r = document.createRange();
+                    r.setStart(spanText, rawText.length - 1);
+                    r.collapse(true);
+                    const s = window.getSelection()!;
+                    s.removeAllRanges();
+                    s.addRange(r);
+                }
+            } finally {
+                this.isModifyingDom = false;
+            }
+            return true;
+        }
+
         this.isModifyingDom = true;
         try {
             const rubyEl = this.createRubyEl(base, rt, explicit);
