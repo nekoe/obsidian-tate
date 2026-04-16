@@ -35,6 +35,10 @@ styles.css                     # 縦書きCSS（writing-mode: vertical-rl）
 manifest.json                  # プラグインメタデータ（id: obsidian-tate）
 ```
 
+## 開発ガイド
+
+- ソースコード（TypeScript・CSS）のコメントはすべて英語で書くこと。
+
 ## 重要な設計上の決定
 
 ### contenteditable divによる縦書き実現
