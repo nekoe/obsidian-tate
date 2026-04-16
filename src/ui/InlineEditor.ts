@@ -41,7 +41,7 @@ export class InlineEditor {
         if (!this.isModifyingDom) {
             // Synchronize expandedEl with the actual tate-editing span in the DOM
             if (!this.expandedEl || !this.expandedEl.isConnected) {
-                const actualSpan = this.el.querySelector('span.tate-editing') as HTMLSpanElement | null;
+                const actualSpan = this.el.querySelector<HTMLSpanElement>('span.tate-editing');
                 if (actualSpan !== this.expandedEl) {
                     this.expandedEl = actualSpan;
                     // Original text is unknown, so set to null to force hasChanged = true
@@ -220,7 +220,7 @@ export class InlineEditor {
         const resolved = this.resolveSelectionRange();
         if (!resolved) return false;
         const { textNode, startOffset, endOffset } = resolved;
-        const selectedText = textNode.textContent!.slice(startOffset, endOffset);
+        const selectedText = textNode.data.slice(startOffset, endOffset);
         if (!selectedText) return false;
 
         const rawText = `｜${selectedText}《》`;
@@ -233,8 +233,8 @@ export class InlineEditor {
         this.isModifyingDom = true;
         try {
             // Direct DOM manipulation: insert span (handles start, end, and middle of line uniformly)
-            const precedingText = textNode.textContent!.slice(0, startOffset);
-            const followingText = textNode.textContent!.slice(endOffset);
+            const precedingText = textNode.data.slice(0, startOffset);
+            const followingText = textNode.data.slice(endOffset);
             const next = textNode.nextSibling;
             parentEl.removeChild(textNode);
             if (precedingText) parentEl.insertBefore(document.createTextNode(precedingText), next);
@@ -291,7 +291,7 @@ export class InlineEditor {
         const resolved = this.resolveSelectionRange();
         if (!resolved) return false;
         const { textNode, startOffset, endOffset } = resolved;
-        const selectedText = textNode.textContent!.slice(startOffset, endOffset);
+        const selectedText = textNode.data.slice(startOffset, endOffset);
         if (!selectedText) return false;
 
         const newEl = createElement(selectedText);
@@ -522,8 +522,8 @@ export class InlineEditor {
     ): HTMLElement {
         const parentEl = textNode.parentNode as HTMLElement;
 
-        const precedingText = textNode.textContent!.slice(0, matchStart);
-        const followingText = textNode.textContent!.slice(matchEnd);
+        const precedingText = textNode.data.slice(0, matchStart);
+        const followingText = textNode.data.slice(matchEnd);
         const next = textNode.nextSibling;
         parentEl.removeChild(textNode);
         if (precedingText) parentEl.insertBefore(document.createTextNode(precedingText), next);
