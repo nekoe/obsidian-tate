@@ -15,25 +15,25 @@ export default class TatePlugin extends Plugin {
 
         this.addCommand({
             id: 'open-view',
-            name: '縦書きViewを開く',
+            name: '縦書きビューを開く',
             callback: () => this.activateView(),
         });
 
         this.addCommand({
             id: 'add-ruby',
-            name: '選択テキストにルビを設定 (Ruby)',
+            name: '選択テキストにルビを設定 (ruby)',
             callback: () => this.dispatchToView(v => v.applyRuby()),
         });
 
         this.addCommand({
             id: 'add-tcy',
-            name: '選択テキストを縦中横にする (Tate-Chu-Yoko: TCY)',
+            name: '選択テキストを縦中横にする (tate-chu-yoko: tcy)',
             callback: () => this.dispatchToView(v => v.applyTcy()),
         });
 
         this.addCommand({
             id: 'add-bouten',
-            name: '選択テキストに傍点を付ける (Bouten)',
+            name: '選択テキストに傍点を付ける (bouten)',
             callback: () => this.dispatchToView(v => v.applyBouten()),
         });
 
