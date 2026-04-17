@@ -988,6 +988,40 @@ var InputTransformer = class {
   updateSettings(settings) {
     this.settings = { ...settings };
   }
+  // Called on compositionstart. Inserts one indent space at line start before IME composition begins
+  // so that Japanese characters are typed after the indent, not before it.
+  handleCompositionStart() {
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return;
+    const range = sel.getRangeAt(0);
+    const textBefore = this.getTextBeforeCursorInParagraph(range);
+    if (textBefore !== "") return;
+    if (this.settings.autoIndentOnInput) {
+      this.insertText(range, "\u3000");
+    }
+  }
+  // Called on compositionend. Removes one leading full-width space when the confirmed character
+  // is a full-width opening bracket preceded only by full-width spaces in the paragraph.
+  handleCompositionEnd() {
+    if (!this.settings.removeBracketIndent) return;
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return;
+    const range = sel.getRangeAt(0);
+    if (!range.collapsed) return;
+    const { startContainer, startOffset } = range;
+    if (startContainer.nodeType !== Node.TEXT_NODE) return;
+    const textNode = startContainer;
+    if (startOffset === 0) return;
+    const charBefore = textNode.data[startOffset - 1];
+    if (!OPEN_BRACKETS.has(charBefore)) return;
+    const bracketRange = document.createRange();
+    bracketRange.setStart(textNode, startOffset - 1);
+    bracketRange.collapse(true);
+    const textBeforeBracket = this.getTextBeforeCursorInParagraph(bracketRange);
+    if (textBeforeBracket.length === 0) return;
+    if (!/^\u3000+$/.test(textBeforeBracket)) return;
+    this.removeOneLeadingFullWidthSpace(range);
+  }
   // Called from EditorElement.onBeforeInput. Intercepts insertText events and applies
   // space conversion, auto-indent, and bracket de-indent according to current settings.
   handleBeforeInput(e) {
@@ -1003,14 +1037,7 @@ var InputTransformer = class {
     const isAtLineStart = textBefore === "";
     const leadingSpacesBeforeCursor = /^\u3000*$/.test(textBefore) ? textBefore.length : 0;
     if (isAtLineStart && char !== "\u3000") {
-      let indentCount;
-      if (this.settings.matchPrecedingIndent) {
-        indentCount = this.getPrecedingParagraphLeadingSpaces(range);
-      } else if (this.settings.autoIndentOnInput) {
-        indentCount = 1;
-      } else {
-        indentCount = 0;
-      }
+      let indentCount = this.settings.autoIndentOnInput ? 1 : 0;
       if (this.settings.removeBracketIndent && OPEN_BRACKETS.has(char)) {
         indentCount = Math.max(0, indentCount - 1);
       }
@@ -1057,11 +1084,23 @@ var InputTransformer = class {
     }
     return null;
   }
+  // Called after Enter (insertParagraph). Inserts N full-width spaces matching the preceding paragraph's
+  // leading indent. Only active when matchPrecedingIndent is enabled.
+  handleParagraphInsert() {
+    if (!this.settings.matchPrecedingIndent) return;
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return;
+    const range = sel.getRangeAt(0);
+    const indentCount = this.getPrecedingParagraphLeadingSpaces(range);
+    if (indentCount > 0) {
+      this.insertText(range, "\u3000".repeat(indentCount));
+    }
+  }
   getPrecedingParagraphLeadingSpaces(range) {
     var _a;
     const currentDiv = this.getContainingParagraphDiv(range.startContainer);
     const prevDiv = currentDiv ? currentDiv.previousElementSibling : this.el.lastElementChild;
-    if (!prevDiv || prevDiv.tagName !== "DIV") return 1;
+    if (!prevDiv || prevDiv.tagName !== "DIV") return 0;
     const walker = document.createTreeWalker(prevDiv, NodeFilter.SHOW_TEXT);
     const firstText = walker.nextNode();
     const text = (_a = firstText == null ? void 0 : firstText.data) != null ? _a : "";
@@ -1196,6 +1235,18 @@ var EditorElement = class {
     this.inlineEditor.onBeforeInput();
     this.inputTransformer.handleBeforeInput(e);
   }
+  // Called after Enter (insertParagraph input event) from view.ts.
+  handleParagraphInsert() {
+    this.inputTransformer.handleParagraphInsert();
+  }
+  // Called on compositionstart (registered from view.ts).
+  onCompositionStart() {
+    this.inputTransformer.handleCompositionStart();
+  }
+  // Called on compositionend (registered from view.ts), before commitToCm6.
+  onCompositionEnd() {
+    this.inputTransformer.handleCompositionEnd();
+  }
   // Resets the burst flag (call after commitToCm6() completes or on navigation in view.ts).
   resetBurst() {
     this.inlineEditor.resetBurst();
@@ -1321,15 +1372,26 @@ var VerticalWritingView = class extends import_obsidian4.ItemView {
       editorEl.onBeforeInput(e);
     });
     this.registerDomEvent(editorEl.el, "input", (e) => {
-      if (!e.isComposing) {
+      const inputEvent = e;
+      if (!inputEvent.isComposing) {
+        if (inputEvent.inputType === "insertParagraph") {
+          editorEl.handleParagraphInsert();
+          this.commitToCm6();
+          return;
+        }
         const annotated = editorEl.handleRubyCompletion() || editorEl.handleTcyCompletion() || editorEl.handleBoutenCompletion();
         if (annotated) this.commitToCm6();
       }
+    });
+    this.registerDomEvent(editorEl.el, "compositionstart", () => {
+      if (!this.getCm6Editor()) return;
+      editorEl.onCompositionStart();
     });
     this.registerDomEvent(editorEl.el, "compositionend", () => {
       editorEl.handleRubyCompletion();
       editorEl.handleTcyCompletion();
       editorEl.handleBoutenCompletion();
+      editorEl.onCompositionEnd();
       this.commitToCm6();
     });
     this.registerDomEvent(document, "selectionchange", () => {

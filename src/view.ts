@@ -56,17 +56,28 @@ export class VerticalWritingView extends ItemView {
             editorEl.onBeforeInput(e);
         });
         this.registerDomEvent(editorEl.el, 'input', (e: Event) => {
-            if (!(e as InputEvent).isComposing) {
+            const inputEvent = e as InputEvent;
+            if (!inputEvent.isComposing) {
+                if (inputEvent.inputType === 'insertParagraph') {
+                    editorEl.handleParagraphInsert();
+                    this.commitToCm6(); // Enter is an immediate commit point
+                    return;
+                }
                 const annotated = editorEl.handleRubyCompletion()
                                || editorEl.handleTcyCompletion()
                                || editorEl.handleBoutenCompletion();
                 if (annotated) this.commitToCm6(); // Notation conversion is an immediate commit point
             }
         });
+        this.registerDomEvent(editorEl.el, 'compositionstart', () => {
+            if (!this.getCm6Editor()) return; // read-only mode, skip indent
+            editorEl.onCompositionStart();
+        });
         this.registerDomEvent(editorEl.el, 'compositionend', () => {
             editorEl.handleRubyCompletion();
             editorEl.handleTcyCompletion();
             editorEl.handleBoutenCompletion();
+            editorEl.onCompositionEnd(); // bracket de-indent for IME input
             this.commitToCm6(); // IME confirmation is a commit point
         });
         this.registerDomEvent(document, 'selectionchange', () => {

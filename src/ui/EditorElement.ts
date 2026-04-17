@@ -129,6 +129,21 @@ export class EditorElement {
         this.inputTransformer.handleBeforeInput(e);
     }
 
+    // Called after Enter (insertParagraph input event) from view.ts.
+    handleParagraphInsert(): void {
+        this.inputTransformer.handleParagraphInsert();
+    }
+
+    // Called on compositionstart (registered from view.ts).
+    onCompositionStart(): void {
+        this.inputTransformer.handleCompositionStart();
+    }
+
+    // Called on compositionend (registered from view.ts), before commitToCm6.
+    onCompositionEnd(): void {
+        this.inputTransformer.handleCompositionEnd();
+    }
+
     // Resets the burst flag (call after commitToCm6() completes or on navigation in view.ts).
     resetBurst(): void {
         this.inlineEditor.resetBurst();

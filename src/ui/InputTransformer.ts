@@ -30,6 +30,51 @@ export class InputTransformer {
         this.settings = { ...settings };
     }
 
+    // Called on compositionstart. Inserts one indent space at line start before IME composition begins
+    // so that Japanese characters are typed after the indent, not before it.
+    handleCompositionStart(): void {
+        const sel = window.getSelection();
+        if (!sel || sel.rangeCount === 0) return;
+        const range = sel.getRangeAt(0);
+
+        const textBefore = this.getTextBeforeCursorInParagraph(range);
+        if (textBefore !== '') return;
+
+        if (this.settings.autoIndentOnInput) {
+            this.insertText(range, '\u3000');
+        }
+    }
+
+    // Called on compositionend. Removes one leading full-width space when the confirmed character
+    // is a full-width opening bracket preceded only by full-width spaces in the paragraph.
+    handleCompositionEnd(): void {
+        if (!this.settings.removeBracketIndent) return;
+
+        const sel = window.getSelection();
+        if (!sel || sel.rangeCount === 0) return;
+        const range = sel.getRangeAt(0);
+        if (!range.collapsed) return;
+
+        const { startContainer, startOffset } = range;
+        if (startContainer.nodeType !== Node.TEXT_NODE) return;
+        const textNode = startContainer as Text;
+        if (startOffset === 0) return;
+
+        const charBefore = textNode.data[startOffset - 1];
+        if (!OPEN_BRACKETS.has(charBefore)) return;
+
+        // Build a collapsed range just before the bracket to get text preceding it in the paragraph.
+        const bracketRange = document.createRange();
+        bracketRange.setStart(textNode, startOffset - 1);
+        bracketRange.collapse(true);
+        const textBeforeBracket = this.getTextBeforeCursorInParagraph(bracketRange);
+
+        if (textBeforeBracket.length === 0) return;
+        if (!/^\u3000+$/.test(textBeforeBracket)) return;
+
+        this.removeOneLeadingFullWidthSpace(range);
+    }
+
     // Called from EditorElement.onBeforeInput. Intercepts insertText events and applies
     // space conversion, auto-indent, and bracket de-indent according to current settings.
     handleBeforeInput(e: InputEvent): void {
@@ -51,16 +96,7 @@ export class InputTransformer {
         const leadingSpacesBeforeCursor = /^\u3000*$/.test(textBefore) ? textBefore.length : 0;
 
         if (isAtLineStart && char !== '\u3000') {
-            // matchPrecedingIndent and autoIndentOnInput are independent: matchPrecedingIndent takes
-            // priority; autoIndentOnInput applies only when matchPrecedingIndent is off.
-            let indentCount: number;
-            if (this.settings.matchPrecedingIndent) {
-                indentCount = this.getPrecedingParagraphLeadingSpaces(range);
-            } else if (this.settings.autoIndentOnInput) {
-                indentCount = 1;
-            } else {
-                indentCount = 0;
-            }
+            let indentCount = this.settings.autoIndentOnInput ? 1 : 0;
 
             // Bracket typed after leading spaces: reduce indent by 1.
             if (this.settings.removeBracketIndent && OPEN_BRACKETS.has(char)) {
@@ -123,6 +159,21 @@ export class InputTransformer {
         return null;
     }
 
+    // Called after Enter (insertParagraph). Inserts N full-width spaces matching the preceding paragraph's
+    // leading indent. Only active when matchPrecedingIndent is enabled.
+    handleParagraphInsert(): void {
+        if (!this.settings.matchPrecedingIndent) return;
+
+        const sel = window.getSelection();
+        if (!sel || sel.rangeCount === 0) return;
+        const range = sel.getRangeAt(0);
+
+        const indentCount = this.getPrecedingParagraphLeadingSpaces(range);
+        if (indentCount > 0) {
+            this.insertText(range, '\u3000'.repeat(indentCount));
+        }
+    }
+
     private getPrecedingParagraphLeadingSpaces(range: Range): number {
         const currentDiv = this.getContainingParagraphDiv(range.startContainer);
         // No current div means the editor has no paragraph divs yet; use last child as "preceding".
@@ -130,7 +181,7 @@ export class InputTransformer {
             ? currentDiv.previousElementSibling
             : this.el.lastElementChild;
 
-        if (!prevDiv || prevDiv.tagName !== 'DIV') return 1;
+        if (!prevDiv || prevDiv.tagName !== 'DIV') return 0;
 
         const walker = document.createTreeWalker(prevDiv, NodeFilter.SHOW_TEXT);
         const firstText = walker.nextNode() as Text | null;
