@@ -184,7 +184,9 @@ export class InputTransformer {
         if (!prevDiv || prevDiv.tagName !== 'DIV') return 0;
 
         const walker = document.createTreeWalker(prevDiv, NodeFilter.SHOW_TEXT);
-        const firstText = walker.nextNode() as Text | null;
+        // Skip empty text nodes (can arise from Range.insertNode splitting at offset 0)
+        let firstText = walker.nextNode() as Text | null;
+        while (firstText && firstText.data.length === 0) firstText = walker.nextNode() as Text | null;
         const text = firstText?.data ?? '';
         let count = 0;
         while (count < text.length && text[count] === '\u3000') count++;
@@ -194,7 +196,9 @@ export class InputTransformer {
     private removeOneLeadingFullWidthSpace(cursorRange: Range): void {
         const div = this.getContainingParagraphDiv(cursorRange.startContainer) ?? this.el;
         const walker = document.createTreeWalker(div, NodeFilter.SHOW_TEXT);
-        const firstText = walker.nextNode() as Text | null;
+        // Skip empty text nodes (can arise from Range.insertNode splitting at offset 0)
+        let firstText = walker.nextNode() as Text | null;
+        while (firstText && firstText.data.length === 0) firstText = walker.nextNode() as Text | null;
         if (!firstText || firstText.data[0] !== '\u3000') return;
 
         firstText.deleteData(0, 1);
@@ -215,14 +219,24 @@ export class InputTransformer {
 
     private insertText(range: Range, text: string): void {
         range.deleteContents();
-        const textNode = document.createTextNode(text);
-        range.insertNode(textNode);
-        range.setStartAfter(textNode);
-        range.collapse(true);
-        const sel = window.getSelection();
-        if (sel) {
-            sel.removeAllRanges();
-            sel.addRange(range);
+        if (range.startContainer.nodeType === Node.TEXT_NODE) {
+            // insertData modifies the text node in-place, avoiding the Range.insertNode split
+            // that creates an empty leading text node and breaks subsequent TreeWalker searches.
+            const node = range.startContainer as Text;
+            const insertOffset = range.startOffset;
+            node.insertData(insertOffset, text);
+            const r = document.createRange();
+            r.setStart(node, insertOffset + text.length);
+            r.collapse(true);
+            const sel = window.getSelection();
+            if (sel) { sel.removeAllRanges(); sel.addRange(r); }
+        } else {
+            const textNode = document.createTextNode(text);
+            range.insertNode(textNode);
+            range.setStartAfter(textNode);
+            range.collapse(true);
+            const sel = window.getSelection();
+            if (sel) { sel.removeAllRanges(); sel.addRange(range); }
         }
     }
 }
