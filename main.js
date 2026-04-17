@@ -1366,22 +1366,22 @@ var TatePlugin = class extends import_obsidian5.Plugin {
     );
     this.addCommand({
       id: "open-view",
-      name: "\u7E26\u66F8\u304DView\u3092\u958B\u304F",
+      name: "\u7E26\u66F8\u304D\u30D3\u30E5\u30FC\u3092\u958B\u304F",
       callback: () => this.activateView()
     });
     this.addCommand({
       id: "add-ruby",
-      name: "\u9078\u629E\u30C6\u30AD\u30B9\u30C8\u306B\u30EB\u30D3\u3092\u8A2D\u5B9A (Ruby)",
+      name: "\u9078\u629E\u30C6\u30AD\u30B9\u30C8\u306B\u30EB\u30D3\u3092\u8A2D\u5B9A (ruby)",
       callback: () => this.dispatchToView((v) => v.applyRuby())
     });
     this.addCommand({
       id: "add-tcy",
-      name: "\u9078\u629E\u30C6\u30AD\u30B9\u30C8\u3092\u7E26\u4E2D\u6A2A\u306B\u3059\u308B (Tate-Chu-Yoko: TCY)",
+      name: "\u9078\u629E\u30C6\u30AD\u30B9\u30C8\u3092\u7E26\u4E2D\u6A2A\u306B\u3059\u308B (tate-chu-yoko: tcy)",
       callback: () => this.dispatchToView((v) => v.applyTcy())
     });
     this.addCommand({
       id: "add-bouten",
-      name: "\u9078\u629E\u30C6\u30AD\u30B9\u30C8\u306B\u508D\u70B9\u3092\u4ED8\u3051\u308B (Bouten)",
+      name: "\u9078\u629E\u30C6\u30AD\u30B9\u30C8\u306B\u508D\u70B9\u3092\u4ED8\u3051\u308B (bouten)",
       callback: () => this.dispatchToView((v) => v.applyBouten())
     });
     this.addSettingTab(new TateSettingTab(this.app, this));
