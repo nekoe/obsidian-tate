@@ -31,11 +31,6 @@
     pointer-events: none;
 }
 
-/* Auto indent (text-indent is inherited by child divs, aligning the first character of each paragraph) */
-.tate-editor.tate-auto-indent {
-    text-indent: 1em;
-}
-
 /* Tate-chu-yoko (horizontal-in-vertical) */
 .tate-editor .tcy {
     text-combine-upright: all;

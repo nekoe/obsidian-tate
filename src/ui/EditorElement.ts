@@ -1,12 +1,14 @@
 import { sanitizeHTMLToDom } from 'obsidian';
-import { TatePluginSettings } from '../settings';
+import { DEFAULT_SETTINGS, TatePluginSettings } from '../settings';
 import { buildSegmentMap, srcToView } from './SegmentMap';
 import { parseToHtml, serializeNode } from './AozoraParser';
 import { InlineEditor } from './InlineEditor';
+import { InputTransformer } from './InputTransformer';
 
 export class EditorElement {
     readonly el: HTMLDivElement;
     private readonly inlineEditor: InlineEditor;
+    private readonly inputTransformer: InputTransformer;
 
     constructor(container: HTMLElement) {
         this.el = container.createEl('div');
@@ -15,6 +17,7 @@ export class EditorElement {
         this.el.setAttribute('spellcheck', 'false');
         this.el.setAttribute('data-placeholder', 'ファイルを開いてください');
         this.inlineEditor = new InlineEditor(this.el);
+        this.inputTransformer = new InputTransformer(this.el, DEFAULT_SETTINGS);
     }
 
     getValue(): string {
@@ -102,16 +105,16 @@ export class EditorElement {
         sel.removeAllRanges();
         sel.addRange(range);
 
-        // beforeinput does not fire, so set inBurst manually
-        this.onBeforeInput();
+        // beforeinput does not fire for paste, so set inBurst manually
+        this.inlineEditor.onBeforeInput();
         // view.ts calls commitToCm6() after paste
     }
 
     applySettings(settings: TatePluginSettings): void {
         this.el.style.fontFamily = settings.fontFamily;
         this.el.style.fontSize = `${settings.fontSize}px`;
-        this.el.toggleClass('tate-auto-indent', settings.autoIndent);
         this.el.style.lineBreak = settings.lineBreak;
+        this.inputTransformer.updateSettings(settings);
     }
 
     adjustWidth(): void { /* no-op: contenteditable div auto-sizes */ }
@@ -121,8 +124,9 @@ export class EditorElement {
     }
 
     // Called on beforeinput event (registered from view.ts).
-    onBeforeInput(): void {
+    onBeforeInput(e: InputEvent): void {
         this.inlineEditor.onBeforeInput();
+        this.inputTransformer.handleBeforeInput(e);
     }
 
     // Resets the burst flag (call after commitToCm6() completes or on navigation in view.ts).

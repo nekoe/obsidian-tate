@@ -31,7 +31,7 @@ module.exports = __toCommonJS(main_exports);
 var import_obsidian5 = require("obsidian");
 
 // src/view.ts
-var import_obsidian3 = require("obsidian");
+var import_obsidian4 = require("obsidian");
 
 // src/sync/SyncCoordinator.ts
 var SyncCoordinator = class {
@@ -75,7 +75,66 @@ var SyncCoordinator = class {
 };
 
 // src/ui/EditorElement.ts
-var import_obsidian2 = require("obsidian");
+var import_obsidian3 = require("obsidian");
+
+// src/settings.ts
+var import_obsidian = require("obsidian");
+var DEFAULT_SETTINGS = {
+  fontFamily: '"Hiragino Mincho ProN", "Yu Mincho", "YuMincho", "MS Mincho", serif',
+  fontSize: 18,
+  lineBreak: "normal",
+  convertHalfWidthSpace: true,
+  autoIndentOnInput: true,
+  matchPrecedingIndent: true,
+  removeBracketIndent: true
+};
+var TateSettingTab = class extends import_obsidian.PluginSettingTab {
+  constructor(app, plugin) {
+    super(app, plugin);
+    this.plugin = plugin;
+  }
+  display() {
+    const { containerEl } = this;
+    containerEl.empty();
+    new import_obsidian.Setting(containerEl).setName("\u7E26\u66F8\u304D\u30D3\u30E5\u30FC \u8A2D\u5B9A").setHeading();
+    new import_obsidian.Setting(containerEl).setName("\u30D5\u30A9\u30F3\u30C8\u30D5\u30A1\u30DF\u30EA\u30FC").setDesc("\u7E26\u66F8\u304D\u8868\u793A\u306B\u4F7F\u3046\u30D5\u30A9\u30F3\u30C8\uFF08CSS font-family \u5F62\u5F0F\uFF09").addText((text) => text.setPlaceholder('"Hiragino Mincho ProN", serif').setValue(this.plugin.settings.fontFamily).onChange(async (value) => {
+      this.plugin.settings.fontFamily = value;
+      await this.plugin.saveSettings();
+      this.plugin.applySettingsToAllViews();
+    }));
+    new import_obsidian.Setting(containerEl).setName("\u30D5\u30A9\u30F3\u30C8\u30B5\u30A4\u30BA (px)").setDesc("\u7E26\u66F8\u304D\u30D3\u30E5\u30FC\u306E\u30D5\u30A9\u30F3\u30C8\u30B5\u30A4\u30BA\uFF08\u30D4\u30AF\u30BB\u30EB\uFF09").addSlider((slider) => slider.setLimits(10, 48, 1).setValue(this.plugin.settings.fontSize).setDynamicTooltip().onChange(async (value) => {
+      this.plugin.settings.fontSize = value;
+      await this.plugin.saveSettings();
+      this.plugin.applySettingsToAllViews();
+    }));
+    new import_obsidian.Setting(containerEl).setName("\u5B57\u4E0B\u3052\u8A2D\u5B9A").setHeading();
+    new import_obsidian.Setting(containerEl).setName("\u5165\u529B\u3055\u308C\u305F\u534A\u89D2\u30B9\u30DA\u30FC\u30B9\u3092\u5168\u89D2\u30B9\u30DA\u30FC\u30B9\u306B\u5909\u63DB").setDesc("\u30B9\u30DA\u30FC\u30B9\u30AD\u30FC\u3067\u5165\u529B\u3057\u305F\u534A\u89D2\u30B9\u30DA\u30FC\u30B9\u3092\u5168\u89D2\u30B9\u30DA\u30FC\u30B9\uFF08\u3000\uFF09\u306B\u5909\u63DB\u3059\u308B").addToggle((toggle) => toggle.setValue(this.plugin.settings.convertHalfWidthSpace).onChange(async (value) => {
+      this.plugin.settings.convertHalfWidthSpace = value;
+      await this.plugin.saveSettings();
+      this.plugin.applySettingsToAllViews();
+    }));
+    new import_obsidian.Setting(containerEl).setName("\u884C\u982D\u306B\u6587\u5B57\u3092\u5165\u529B\u3059\u308B\u3068\u81EA\u52D5\u3067\u5B57\u4E0B\u3052").setDesc("\u884C\u982D\u306B\u30AB\u30FC\u30BD\u30EB\u304C\u3042\u308B\u72B6\u614B\u3067\u6587\u5B57\u3092\u5165\u529B\u3059\u308B\u3068\u3001\u4E00\u6587\u5B57\u5206\u306E\u5168\u89D2\u30B9\u30DA\u30FC\u30B9\u3092\u81EA\u52D5\u633F\u5165\u3059\u308B").addToggle((toggle) => toggle.setValue(this.plugin.settings.autoIndentOnInput).onChange(async (value) => {
+      this.plugin.settings.autoIndentOnInput = value;
+      await this.plugin.saveSettings();
+      this.plugin.applySettingsToAllViews();
+    }));
+    new import_obsidian.Setting(containerEl).setName("\u5B57\u4E0B\u3052\u3092\u524D\u306E\u884C\u306B\u63C3\u3048\u308B").setDesc("\u524D\u306E\u6BB5\u843D\u306E\u5148\u982D\u5168\u89D2\u30B9\u30DA\u30FC\u30B9\u6570\u306B\u5408\u308F\u305B\u308B").addToggle((toggle) => toggle.setValue(this.plugin.settings.matchPrecedingIndent).onChange(async (value) => {
+      this.plugin.settings.matchPrecedingIndent = value;
+      await this.plugin.saveSettings();
+      this.plugin.applySettingsToAllViews();
+    }));
+    new import_obsidian.Setting(containerEl).setName("\u884C\u982D\u306B\u958B\u304D\u30AB\u30AE\u62EC\u5F27\u304C\u5165\u529B\u3055\u308C\u305F\u5834\u5408\u306B\u5B57\u4E0B\u3052\u3092\u81EA\u52D5\u524A\u9664").setDesc("\u884C\u982D\u306E\u5168\u89D2\u30B9\u30DA\u30FC\u30B9\u306E\u5F8C\u308D\u306B\u5168\u89D2\u958B\u304D\u62EC\u5F27\u3092\u5165\u529B\u3057\u305F\u3068\u304D\u3001\u884C\u982D\u306E\u5168\u89D2\u30B9\u30DA\u30FC\u30B9\u30921\u6587\u5B57\u524A\u9664\u3059\u308B").addToggle((toggle) => toggle.setValue(this.plugin.settings.removeBracketIndent).onChange(async (value) => {
+      this.plugin.settings.removeBracketIndent = value;
+      await this.plugin.saveSettings();
+      this.plugin.applySettingsToAllViews();
+    }));
+    new import_obsidian.Setting(containerEl).setName("\u7981\u5247\u51E6\u7406").setDesc("\u884C\u982D\u30FB\u884C\u672B\u306B\u7F6E\u3051\u306A\u3044\u6587\u5B57\u306E\u30EB\u30FC\u30EB\u30BB\u30C3\u30C8\uFF08CSS line-break \u30D7\u30ED\u30D1\u30C6\u30A3\uFF09").addDropdown((dropdown) => dropdown.addOption("normal", "Normal   \u2014 \u4E00\u822C\u7684\u306A\u7981\u5247\u30EB\u30FC\u30EB").addOption("strict", "Strict   \u2014 \u6700\u3082\u53B3\u683C\uFF08\u5C0F\u66F8\u304D\u4EEE\u540D\u3082\u884C\u982D\u4E0D\u53EF\uFF09").addOption("loose", "Loose    \u2014 \u65B0\u805E\u30B9\u30BF\u30A4\u30EB\uFF08\u6539\u884C\u3092\u512A\u5148\uFF09").addOption("anywhere", "Anywhere \u2014 \u7981\u5247\u306A\u3057\uFF08\u3069\u3053\u3067\u3082\u6539\u884C\uFF09").setValue(this.plugin.settings.lineBreak).onChange(async (value) => {
+      this.plugin.settings.lineBreak = value;
+      await this.plugin.saveSettings();
+      this.plugin.applySettingsToAllViews();
+    }));
+  }
+};
 
 // src/ui/SegmentMap.ts
 var KANJI_RE_STR = "[\u4E00-\u9FFF\u3400-\u4DBF\u{20000}-\u{2A6DF}\u3005\u3006\u3024]+";
@@ -415,7 +474,7 @@ function serializeNode(node, rootEl) {
 }
 
 // src/ui/InlineEditor.ts
-var import_obsidian = require("obsidian");
+var import_obsidian2 = require("obsidian");
 var InlineEditor = class {
   constructor(el) {
     this.el = el;
@@ -774,7 +833,7 @@ var InlineEditor = class {
     parent.removeChild(this.expandedEl);
     this.expandedEl = null;
     this.expandedElOriginalText = null;
-    const fragment = (0, import_obsidian.sanitizeHTMLToDom)(html);
+    const fragment = (0, import_obsidian2.sanitizeHTMLToDom)(html);
     while (fragment.firstChild) {
       parent.insertBefore(fragment.firstChild, nextSibling);
     }
@@ -896,6 +955,153 @@ var InlineEditor = class {
   }
 };
 
+// src/ui/InputTransformer.ts
+var OPEN_BRACKETS = /* @__PURE__ */ new Set([
+  "\u300C",
+  // 「
+  "\u300E",
+  // 『
+  "\u3010",
+  // 【
+  "\u3014",
+  // 〔
+  "\uFF08",
+  // （
+  "\uFF5B",
+  // ｛
+  "\u3008",
+  // 〈
+  "\u300A",
+  // 《
+  "\u3016",
+  // 〖
+  "\u3018",
+  // 〘
+  "\u301A"
+  // 〚
+]);
+var InputTransformer = class {
+  constructor(el, settings) {
+    this.el = el;
+    this.settings = { ...settings };
+  }
+  updateSettings(settings) {
+    this.settings = { ...settings };
+  }
+  // Called from EditorElement.onBeforeInput. Intercepts insertText events and applies
+  // space conversion, auto-indent, and bracket de-indent according to current settings.
+  handleBeforeInput(e) {
+    if (e.inputType !== "insertText" || !e.data || e.isComposing) return;
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return;
+    const range = sel.getRangeAt(0);
+    let char = e.data;
+    if (this.settings.convertHalfWidthSpace && char === " ") {
+      char = "\u3000";
+    }
+    const textBefore = this.getTextBeforeCursorInParagraph(range);
+    const isAtLineStart = textBefore === "";
+    const leadingSpacesBeforeCursor = /^\u3000*$/.test(textBefore) ? textBefore.length : 0;
+    if (isAtLineStart && char !== "\u3000") {
+      let indentCount;
+      if (this.settings.matchPrecedingIndent) {
+        indentCount = this.getPrecedingParagraphLeadingSpaces(range);
+      } else if (this.settings.autoIndentOnInput) {
+        indentCount = 1;
+      } else {
+        indentCount = 0;
+      }
+      if (this.settings.removeBracketIndent && OPEN_BRACKETS.has(char)) {
+        indentCount = Math.max(0, indentCount - 1);
+      }
+      if (char !== e.data || indentCount > 0) {
+        e.preventDefault();
+        this.insertText(range, "\u3000".repeat(indentCount) + char);
+      }
+      return;
+    }
+    if (leadingSpacesBeforeCursor >= 1 && this.settings.removeBracketIndent && OPEN_BRACKETS.has(char)) {
+      e.preventDefault();
+      this.removeOneLeadingFullWidthSpace(range);
+      const newSel = window.getSelection();
+      if (newSel && newSel.rangeCount > 0) {
+        this.insertText(newSel.getRangeAt(0), char);
+      }
+      return;
+    }
+    if (char !== e.data) {
+      e.preventDefault();
+      this.insertText(range, char);
+    }
+  }
+  // ---- Private helpers ----
+  getTextBeforeCursorInParagraph(range) {
+    const div = this.getContainingParagraphDiv(range.startContainer);
+    if (!div) return "";
+    try {
+      const lineRange = document.createRange();
+      lineRange.setStart(div, 0);
+      lineRange.setEnd(range.startContainer, range.startOffset);
+      return lineRange.toString();
+    } catch (e) {
+      return "";
+    }
+  }
+  getContainingParagraphDiv(node) {
+    let current = node;
+    while (current && current !== this.el) {
+      if (current.nodeType === Node.ELEMENT_NODE && current.tagName === "DIV" && current.parentNode === this.el) {
+        return current;
+      }
+      current = current.parentNode;
+    }
+    return null;
+  }
+  getPrecedingParagraphLeadingSpaces(range) {
+    var _a;
+    const currentDiv = this.getContainingParagraphDiv(range.startContainer);
+    const prevDiv = currentDiv ? currentDiv.previousElementSibling : this.el.lastElementChild;
+    if (!prevDiv || prevDiv.tagName !== "DIV") return 1;
+    const walker = document.createTreeWalker(prevDiv, NodeFilter.SHOW_TEXT);
+    const firstText = walker.nextNode();
+    const text = (_a = firstText == null ? void 0 : firstText.data) != null ? _a : "";
+    let count = 0;
+    while (count < text.length && text[count] === "\u3000") count++;
+    return count;
+  }
+  removeOneLeadingFullWidthSpace(cursorRange) {
+    var _a;
+    const div = (_a = this.getContainingParagraphDiv(cursorRange.startContainer)) != null ? _a : this.el;
+    const walker = document.createTreeWalker(div, NodeFilter.SHOW_TEXT);
+    const firstText = walker.nextNode();
+    if (!firstText || firstText.data[0] !== "\u3000") return;
+    firstText.deleteData(0, 1);
+    if (cursorRange.startContainer === firstText) {
+      const newOffset = Math.max(0, cursorRange.startOffset - 1);
+      const r = document.createRange();
+      r.setStart(firstText, newOffset);
+      r.collapse(true);
+      const sel = window.getSelection();
+      if (sel) {
+        sel.removeAllRanges();
+        sel.addRange(r);
+      }
+    }
+  }
+  insertText(range, text) {
+    range.deleteContents();
+    const textNode = document.createTextNode(text);
+    range.insertNode(textNode);
+    range.setStartAfter(textNode);
+    range.collapse(true);
+    const sel = window.getSelection();
+    if (sel) {
+      sel.removeAllRanges();
+      sel.addRange(range);
+    }
+  }
+};
+
 // src/ui/EditorElement.ts
 var EditorElement = class {
   constructor(container) {
@@ -905,6 +1111,7 @@ var EditorElement = class {
     this.el.setAttribute("spellcheck", "false");
     this.el.setAttribute("data-placeholder", "\u30D5\u30A1\u30A4\u30EB\u3092\u958B\u3044\u3066\u304F\u3060\u3055\u3044");
     this.inlineEditor = new InlineEditor(this.el);
+    this.inputTransformer = new InputTransformer(this.el, DEFAULT_SETTINGS);
   }
   getValue() {
     return Array.from(this.el.childNodes).map((n) => serializeNode(n, this.el)).join("");
@@ -914,10 +1121,10 @@ var EditorElement = class {
     if (this.getValue() === content) return;
     if (preserveCursor && document.activeElement === this.el) {
       const pos = this.getVisibleOffset();
-      this.el.replaceChildren((0, import_obsidian2.sanitizeHTMLToDom)(parseToHtml(content)));
+      this.el.replaceChildren((0, import_obsidian3.sanitizeHTMLToDom)(parseToHtml(content)));
       this.setVisibleOffset(pos);
     } else {
-      this.el.replaceChildren((0, import_obsidian2.sanitizeHTMLToDom)(parseToHtml(content)));
+      this.el.replaceChildren((0, import_obsidian3.sanitizeHTMLToDom)(parseToHtml(content)));
     }
   }
   // ---- Inline expand/collapse (call from selectionchange) ----
@@ -971,13 +1178,13 @@ var EditorElement = class {
     }
     sel.removeAllRanges();
     sel.addRange(range);
-    this.onBeforeInput();
+    this.inlineEditor.onBeforeInput();
   }
   applySettings(settings) {
     this.el.style.fontFamily = settings.fontFamily;
     this.el.style.fontSize = `${settings.fontSize}px`;
-    this.el.toggleClass("tate-auto-indent", settings.autoIndent);
     this.el.style.lineBreak = settings.lineBreak;
+    this.inputTransformer.updateSettings(settings);
   }
   adjustWidth() {
   }
@@ -985,8 +1192,9 @@ var EditorElement = class {
     this.el.focus();
   }
   // Called on beforeinput event (registered from view.ts).
-  onBeforeInput() {
+  onBeforeInput(e) {
     this.inlineEditor.onBeforeInput();
+    this.inputTransformer.handleBeforeInput(e);
   }
   // Resets the burst flag (call after commitToCm6() completes or on navigation in view.ts).
   resetBurst() {
@@ -997,7 +1205,7 @@ var EditorElement = class {
   applyFromCm6(content, srcOffset) {
     this.inlineEditor.reset();
     if (this.getValue() !== content) {
-      this.el.replaceChildren((0, import_obsidian2.sanitizeHTMLToDom)(parseToHtml(content)));
+      this.el.replaceChildren((0, import_obsidian3.sanitizeHTMLToDom)(parseToHtml(content)));
     }
     const segs = buildSegmentMap(content);
     const viewOffset = srcToView(segs, srcOffset);
@@ -1067,7 +1275,7 @@ var EditorElement = class {
 
 // src/view.ts
 var TATE_VIEW_TYPE = "tate-vertical-writing";
-var VerticalWritingView = class extends import_obsidian3.ItemView {
+var VerticalWritingView = class extends import_obsidian4.ItemView {
   constructor(leaf, plugin) {
     super(leaf);
     this.plugin = plugin;
@@ -1110,7 +1318,7 @@ var VerticalWritingView = class extends import_obsidian3.ItemView {
     });
     this.registerDomEvent(editorEl.el, "beforeinput", (e) => {
       if (!this.guardCm6(e)) return;
-      editorEl.onBeforeInput();
+      editorEl.onBeforeInput(e);
     });
     this.registerDomEvent(editorEl.el, "input", (e) => {
       if (!e.isComposing) {
@@ -1154,17 +1362,17 @@ var VerticalWritingView = class extends import_obsidian3.ItemView {
     });
     this.registerEvent(
       this.app.vault.on("modify", (file) => {
-        if (file instanceof import_obsidian3.TFile) void syncCoordinator.onExternalModify(file);
+        if (file instanceof import_obsidian4.TFile) void syncCoordinator.onExternalModify(file);
       })
     );
     this.registerEvent(
       this.app.vault.on("delete", (file) => {
-        if (file instanceof import_obsidian3.TFile) syncCoordinator.onFileDelete(file);
+        if (file instanceof import_obsidian4.TFile) syncCoordinator.onFileDelete(file);
       })
     );
     this.registerEvent(
       this.app.vault.on("rename", (file, oldPath) => {
-        if (file instanceof import_obsidian3.TFile) syncCoordinator.onFileRename(file, oldPath);
+        if (file instanceof import_obsidian4.TFile) syncCoordinator.onFileRename(file, oldPath);
       })
     );
     this.registerEvent(
@@ -1182,7 +1390,7 @@ var VerticalWritingView = class extends import_obsidian3.ItemView {
       return;
     }
     for (const leaf of this.app.workspace.getLeavesOfType("markdown")) {
-      if (leaf.view instanceof import_obsidian3.MarkdownView && leaf.view.file) {
+      if (leaf.view instanceof import_obsidian4.MarkdownView && leaf.view.file) {
         await syncCoordinator.loadFile(leaf.view.file);
         return;
       }
@@ -1201,7 +1409,7 @@ var VerticalWritingView = class extends import_obsidian3.ItemView {
   applyRuby() {
     if (!this.editorEl) return;
     if (!this.editorEl.wrapSelectionWithRuby()) {
-      new import_obsidian3.Notice("\u30C6\u30AD\u30B9\u30C8\u3092\u9078\u629E\u3057\u3066\u304F\u3060\u3055\u3044");
+      new import_obsidian4.Notice("\u30C6\u30AD\u30B9\u30C8\u3092\u9078\u629E\u3057\u3066\u304F\u3060\u3055\u3044");
     }
   }
   applyTcy() {
@@ -1213,7 +1421,7 @@ var VerticalWritingView = class extends import_obsidian3.ItemView {
   applyAnnotation(wrap) {
     if (!this.editorEl) return;
     if (!wrap(this.editorEl)) {
-      new import_obsidian3.Notice("\u30C6\u30AD\u30B9\u30C8\u3092\u9078\u629E\u3057\u3066\u304F\u3060\u3055\u3044");
+      new import_obsidian4.Notice("\u30C6\u30AD\u30B9\u30C8\u3092\u9078\u629E\u3057\u3066\u304F\u3060\u3055\u3044");
     } else {
       this.commitToCm6();
     }
@@ -1226,7 +1434,7 @@ var VerticalWritingView = class extends import_obsidian3.ItemView {
     if (!file) return null;
     for (const leaf of this.app.workspace.getLeavesOfType("markdown")) {
       const mv = leaf.view;
-      if (mv instanceof import_obsidian3.MarkdownView && mv.file === file) {
+      if (mv instanceof import_obsidian4.MarkdownView && mv.file === file) {
         return mv.editor;
       }
     }
@@ -1237,7 +1445,7 @@ var VerticalWritingView = class extends import_obsidian3.ItemView {
   guardCm6(e) {
     if (this.getCm6Editor()) return true;
     e.preventDefault();
-    new import_obsidian3.Notice("\u7E26\u66F8\u304D\u30A8\u30C7\u30A3\u30BF\u3092\u4F7F\u7528\u3059\u308B\u306B\u306F\u3001\u5BFE\u5FDC\u3059\u308B Markdown \u30D3\u30E5\u30FC\u3092\u958B\u3044\u3066\u304F\u3060\u3055\u3044");
+    new import_obsidian4.Notice("\u7E26\u66F8\u304D\u30A8\u30C7\u30A3\u30BF\u3092\u4F7F\u7528\u3059\u308B\u306B\u306F\u3001\u5BFE\u5FDC\u3059\u308B Markdown \u30D3\u30E5\u30FC\u3092\u958B\u3044\u3066\u304F\u3060\u3055\u3044");
     return false;
   }
   /** Commits the current content of the vertical writing editor to CM6 using differential replaceRange.
@@ -1309,46 +1517,6 @@ var VerticalWritingView = class extends import_obsidian3.ItemView {
       fromEndNext--;
     }
     return fromEndNext;
-  }
-};
-
-// src/settings.ts
-var import_obsidian4 = require("obsidian");
-var DEFAULT_SETTINGS = {
-  fontFamily: '"Hiragino Mincho ProN", "Yu Mincho", "YuMincho", "MS Mincho", serif',
-  fontSize: 18,
-  autoIndent: true,
-  lineBreak: "normal"
-};
-var TateSettingTab = class extends import_obsidian4.PluginSettingTab {
-  constructor(app, plugin) {
-    super(app, plugin);
-    this.plugin = plugin;
-  }
-  display() {
-    const { containerEl } = this;
-    containerEl.empty();
-    new import_obsidian4.Setting(containerEl).setName("\u7E26\u66F8\u304D\u30D3\u30E5\u30FC \u8A2D\u5B9A").setHeading();
-    new import_obsidian4.Setting(containerEl).setName("\u30D5\u30A9\u30F3\u30C8\u30D5\u30A1\u30DF\u30EA\u30FC").setDesc("\u7E26\u66F8\u304D\u8868\u793A\u306B\u4F7F\u3046\u30D5\u30A9\u30F3\u30C8\uFF08CSS font-family \u5F62\u5F0F\uFF09").addText((text) => text.setPlaceholder('"Hiragino Mincho ProN", serif').setValue(this.plugin.settings.fontFamily).onChange(async (value) => {
-      this.plugin.settings.fontFamily = value;
-      await this.plugin.saveSettings();
-      this.plugin.applySettingsToAllViews();
-    }));
-    new import_obsidian4.Setting(containerEl).setName("\u30D5\u30A9\u30F3\u30C8\u30B5\u30A4\u30BA (px)").setDesc("\u7E26\u66F8\u304D\u30D3\u30E5\u30FC\u306E\u30D5\u30A9\u30F3\u30C8\u30B5\u30A4\u30BA\uFF08\u30D4\u30AF\u30BB\u30EB\uFF09").addSlider((slider) => slider.setLimits(10, 48, 1).setValue(this.plugin.settings.fontSize).setDynamicTooltip().onChange(async (value) => {
-      this.plugin.settings.fontSize = value;
-      await this.plugin.saveSettings();
-      this.plugin.applySettingsToAllViews();
-    }));
-    new import_obsidian4.Setting(containerEl).setName("\u81EA\u52D5\u5B57\u4E0B\u3052").setDesc("\u5404\u6BB5\u843D\u306E\u884C\u982D\u30921\u6587\u5B57\u5206\u30A4\u30F3\u30C7\u30F3\u30C8\u3059\u308B").addToggle((toggle) => toggle.setValue(this.plugin.settings.autoIndent).onChange(async (value) => {
-      this.plugin.settings.autoIndent = value;
-      await this.plugin.saveSettings();
-      this.plugin.applySettingsToAllViews();
-    }));
-    new import_obsidian4.Setting(containerEl).setName("\u7981\u5247\u51E6\u7406").setDesc("\u884C\u982D\u30FB\u884C\u672B\u306B\u7F6E\u3051\u306A\u3044\u6587\u5B57\u306E\u30EB\u30FC\u30EB\u30BB\u30C3\u30C8\uFF08CSS line-break \u30D7\u30ED\u30D1\u30C6\u30A3\uFF09").addDropdown((dropdown) => dropdown.addOption("normal", "Normal   \u2014 \u4E00\u822C\u7684\u306A\u7981\u5247\u30EB\u30FC\u30EB").addOption("strict", "Strict   \u2014 \u6700\u3082\u53B3\u683C\uFF08\u5C0F\u66F8\u304D\u4EEE\u540D\u3082\u884C\u982D\u4E0D\u53EF\uFF09").addOption("loose", "Loose    \u2014 \u65B0\u805E\u30B9\u30BF\u30A4\u30EB\uFF08\u6539\u884C\u3092\u512A\u5148\uFF09").addOption("anywhere", "Anywhere \u2014 \u7981\u5247\u306A\u3057\uFF08\u3069\u3053\u3067\u3082\u6539\u884C\uFF09").setValue(this.plugin.settings.lineBreak).onChange(async (value) => {
-      this.plugin.settings.lineBreak = value;
-      await this.plugin.saveSettings();
-      this.plugin.applySettingsToAllViews();
-    }));
   }
 };
 

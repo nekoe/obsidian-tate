@@ -4,15 +4,21 @@ import type TatePlugin from './main';
 export interface TatePluginSettings {
     fontFamily: string;
     fontSize: number;
-    autoIndent: boolean;
     lineBreak: 'normal' | 'strict' | 'loose' | 'anywhere';
+    convertHalfWidthSpace: boolean;
+    autoIndentOnInput: boolean;
+    matchPrecedingIndent: boolean;
+    removeBracketIndent: boolean;
 }
 
 export const DEFAULT_SETTINGS: TatePluginSettings = {
     fontFamily: '"Hiragino Mincho ProN", "Yu Mincho", "YuMincho", "MS Mincho", serif',
     fontSize: 18,
-    autoIndent: true,
     lineBreak: 'normal',
+    convertHalfWidthSpace: true,
+    autoIndentOnInput: true,
+    matchPrecedingIndent: true,
+    removeBracketIndent: true,
 };
 
 export class TateSettingTab extends PluginSettingTab {
@@ -53,13 +59,48 @@ export class TateSettingTab extends PluginSettingTab {
                     this.plugin.applySettingsToAllViews();
                 }));
 
+        new Setting(containerEl).setName('字下げ設定').setHeading();
+
         new Setting(containerEl)
-            .setName('自動字下げ')
-            .setDesc('各段落の行頭を1文字分インデントする')
+            .setName('入力された半角スペースを全角スペースに変換')
+            .setDesc('スペースキーで入力した半角スペースを全角スペース（　）に変換する')
             .addToggle(toggle => toggle
-                .setValue(this.plugin.settings.autoIndent)
+                .setValue(this.plugin.settings.convertHalfWidthSpace)
                 .onChange(async (value) => {
-                    this.plugin.settings.autoIndent = value;
+                    this.plugin.settings.convertHalfWidthSpace = value;
+                    await this.plugin.saveSettings();
+                    this.plugin.applySettingsToAllViews();
+                }));
+
+        new Setting(containerEl)
+            .setName('行頭に文字を入力すると自動で字下げ')
+            .setDesc('行頭にカーソルがある状態で文字を入力すると、一文字分の全角スペースを自動挿入する')
+            .addToggle(toggle => toggle
+                .setValue(this.plugin.settings.autoIndentOnInput)
+                .onChange(async (value) => {
+                    this.plugin.settings.autoIndentOnInput = value;
+                    await this.plugin.saveSettings();
+                    this.plugin.applySettingsToAllViews();
+                }));
+
+        new Setting(containerEl)
+            .setName('字下げを前の行に揃える')
+            .setDesc('前の段落の先頭全角スペース数に合わせる')
+            .addToggle(toggle => toggle
+                .setValue(this.plugin.settings.matchPrecedingIndent)
+                .onChange(async (value) => {
+                    this.plugin.settings.matchPrecedingIndent = value;
+                    await this.plugin.saveSettings();
+                    this.plugin.applySettingsToAllViews();
+                }));
+
+        new Setting(containerEl)
+            .setName('行頭に開きカギ括弧が入力された場合に字下げを自動削除')
+            .setDesc('行頭の全角スペースの後ろに全角開き括弧を入力したとき、行頭の全角スペースを1文字削除する')
+            .addToggle(toggle => toggle
+                .setValue(this.plugin.settings.removeBracketIndent)
+                .onChange(async (value) => {
+                    this.plugin.settings.removeBracketIndent = value;
                     await this.plugin.saveSettings();
                     this.plugin.applySettingsToAllViews();
                 }));
