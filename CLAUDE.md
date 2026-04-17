@@ -28,7 +28,9 @@ src/
 ├── sync/
 │   └── SyncCoordinator.ts     # Bidirectional sync control (external change detection, file loading)
 └── ui/
-    ├── EditorElement.ts       # contenteditable div DOM management
+    ├── EditorElement.ts       # contenteditable div DOM management (facade over AozoraParser and InlineEditor)
+    ├── AozoraParser.ts        # Aozora notation ↔ DOM bidirectional conversion (parse + serialize)
+    ├── InlineEditor.ts        # Inline expand/collapse of ruby/tcy/bouten elements while editing
     ├── SegmentMap.ts          # Source offset ↔ view offset bidirectional mapping
     └── SegmentMap.test.ts     # SegmentMap unit tests (vitest)
 styles.css                     # Vertical writing CSS (writing-mode: vertical-rl)
