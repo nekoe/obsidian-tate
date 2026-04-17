@@ -15,7 +15,7 @@ Build output: `main.js` (project root).
 ## Install into Obsidian (development)
 
 ```bash
-cp main.js manifest.json styles.css ~/.obsidian/plugins/obsidian-tate/
+cp main.js manifest.json styles.css {YOUR_VAULT_PATH}/.obsidian/plugins/tate/
 ```
 
 ## File Structure

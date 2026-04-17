@@ -57,7 +57,7 @@ npm run build
 2. Copy the build output to your Obsidian plugins folder:
 
 ```bash
-cp main.js manifest.json styles.css ~/.obsidian/plugins/obsidian-tate/
+cp main.js manifest.json styles.css {YOUR_VAULT_PATH}/.obsidian/plugins/tate/
 ```
 
 3. Enable the plugin in Obsidian under **Settings → Community Plugins**.

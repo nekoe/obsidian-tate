@@ -55,7 +55,7 @@ npm run build
 2. ビルド成果物を Obsidian のプラグインフォルダにコピーします
 
 ```bash
-cp main.js manifest.json styles.css ~/.obsidian/plugins/obsidian-tate/
+cp main.js manifest.json styles.css {YOUR_VAULT_PATH}/.obsidian/plugins/tate/
 ```
 
 3. Obsidian の「設定 → コミュニティプラグイン」でプラグインを有効化します
