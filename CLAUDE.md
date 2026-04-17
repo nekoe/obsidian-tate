@@ -38,6 +38,18 @@ styles.css                     # Vertical writing CSS (writing-mode: vertical-rl
 manifest.json                  # Plugin metadata (id: obsidian-tate)
 ```
 
+## Version Bump
+
+Always use `npm version` to bump the version. Never edit `manifest.json`, `package.json`, or `versions.json` directly.
+
+```bash
+npm version patch   # 1.x.y → 1.x.(y+1)
+npm version minor   # 1.x.y → 1.(x+1).0
+npm version major   # 1.x.y → (x+1).0.0
+```
+
+`npm version` automatically runs `version-bump.mjs` (updates `manifest.json` and `versions.json`), stages those files, and creates a git commit + tag.
+
 ## Development Guide
 
 - All source code comments (TypeScript and CSS) must be written in English.
