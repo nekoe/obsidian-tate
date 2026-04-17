@@ -28,9 +28,18 @@ Select text, open the command palette (`Ctrl+P` / `Cmd+P`), and run one of:
 
 Moving the cursor into a ruby, tate-chu-yoko, or emphasis mark element expands it into raw Aozora text in place — the same behavior as Obsidian's Markdown editor. Moving the cursor out collapses it back to the rendered form.
 
-### Auto-indent
+### Auto-indent and Typography Helpers
 
-The first character of each paragraph is automatically indented by one em. Can be toggled in settings (default: on).
+Four independent settings refine how text is entered in the vertical view. All of them write actual full-width space characters (U+3000) into the file — not just visual CSS indentation.
+
+| Setting | What it does |
+|---------|--------------|
+| **Convert half-width space to full-width** | Replaces a typed half-width space (Space key) with a full-width space `　`. Applies everywhere except paste. |
+| **Auto-indent on input** | Inserts one full-width space at the start of a line when a character is typed there (covers both direct input and Japanese IME). |
+| **Match preceding paragraph indent** | When Enter is pressed to start a new paragraph, automatically inserts the same number of leading full-width spaces as the preceding paragraph. Works independently of the setting above. |
+| **Remove bracket indent** | When a full-width opening bracket (`「『（` etc.) is typed after leading spaces, removes one leading space — following traditional Japanese typography where brackets are not indented. |
+
+All four are on by default.
 
 ### Line-break Rules (Kinsoku)
 
@@ -76,5 +85,8 @@ Configure under **Settings → TATE**:
 |---------|-------------|---------|
 | Font family | Font used in the vertical view (CSS `font-family` syntax) | Hiragino Mincho ProN |
 | Font size | Font size in the vertical view (px) | 18 |
-| Auto-indent | Indent the first character of each paragraph by 1 em | On |
+| Convert half-width space to full-width | Replace typed space with full-width space `　` | On |
+| Auto-indent on input | Insert one `　` at line start when a character is typed | On |
+| Match preceding paragraph indent | On Enter, copy the indent of the paragraph above | On |
+| Remove bracket indent | Remove one leading `　` when a full-width bracket is typed after spaces | On |
 | Line-break rule | Kinsoku rule set for line start/end restrictions | Normal |

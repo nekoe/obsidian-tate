@@ -92,6 +92,28 @@ cursor node, found by walking `parentNode` up from `range.startContainer`. If no
 consecutive U+3000 characters at the start of its first text node. Returns 0 if there is no
 preceding paragraph (nothing to match).
 
+## `insertText` Implementation: `insertData` vs `insertNode`
+
+`insertText(range, text)` uses two different DOM paths depending on where the cursor is:
+
+- **Cursor inside a text node**: `Text.insertData(offset, text)` — modifies the node in-place.
+- **Cursor inside an element node** (e.g. `<div>` or `<br>`): `Range.insertNode(textNode)` — creates a new text node and inserts it.
+
+The reason `insertData` is preferred for text nodes: `Range.insertNode` on a text node at offset 0
+splits the node per the DOM spec — it creates an empty `''` text node on the left and the original
+content on the right. This empty node became the first node returned by `TreeWalker`, causing
+`removeOneLeadingFullWidthSpace` to exit early (`data[0] !== '\u3000'`) and
+`getPrecedingParagraphLeadingSpaces` to return 0. Both failures persisted until the view was
+reopened, because `onExternalModify` in `SyncCoordinator` compares serialized content (which ignores
+empty text nodes) and therefore never rebuilt the DOM.
+
+`insertData` does not split; it modifies the text node string directly, so no empty nodes are
+created.
+
+Additionally, `removeOneLeadingFullWidthSpace` and `getPrecedingParagraphLeadingSpaces` both skip
+empty text nodes in their `TreeWalker` loops as a defensive measure against empty nodes arising from
+other sources (e.g. browser internals).
+
 ## Settings and Initialization
 
 `InputTransformer` is initialized with `DEFAULT_SETTINGS` in the `EditorElement` constructor.
