@@ -42,6 +42,7 @@ manifest.json                  # Plugin metadata (id: obsidian-tate)
 - All source code comments (TypeScript and CSS) must be written in English.
 - Important design decisions and research findings must be saved as design documents under `docs/design/YYYYMMDD_{topic}.md`. Dates are embedded in filenames to preserve a history of decision-making over time.
 - When multiple design documents conflict, the document with the more recent date takes precedence.
+- Obsidian Developer Documentation: https://docs.obsidian.md
 
 ## Key Design Decisions
 
