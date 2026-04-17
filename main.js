@@ -589,7 +589,7 @@ var InlineEditor = class {
     const resolved = this.resolveSelectionRange();
     if (!resolved) return false;
     const { textNode, startOffset, endOffset } = resolved;
-    const selectedText = textNode.textContent.slice(startOffset, endOffset);
+    const selectedText = textNode.data.slice(startOffset, endOffset);
     if (!selectedText) return false;
     const rawText = `\uFF5C${selectedText}\u300A\u300B`;
     const span = document.createElement("span");
@@ -598,8 +598,8 @@ var InlineEditor = class {
     const parentEl = textNode.parentNode;
     this.isModifyingDom = true;
     try {
-      const precedingText = textNode.textContent.slice(0, startOffset);
-      const followingText = textNode.textContent.slice(endOffset);
+      const precedingText = textNode.data.slice(0, startOffset);
+      const followingText = textNode.data.slice(endOffset);
       const next = textNode.nextSibling;
       parentEl.removeChild(textNode);
       if (precedingText) parentEl.insertBefore(document.createTextNode(precedingText), next);
@@ -646,7 +646,7 @@ var InlineEditor = class {
     const resolved = this.resolveSelectionRange();
     if (!resolved) return false;
     const { textNode, startOffset, endOffset } = resolved;
-    const selectedText = textNode.textContent.slice(startOffset, endOffset);
+    const selectedText = textNode.data.slice(startOffset, endOffset);
     if (!selectedText) return false;
     const newEl = createElement(selectedText);
     this.isModifyingDom = true;
@@ -825,8 +825,8 @@ var InlineEditor = class {
   // Direct DOM operation: replaces the range [matchStart, matchEnd) of the text node with element.
   insertAnnotationElement(textNode, matchStart, matchEnd, element) {
     const parentEl = textNode.parentNode;
-    const precedingText = textNode.textContent.slice(0, matchStart);
-    const followingText = textNode.textContent.slice(matchEnd);
+    const precedingText = textNode.data.slice(0, matchStart);
+    const followingText = textNode.data.slice(matchEnd);
     const next = textNode.nextSibling;
     parentEl.removeChild(textNode);
     if (precedingText) parentEl.insertBefore(document.createTextNode(precedingText), next);
