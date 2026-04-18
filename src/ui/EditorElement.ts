@@ -189,6 +189,11 @@ export class EditorElement {
         this.inlineEditor.handleCursorAnchorInput();
     }
 
+    // Records the direction of the most recent navigation key for anchor skip.
+    notifyNavigationKey(key: string): void {
+        this.inlineEditor.notifyNavigationKey(key);
+    }
+
     // ---- Cursor operations (offset managed in visible character count, excluding <rt> and U+200B) ----
 
     private getVisibleOffset(): number {

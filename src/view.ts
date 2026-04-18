@@ -101,6 +101,7 @@ export class VerticalWritingView extends ItemView {
             // Skip while isComposing=true (user is selecting IME candidates)
             if (!e.isComposing && ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown',
                  'Home', 'End', 'PageUp', 'PageDown'].includes(e.key)) {
+                editorEl.notifyNavigationKey(e.key);
                 this.commitToCm6();
                 editorEl.resetBurst();
             }

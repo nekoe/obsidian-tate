@@ -16,6 +16,9 @@ export class InlineEditor {
     // Flag indicating there are uncommitted changes pending for CM6.
     // Set by onBeforeInput, cleared by resetBurst() when commitToCm6() completes.
     private inBurst = false;
+    // Direction of the most recent navigation key; used by handleSelectionChange to skip
+    // the U+200B placeholder in the cursor anchor span in the correct direction.
+    private pendingAnchorSkip: 'forward' | 'backward' | null = null;
 
     constructor(private readonly el: HTMLDivElement) {}
 
@@ -136,17 +139,25 @@ export class InlineEditor {
             const currentRange = sel.getRangeAt(0);
             if (!this.el.contains(currentRange.startContainer)) return contentChanged;
 
-            // If cursor entered a U+200B-only anchor span at offset 0 (forward navigation),
-            // skip to just after the span so the invisible placeholder is transparent.
+            // If cursor is inside a U+200B-only anchor span and a navigation key was just pressed,
+            // skip in the recorded direction to make the invisible placeholder transparent.
             const anchorSpan = this.findCursorAnchorAncestor(currentRange.startContainer);
+            const savedSkip = this.pendingAnchorSkip;
+            this.pendingAnchorSkip = null;
             if (anchorSpan) {
                 const text = anchorSpan.textContent ?? '';
-                if ((text === '\u200B' || text === '')
-                        && currentRange.startContainer === anchorSpan.firstChild
-                        && currentRange.startOffset === 0) {
+                if ((text === '\u200B' || text === '') && savedSkip !== null) {
                     try {
                         const r = document.createRange();
-                        r.setStartAfter(anchorSpan);
+                        if (savedSkip === 'forward') {
+                            const pos = this.findPositionAfterAnchor(anchorSpan);
+                            if (pos) r.setStart(pos.node, pos.offset);
+                            else r.setStartAfter(anchorSpan);
+                        } else {
+                            const pos = this.findPositionBeforeAnchor(anchorSpan);
+                            if (pos) r.setStart(pos.node, pos.offset);
+                            else r.setStartAfter(anchorSpan); // Nothing before: stay at end-of-line
+                        }
                         r.collapse(true);
                         sel.removeAllRanges();
                         sel.addRange(r);
@@ -647,6 +658,15 @@ export class InlineEditor {
 
     // ---- Cursor anchor span management ----
 
+    // Records the direction of the most recent navigation key so handleSelectionChange
+    // can skip the U+200B placeholder in the correct direction.
+    // Call from the keydown handler before the browser moves the cursor.
+    notifyNavigationKey(key: string): void {
+        if (key === 'ArrowDown') this.pendingAnchorSkip = 'forward';
+        else if (key === 'ArrowUp') this.pendingAnchorSkip = 'backward';
+        else this.pendingAnchorSkip = null;
+    }
+
     // Returns an ancestor <span class=tate-cursor-anchor> of node, or null if not found.
     private findCursorAnchorAncestor(node: Node): HTMLElement | null {
         let el: HTMLElement | null = node instanceof HTMLElement ? node : node.parentElement;
@@ -686,6 +706,64 @@ export class InlineEditor {
             sel.removeAllRanges();
             sel.addRange(r);
         } catch { /* ignore if detached */ }
+    }
+
+    // Returns the first non-<rt> text position in the next paragraph after the anchor's parent div.
+    // Used for forward anchor skip (ArrowDown).
+    private findPositionAfterAnchor(anchor: HTMLElement): { node: Text; offset: number } | null {
+        const parentDiv = anchor.parentElement;
+        if (!parentDiv) return null;
+        let next = parentDiv.nextSibling;
+        while (next) {
+            const walker = document.createTreeWalker(next, NodeFilter.SHOW_TEXT);
+            let node = walker.nextNode() as Text | null;
+            while (node) {
+                if (!this.isInsideRtNode(node)) return { node, offset: 0 };
+                node = walker.nextNode() as Text | null;
+            }
+            next = next.nextSibling;
+        }
+        return null;
+    }
+
+    // Returns the last non-<rt> text position before the anchor on the same line,
+    // skipping over inline elements (e.g. <ruby>) without descending into them.
+    // Falls back to the last text of the previous paragraph if nothing is found on the same line.
+    private findPositionBeforeAnchor(anchor: HTMLElement): { node: Text; offset: number } | null {
+        // Search backward among siblings of the anchor on the same line
+        let prev: Node | null = anchor.previousSibling;
+        while (prev) {
+            if (prev.nodeType === Node.TEXT_NODE) {
+                return { node: prev as Text, offset: (prev as Text).length };
+            }
+            prev = prev.previousSibling;
+        }
+        // Nothing usable on the same line: fall back to end of previous paragraph
+        const parentDiv = anchor.parentElement;
+        if (!parentDiv) return null;
+        let prevDiv = parentDiv.previousSibling;
+        while (prevDiv) {
+            const walker = document.createTreeWalker(prevDiv, NodeFilter.SHOW_TEXT);
+            let lastText: Text | null = null;
+            let node = walker.nextNode() as Text | null;
+            while (node) {
+                if (!this.isInsideRtNode(node)) lastText = node;
+                node = walker.nextNode() as Text | null;
+            }
+            if (lastText) return { node: lastText, offset: lastText.length };
+            prevDiv = prevDiv.previousSibling;
+        }
+        return null;
+    }
+
+    // Returns true if node has an <rt> ancestor within the editor root.
+    private isInsideRtNode(node: Node): boolean {
+        let parent = node.parentElement;
+        while (parent && parent !== this.el) {
+            if (parent.tagName === 'RT') return true;
+            parent = parent.parentElement;
+        }
+        return false;
     }
 
     // Called after input/compositionend when cursor may be inside a tate-cursor-anchor span.
