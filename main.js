@@ -86,7 +86,10 @@ var DEFAULT_SETTINGS = {
   convertHalfWidthSpace: true,
   autoIndentOnInput: true,
   matchPrecedingIndent: true,
-  removeBracketIndent: true
+  removeBracketIndent: true,
+  expandRubyInline: true,
+  expandTcyInline: false,
+  expandBoutenInline: false
 };
 var TateSettingTab = class extends import_obsidian.PluginSettingTab {
   constructor(app, plugin) {
@@ -130,6 +133,22 @@ var TateSettingTab = class extends import_obsidian.PluginSettingTab {
     }));
     new import_obsidian.Setting(containerEl).setName("\u7981\u5247\u51E6\u7406").setDesc("\u884C\u982D\u30FB\u884C\u672B\u306B\u7F6E\u3051\u306A\u3044\u6587\u5B57\u306E\u30EB\u30FC\u30EB\u30BB\u30C3\u30C8\uFF08CSS line-break \u30D7\u30ED\u30D1\u30C6\u30A3\uFF09").addDropdown((dropdown) => dropdown.addOption("normal", "Normal   \u2014 \u4E00\u822C\u7684\u306A\u7981\u5247\u30EB\u30FC\u30EB").addOption("strict", "Strict   \u2014 \u6700\u3082\u53B3\u683C\uFF08\u5C0F\u66F8\u304D\u4EEE\u540D\u3082\u884C\u982D\u4E0D\u53EF\uFF09").addOption("loose", "Loose    \u2014 \u65B0\u805E\u30B9\u30BF\u30A4\u30EB\uFF08\u6539\u884C\u3092\u512A\u5148\uFF09").addOption("anywhere", "Anywhere \u2014 \u7981\u5247\u306A\u3057\uFF08\u3069\u3053\u3067\u3082\u6539\u884C\uFF09").setValue(this.plugin.settings.lineBreak).onChange(async (value) => {
       this.plugin.settings.lineBreak = value;
+      await this.plugin.saveSettings();
+      this.plugin.applySettingsToAllViews();
+    }));
+    new import_obsidian.Setting(containerEl).setName("\u30A4\u30F3\u30E9\u30A4\u30F3\u5C55\u958B").setHeading();
+    new import_obsidian.Setting(containerEl).setName("\u30EB\u30D3\u3092\u30A4\u30F3\u30E9\u30A4\u30F3\u5C55\u958B\u3059\u308B").setDesc("\u30AB\u30FC\u30BD\u30EB\u304C\u30EB\u30D3\u4E0A\u306B\u79FB\u52D5\u3057\u305F\u3068\u304D\u3001\u9752\u7A7A\u8A18\u6CD5\u30C6\u30AD\u30B9\u30C8\u306B\u5C55\u958B\u3057\u3066\u7DE8\u96C6\u3067\u304D\u308B\u3088\u3046\u306B\u3059\u308B").addToggle((toggle) => toggle.setValue(this.plugin.settings.expandRubyInline).onChange(async (value) => {
+      this.plugin.settings.expandRubyInline = value;
+      await this.plugin.saveSettings();
+      this.plugin.applySettingsToAllViews();
+    }));
+    new import_obsidian.Setting(containerEl).setName("\u7E26\u4E2D\u6A2A\u3092\u30A4\u30F3\u30E9\u30A4\u30F3\u5C55\u958B\u3059\u308B").setDesc("\u30AB\u30FC\u30BD\u30EB\u304C\u7E26\u4E2D\u6A2A\u4E0A\u306B\u79FB\u52D5\u3057\u305F\u3068\u304D\u3001\u9752\u7A7A\u8A18\u6CD5\u30C6\u30AD\u30B9\u30C8\u306B\u5C55\u958B\u3057\u3066\u7DE8\u96C6\u3067\u304D\u308B\u3088\u3046\u306B\u3059\u308B").addToggle((toggle) => toggle.setValue(this.plugin.settings.expandTcyInline).onChange(async (value) => {
+      this.plugin.settings.expandTcyInline = value;
+      await this.plugin.saveSettings();
+      this.plugin.applySettingsToAllViews();
+    }));
+    new import_obsidian.Setting(containerEl).setName("\u508D\u70B9\u3092\u30A4\u30F3\u30E9\u30A4\u30F3\u5C55\u958B\u3059\u308B").setDesc("\u30AB\u30FC\u30BD\u30EB\u304C\u508D\u70B9\u4E0A\u306B\u79FB\u52D5\u3057\u305F\u3068\u304D\u3001\u9752\u7A7A\u8A18\u6CD5\u30C6\u30AD\u30B9\u30C8\u306B\u5C55\u958B\u3057\u3066\u7DE8\u96C6\u3067\u304D\u308B\u3088\u3046\u306B\u3059\u308B").addToggle((toggle) => toggle.setValue(this.plugin.settings.expandBoutenInline).onChange(async (value) => {
+      this.plugin.settings.expandBoutenInline = value;
       await this.plugin.saveSettings();
       this.plugin.applySettingsToAllViews();
     }));
@@ -495,6 +514,15 @@ var InlineEditor = class {
     // Direction of the most recent navigation key; used by handleSelectionChange to skip
     // the U+200B placeholder in the cursor anchor span in the correct direction.
     this.pendingAnchorSkip = null;
+    // Per-element-type flags controlling whether cursor entry triggers inline expansion.
+    this.expandRuby = true;
+    this.expandTcy = false;
+    this.expandBouten = false;
+  }
+  setExpandSettings(ruby, tcy, bouten) {
+    this.expandRuby = ruby;
+    this.expandTcy = tcy;
+    this.expandBouten = bouten;
   }
   // Resets expansion state, selection cache, and burst flag (called from setValue / applyFromCm6)
   reset() {
@@ -830,9 +858,9 @@ var InlineEditor = class {
   findExpandableAncestor(node) {
     let el = node instanceof HTMLElement ? node : node.parentElement;
     while (el && el !== this.el) {
-      if (el.tagName === "RUBY") return el;
-      if (el.tagName === "SPAN" && el.getAttribute("data-tcy") === "explicit") return el;
-      if (el.tagName === "SPAN" && el.getAttribute("data-bouten")) return el;
+      if (el.tagName === "RUBY" && this.expandRuby) return el;
+      if (el.tagName === "SPAN" && el.getAttribute("data-tcy") === "explicit" && this.expandTcy) return el;
+      if (el.tagName === "SPAN" && el.getAttribute("data-bouten") && this.expandBouten) return el;
       el = el.parentElement;
     }
     return null;
@@ -1468,6 +1496,11 @@ var EditorElement = class {
     this.el.style.fontSize = `${settings.fontSize}px`;
     this.el.style.lineBreak = settings.lineBreak;
     this.inputTransformer.updateSettings(settings);
+    this.inlineEditor.setExpandSettings(
+      settings.expandRubyInline,
+      settings.expandTcyInline,
+      settings.expandBoutenInline
+    );
   }
   adjustWidth() {
   }

@@ -115,6 +115,11 @@ export class EditorElement {
         this.el.style.fontSize = `${settings.fontSize}px`;
         this.el.style.lineBreak = settings.lineBreak;
         this.inputTransformer.updateSettings(settings);
+        this.inlineEditor.setExpandSettings(
+            settings.expandRubyInline,
+            settings.expandTcyInline,
+            settings.expandBoutenInline,
+        );
     }
 
     adjustWidth(): void { /* no-op: contenteditable div auto-sizes */ }

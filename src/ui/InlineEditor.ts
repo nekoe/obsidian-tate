@@ -19,8 +19,18 @@ export class InlineEditor {
     // Direction of the most recent navigation key; used by handleSelectionChange to skip
     // the U+200B placeholder in the cursor anchor span in the correct direction.
     private pendingAnchorSkip: 'forward' | 'backward' | null = null;
+    // Per-element-type flags controlling whether cursor entry triggers inline expansion.
+    private expandRuby = true;
+    private expandTcy = false;
+    private expandBouten = false;
 
     constructor(private readonly el: HTMLDivElement) {}
+
+    setExpandSettings(ruby: boolean, tcy: boolean, bouten: boolean): void {
+        this.expandRuby = ruby;
+        this.expandTcy = tcy;
+        this.expandBouten = bouten;
+    }
 
     // Resets expansion state, selection cache, and burst flag (called from setValue / applyFromCm6)
     reset(): void {
@@ -445,9 +455,9 @@ export class InlineEditor {
     private findExpandableAncestor(node: Node): HTMLElement | null {
         let el: HTMLElement | null = node instanceof HTMLElement ? node : node.parentElement;
         while (el && el !== this.el) {
-            if (el.tagName === 'RUBY') return el;
-            if (el.tagName === 'SPAN' && el.getAttribute('data-tcy') === 'explicit') return el;
-            if (el.tagName === 'SPAN' && el.getAttribute('data-bouten')) return el;
+            if (el.tagName === 'RUBY' && this.expandRuby) return el;
+            if (el.tagName === 'SPAN' && el.getAttribute('data-tcy') === 'explicit' && this.expandTcy) return el;
+            if (el.tagName === 'SPAN' && el.getAttribute('data-bouten') && this.expandBouten) return el;
             el = el.parentElement;
         }
         return null;
