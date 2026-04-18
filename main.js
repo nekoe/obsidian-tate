@@ -510,7 +510,7 @@ var InlineEditor = class {
   // Called on every cursor movement to expand or collapse ruby/tcy elements.
   // Returns true if collapse changed the content (signal for view.ts to call commitToCm6).
   handleSelectionChange() {
-    var _a, _b;
+    var _a, _b, _c;
     if (!this.isModifyingDom) {
       if (!this.expandedEl || !this.expandedEl.isConnected) {
         const actualSpan = this.el.querySelector("span.tate-editing");
@@ -552,9 +552,11 @@ var InlineEditor = class {
         if (parentEl) {
           try {
             const r = document.createRange();
+            let placedAnchor = null;
             if (nextSib && nextSib.isConnected) {
               if (nextSib instanceof HTMLElement && nextSib.classList.contains("tate-cursor-anchor") && ((_a = nextSib.firstChild) == null ? void 0 : _a.nodeType) === Node.TEXT_NODE) {
                 r.setStart(nextSib.firstChild, 0);
+                placedAnchor = nextSib;
               } else {
                 r.setStartBefore(nextSib);
               }
@@ -562,10 +564,16 @@ var InlineEditor = class {
               const anchor = this.createCursorAnchor();
               parentEl.appendChild(anchor);
               r.setStart(anchor.firstChild, 0);
+              placedAnchor = anchor;
             }
             r.collapse(true);
             sel.removeAllRanges();
             sel.addRange(r);
+            if (placedAnchor) {
+              const nextAfterAnchor = placedAnchor.nextSibling;
+              const atEndOfLine = !nextAfterAnchor || nextAfterAnchor instanceof HTMLElement && nextAfterAnchor.tagName === "BR" && nextAfterAnchor === ((_b = nextAfterAnchor.parentElement) == null ? void 0 : _b.lastChild);
+              if (atEndOfLine) this.pendingAnchorSkip = null;
+            }
           } catch (e) {
           }
         }
@@ -595,7 +603,7 @@ var InlineEditor = class {
       const savedSkip = this.pendingAnchorSkip;
       this.pendingAnchorSkip = null;
       if (anchorSpan) {
-        const text = (_b = anchorSpan.textContent) != null ? _b : "";
+        const text = (_c = anchorSpan.textContent) != null ? _c : "";
         if ((text === "\u200B" || text === "") && savedSkip !== null) {
           try {
             const r = document.createRange();

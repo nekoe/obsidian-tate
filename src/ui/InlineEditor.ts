@@ -94,6 +94,7 @@ export class InlineEditor {
                 if (parentEl) {
                     try {
                         const r = document.createRange();
+                        let placedAnchor: HTMLElement | null = null;
                         if (nextSib && nextSib.isConnected) {
                             if (nextSib instanceof HTMLElement
                                     && nextSib.classList.contains('tate-cursor-anchor')
@@ -102,6 +103,7 @@ export class InlineEditor {
                                 // creating an element-level position that fires an intermediate
                                 // selectionchange and clears pendingAnchorSkip before the skip runs.
                                 r.setStart(nextSib.firstChild, 0);
+                                placedAnchor = nextSib;
                             } else {
                                 r.setStartBefore(nextSib);
                             }
@@ -111,10 +113,23 @@ export class InlineEditor {
                             const anchor = this.createCursorAnchor();
                             parentEl.appendChild(anchor);
                             r.setStart(anchor.firstChild!, 0);
+                            placedAnchor = anchor;
                         }
                         r.collapse(true);
                         sel.removeAllRanges();
                         sel.addRange(r);
+                        // If the anchor is at end-of-line (no content follows in this paragraph),
+                        // clear pendingAnchorSkip so the cursor rests there and the user must press
+                        // ArrowDown again to move to the next line.
+                        // If content follows, keep the flag so the skip fires immediately on landing.
+                        if (placedAnchor) {
+                            const nextAfterAnchor = placedAnchor.nextSibling;
+                            const atEndOfLine = !nextAfterAnchor
+                                || (nextAfterAnchor instanceof HTMLElement
+                                    && nextAfterAnchor.tagName === 'BR'
+                                    && nextAfterAnchor === nextAfterAnchor.parentElement?.lastChild);
+                            if (atEndOfLine) this.pendingAnchorSkip = null;
+                        }
                     } catch { /* ignore if node detached */ }
                 }
                 return contentChanged;
@@ -165,7 +180,7 @@ export class InlineEditor {
                         } else {
                             const pos = this.findPositionBeforeAnchor(anchorSpan);
                             if (pos) r.setStart(pos.node, pos.offset);
-                            else r.setStartAfter(anchorSpan); // Nothing before: stay at end-of-line
+                            else r.setStartAfter(anchorSpan);
                         }
                         r.collapse(true);
                         sel.removeAllRanges();
@@ -715,7 +730,6 @@ export class InlineEditor {
     // Returns the first non-<rt> text position after the anchor.
     // Checks siblings within the same paragraph first; falls back to the next paragraph.
     private findPositionAfterAnchor(anchor: HTMLElement): { node: Text; offset: number } | null {
-        // Same paragraph: siblings after the anchor (e.g. content merged in by Backspace)
         let sibling: Node | null = anchor.nextSibling;
         while (sibling) {
             if (sibling.nodeType === Node.TEXT_NODE) {
