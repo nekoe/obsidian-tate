@@ -104,13 +104,6 @@ export class VerticalWritingView extends ItemView {
                 this.commitToCm6();
                 editorEl.resetBurst();
             }
-            // Inside a tate-cursor-anchor span, ArrowUp exits before the span and
-            // ArrowDown exits after the span, skipping the invisible U+200B placeholder.
-            if (!e.isComposing && (e.key === 'ArrowUp' || e.key === 'ArrowDown')
-                    && editorEl.isCursorInsideAnchor()) {
-                e.preventDefault();
-                editorEl.moveCursorOutOfAnchor(e.key === 'ArrowUp' ? 'before' : 'after');
-            }
         });
 
         this.registerEvent(

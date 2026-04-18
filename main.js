@@ -507,6 +507,7 @@ var InlineEditor = class {
   // Called on every cursor movement to expand or collapse ruby/tcy elements.
   // Returns true if collapse changed the content (signal for view.ts to call commitToCm6).
   handleSelectionChange() {
+    var _a;
     if (!this.isModifyingDom) {
       if (!this.expandedEl || !this.expandedEl.isConnected) {
         const actualSpan = this.el.querySelector("span.tate-editing");
@@ -583,7 +584,19 @@ var InlineEditor = class {
       if (sel.rangeCount === 0) return contentChanged;
       const currentRange = sel.getRangeAt(0);
       if (!this.el.contains(currentRange.startContainer)) return contentChanged;
-      if (this.findCursorAnchorAncestor(currentRange.startContainer)) {
+      const anchorSpan = this.findCursorAnchorAncestor(currentRange.startContainer);
+      if (anchorSpan) {
+        const text = (_a = anchorSpan.textContent) != null ? _a : "";
+        if ((text === "\u200B" || text === "") && currentRange.startContainer === anchorSpan.firstChild && currentRange.startOffset === 0) {
+          try {
+            const r = document.createRange();
+            r.setStartAfter(anchorSpan);
+            r.collapse(true);
+            sel.removeAllRanges();
+            sel.addRange(r);
+          } catch (e) {
+          }
+        }
         return contentChanged;
       }
       const target = this.findExpandableAncestor(currentRange.startContainer);
@@ -1589,10 +1602,6 @@ var VerticalWritingView = class extends import_obsidian4.ItemView {
       ].includes(e.key)) {
         this.commitToCm6();
         editorEl.resetBurst();
-      }
-      if (!e.isComposing && (e.key === "ArrowUp" || e.key === "ArrowDown") && editorEl.isCursorInsideAnchor()) {
-        e.preventDefault();
-        editorEl.moveCursorOutOfAnchor(e.key === "ArrowUp" ? "before" : "after");
       }
     });
     this.registerEvent(

@@ -136,9 +136,23 @@ export class InlineEditor {
             const currentRange = sel.getRangeAt(0);
             if (!this.el.contains(currentRange.startContainer)) return contentChanged;
 
-            // If cursor is inside a tate-cursor-anchor span, skip expand logic
-            if (this.findCursorAnchorAncestor(currentRange.startContainer)) {
-                return contentChanged;
+            // If cursor entered a U+200B-only anchor span at offset 0 (forward navigation),
+            // skip to just after the span so the invisible placeholder is transparent.
+            const anchorSpan = this.findCursorAnchorAncestor(currentRange.startContainer);
+            if (anchorSpan) {
+                const text = anchorSpan.textContent ?? '';
+                if ((text === '\u200B' || text === '')
+                        && currentRange.startContainer === anchorSpan.firstChild
+                        && currentRange.startOffset === 0) {
+                    try {
+                        const r = document.createRange();
+                        r.setStartAfter(anchorSpan);
+                        r.collapse(true);
+                        sel.removeAllRanges();
+                        sel.addRange(r);
+                    } catch { /* ignore if detached */ }
+                }
+                return contentChanged; // Don't try to expand anchor span
             }
 
             // Expand if the cursor is inside an expandable element (ruby/tcy)
