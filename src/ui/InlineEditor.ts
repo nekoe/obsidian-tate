@@ -200,12 +200,13 @@ export class InlineEditor {
                 return contentChanged; // Don't try to expand anchor span
             }
 
-            // Expand if the cursor is inside an expandable element (ruby/tcy)
+            // Expand if the cursor is inside an expandable element (ruby/tcy/bouten)
             const target = this.findExpandableAncestor(currentRange.startContainer);
             if (target) {
                 // For expandable elements at end-of-line, insert a cursor anchor before expanding so
                 // that when the user exits past the closing bracket, nextSibling is already the anchor.
-                if (target.tagName === 'RUBY' || target.getAttribute('data-tcy') === 'explicit')
+                if (target.tagName === 'RUBY' || target.getAttribute('data-tcy') === 'explicit'
+                        || target.getAttribute('data-bouten'))
                     this.ensureCursorAnchorAfter(target);
                 this.expandForEditing(target, currentRange);
             }
