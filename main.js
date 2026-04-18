@@ -435,7 +435,7 @@ function esc(text) {
   return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 function serializeNode(node, rootEl) {
-  var _a, _b, _c, _d, _e, _f;
+  var _a, _b, _c, _d, _e, _f, _g;
   if (node.nodeType === Node.TEXT_NODE) {
     return (_a = node.textContent) != null ? _a : "";
   }
@@ -457,10 +457,13 @@ function serializeNode(node, rootEl) {
         const content = (_e = node.textContent) != null ? _e : "";
         return `${content}\uFF3B\uFF03\u300C${content}\u300D\u306B\u508D\u70B9\uFF3D`;
       }
+      if (node.classList.contains("tate-cursor-anchor")) {
+        return ((_f = node.textContent) != null ? _f : "").replace(/\u200B/g, "");
+      }
       return Array.from(node.childNodes).map((n) => serializeNode(n, rootEl)).join("");
     }
     case "BR":
-      if (node.parentElement !== rootEl && ((_f = node.parentElement) == null ? void 0 : _f.tagName) === "DIV" && node === node.parentElement.lastChild) {
+      if (node.parentElement !== rootEl && ((_g = node.parentElement) == null ? void 0 : _g.tagName) === "DIV" && node === node.parentElement.lastChild) {
         return "";
       }
       return "\n";
@@ -535,7 +538,30 @@ var InlineEditor = class {
       if (!sel || sel.rangeCount === 0) return false;
       const range = sel.getRangeAt(0);
       if (this.expandedEl && this.expandedEl.contains(range.startContainer)) {
-        return false;
+        const spanText = this.expandedEl.firstChild;
+        const atSpanEnd = spanText && range.startContainer === spanText && range.startOffset >= spanText.length;
+        if (!atSpanEnd) return false;
+        const nextSib = this.expandedEl.nextSibling;
+        const parentEl = this.expandedEl.parentElement;
+        contentChanged = this.collapseEditing();
+        this.savedRange = null;
+        if (parentEl) {
+          try {
+            const r = document.createRange();
+            if (nextSib && nextSib.isConnected) {
+              r.setStartBefore(nextSib);
+            } else {
+              const anchor = this.createCursorAnchor();
+              parentEl.appendChild(anchor);
+              r.setStart(anchor.firstChild, 0);
+            }
+            r.collapse(true);
+            sel.removeAllRanges();
+            sel.addRange(r);
+          } catch (e) {
+          }
+        }
+        return contentChanged;
       }
       if (this.expandedEl) {
         const savedNode = range.startContainer;
@@ -557,6 +583,9 @@ var InlineEditor = class {
       if (sel.rangeCount === 0) return contentChanged;
       const currentRange = sel.getRangeAt(0);
       if (!this.el.contains(currentRange.startContainer)) return contentChanged;
+      if (this.findCursorAnchorAncestor(currentRange.startContainer)) {
+        return contentChanged;
+      }
       const target = this.findExpandableAncestor(currentRange.startContainer);
       if (target) {
         this.expandForEditing(target, currentRange);
@@ -953,6 +982,83 @@ var InlineEditor = class {
     span.textContent = content;
     return span;
   }
+  // ---- Cursor anchor span management ----
+  // Returns an ancestor <span class=tate-cursor-anchor> of node, or null if not found.
+  findCursorAnchorAncestor(node) {
+    let el = node instanceof HTMLElement ? node : node.parentElement;
+    while (el && el !== this.el) {
+      if (el.classList.contains("tate-cursor-anchor")) return el;
+      el = el.parentElement;
+    }
+    return null;
+  }
+  // Creates a new cursor anchor span containing U+200B.
+  createCursorAnchor() {
+    const anchor = document.createElement("span");
+    anchor.className = "tate-cursor-anchor";
+    anchor.appendChild(document.createTextNode("\u200B"));
+    return anchor;
+  }
+  // Returns true if the current cursor is inside a tate-cursor-anchor span.
+  isCursorInsideAnchor() {
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return false;
+    return this.findCursorAnchorAncestor(sel.getRangeAt(0).startContainer) !== null;
+  }
+  // Moves the cursor to just before or just after the ancestor tate-cursor-anchor span.
+  moveCursorOutOfAnchor(direction) {
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return;
+    const anchor = this.findCursorAnchorAncestor(sel.getRangeAt(0).startContainer);
+    if (!anchor) return;
+    try {
+      const r = document.createRange();
+      if (direction === "before") r.setStartBefore(anchor);
+      else r.setStartAfter(anchor);
+      r.collapse(true);
+      sel.removeAllRanges();
+      sel.addRange(r);
+    } catch (e) {
+    }
+  }
+  // Called after input/compositionend when cursor may be inside a tate-cursor-anchor span.
+  // Removes U+200B once real characters have been typed, or re-inserts it when the span is empty.
+  handleCursorAnchorInput() {
+    var _a;
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return;
+    const range = sel.getRangeAt(0);
+    const anchor = this.findCursorAnchorAncestor(range.startContainer);
+    if (!anchor) return;
+    const text = (_a = anchor.textContent) != null ? _a : "";
+    this.isModifyingDom = true;
+    try {
+      if (text === "") {
+        const zws = document.createTextNode("\u200B");
+        anchor.replaceChildren(zws);
+        const r = document.createRange();
+        r.setStart(zws, 0);
+        r.collapse(true);
+        sel.removeAllRanges();
+        sel.addRange(r);
+      } else if (text !== "\u200B" && text.includes("\u200B")) {
+        const cleaned = text.replace(/\u200B/g, "");
+        const textNode = anchor.firstChild;
+        if ((textNode == null ? void 0 : textNode.nodeType) === Node.TEXT_NODE) {
+          const prevOffset = range.startContainer === textNode ? range.startOffset : cleaned.length;
+          textNode.textContent = cleaned;
+          const adjustedOffset = text.slice(0, prevOffset).replace(/\u200B/g, "").length;
+          const r = document.createRange();
+          r.setStart(textNode, Math.min(adjustedOffset, cleaned.length));
+          r.collapse(true);
+          sel.removeAllRanges();
+          sel.addRange(r);
+        }
+      }
+    } finally {
+      this.isModifyingDom = false;
+    }
+  }
 };
 
 // src/ui/InputTransformer.ts
@@ -1286,8 +1392,21 @@ var EditorElement = class {
   getViewCursorOffset() {
     return this.getVisibleOffset();
   }
-  // ---- Cursor operations (offset managed in visible character count, excluding <rt>) ----
+  // Returns true if the cursor is currently inside a <span class=tate-cursor-anchor> element.
+  isCursorInsideAnchor() {
+    return this.inlineEditor.isCursorInsideAnchor();
+  }
+  // Moves the cursor to just before or just after the ancestor tate-cursor-anchor span.
+  moveCursorOutOfAnchor(direction) {
+    this.inlineEditor.moveCursorOutOfAnchor(direction);
+  }
+  // Called after input/compositionend to manage U+200B in the cursor anchor span.
+  handleCursorAnchorInput() {
+    this.inlineEditor.handleCursorAnchorInput();
+  }
+  // ---- Cursor operations (offset managed in visible character count, excluding <rt> and U+200B) ----
   getVisibleOffset() {
+    var _a, _b;
     const sel = window.getSelection();
     if (!sel || sel.rangeCount === 0) return 0;
     const range = sel.getRangeAt(0);
@@ -1296,15 +1415,22 @@ var EditorElement = class {
     let node = walker.nextNode();
     while (node) {
       if (node === range.startContainer) {
-        if (!this.isInsideRt(node)) count += range.startOffset;
+        if (!this.isInsideRt(node)) {
+          const text = (_a = node.textContent) != null ? _a : "";
+          const beforeCursor = this.isInsideAnchorSpan(node) ? text.slice(0, range.startOffset).replace(/\u200B/g, "").length : range.startOffset;
+          count += beforeCursor;
+        }
         break;
       }
-      if (!this.isInsideRt(node)) count += node.length;
+      if (!this.isInsideRt(node)) {
+        count += this.isInsideAnchorSpan(node) ? ((_b = node.textContent) != null ? _b : "").replace(/\u200B/g, "").length : node.length;
+      }
       node = walker.nextNode();
     }
     return count;
   }
   setVisibleOffset(offset) {
+    var _a, _b;
     const sel = window.getSelection();
     if (!sel) return;
     let remaining = offset;
@@ -1312,15 +1438,32 @@ var EditorElement = class {
     let node = walker.nextNode();
     while (node) {
       if (!this.isInsideRt(node)) {
-        if (remaining <= node.length) {
+        const visLen = this.isInsideAnchorSpan(node) ? ((_a = node.textContent) != null ? _a : "").replace(/\u200B/g, "").length : node.length;
+        if (remaining <= visLen) {
           const range2 = document.createRange();
-          range2.setStart(node, remaining);
+          let actualOffset;
+          if (this.isInsideAnchorSpan(node)) {
+            const text = (_b = node.textContent) != null ? _b : "";
+            actualOffset = 0;
+            let visible = 0;
+            for (let i = 0; i < text.length; i++) {
+              if (visible === remaining) {
+                actualOffset = i;
+                break;
+              }
+              if (text[i] !== "\u200B") visible++;
+              actualOffset = i + 1;
+            }
+          } else {
+            actualOffset = remaining;
+          }
+          range2.setStart(node, actualOffset);
           range2.collapse(true);
           sel.removeAllRanges();
           sel.addRange(range2);
           return;
         }
-        remaining -= node.length;
+        remaining -= visLen;
       }
       node = walker.nextNode();
     }
@@ -1334,6 +1477,14 @@ var EditorElement = class {
     let parent = node.parentElement;
     while (parent && parent !== this.el) {
       if (parent.tagName === "RT") return true;
+      parent = parent.parentElement;
+    }
+    return false;
+  }
+  isInsideAnchorSpan(node) {
+    let parent = node.parentElement;
+    while (parent && parent !== this.el) {
+      if (parent.classList.contains("tate-cursor-anchor")) return true;
       parent = parent.parentElement;
     }
     return false;
@@ -1397,6 +1548,7 @@ var VerticalWritingView = class extends import_obsidian4.ItemView {
         }
         const annotated = editorEl.handleRubyCompletion() || editorEl.handleTcyCompletion() || editorEl.handleBoutenCompletion();
         if (annotated) this.commitToCm6();
+        editorEl.handleCursorAnchorInput();
       }
     });
     this.registerDomEvent(editorEl.el, "compositionstart", () => {
@@ -1408,6 +1560,7 @@ var VerticalWritingView = class extends import_obsidian4.ItemView {
       editorEl.handleTcyCompletion();
       editorEl.handleBoutenCompletion();
       editorEl.onCompositionEnd();
+      editorEl.handleCursorAnchorInput();
       this.commitToCm6();
     });
     this.registerDomEvent(document, "selectionchange", () => {
@@ -1436,6 +1589,10 @@ var VerticalWritingView = class extends import_obsidian4.ItemView {
       ].includes(e.key)) {
         this.commitToCm6();
         editorEl.resetBurst();
+      }
+      if (!e.isComposing && (e.key === "ArrowUp" || e.key === "ArrowDown") && editorEl.isCursorInsideAnchor()) {
+        e.preventDefault();
+        editorEl.moveCursorOutOfAnchor(e.key === "ArrowUp" ? "before" : "after");
       }
     });
     this.registerEvent(

@@ -76,9 +76,36 @@ export class InlineEditor {
             if (!sel || sel.rangeCount === 0) return false;
             const range = sel.getRangeAt(0);
 
-            // Cursor is still inside the expanded span — do nothing
+            // Cursor is still inside the expanded span — do nothing (unless past the closing bracket)
             if (this.expandedEl && this.expandedEl.contains(range.startContainer)) {
-                return false;
+                const spanText = this.expandedEl.firstChild as Text | null;
+                const atSpanEnd = spanText
+                    && range.startContainer === spanText
+                    && range.startOffset >= spanText.length;
+                if (!atSpanEnd) return false;
+                // Cursor is past the closing bracket (》 or ］): collapse and place cursor just after
+                const nextSib = this.expandedEl.nextSibling;
+                const parentEl = this.expandedEl.parentElement;
+                contentChanged = this.collapseEditing();
+                this.savedRange = null;
+                if (parentEl) {
+                    try {
+                        const r = document.createRange();
+                        if (nextSib && nextSib.isConnected) {
+                            r.setStartBefore(nextSib);
+                        } else {
+                            // End-of-line after ruby: insert cursor anchor span with U+200B so
+                            // Chrome has a real text position and does not normalize into <rt>.
+                            const anchor = this.createCursorAnchor();
+                            parentEl.appendChild(anchor);
+                            r.setStart(anchor.firstChild!, 0);
+                        }
+                        r.collapse(true);
+                        sel.removeAllRanges();
+                        sel.addRange(r);
+                    } catch { /* ignore if node detached */ }
+                }
+                return contentChanged;
             }
 
             // Cursor moved outside the expanded span — collapse, then restore the intended position
@@ -108,6 +135,11 @@ export class InlineEditor {
             if (sel.rangeCount === 0) return contentChanged;
             const currentRange = sel.getRangeAt(0);
             if (!this.el.contains(currentRange.startContainer)) return contentChanged;
+
+            // If cursor is inside a tate-cursor-anchor span, skip expand logic
+            if (this.findCursorAnchorAncestor(currentRange.startContainer)) {
+                return contentChanged;
+            }
 
             // Expand if the cursor is inside an expandable element (ruby/tcy)
             const target = this.findExpandableAncestor(currentRange.startContainer);
@@ -597,5 +629,89 @@ export class InlineEditor {
         span.className = 'bouten';
         span.textContent = content;
         return span;
+    }
+
+    // ---- Cursor anchor span management ----
+
+    // Returns an ancestor <span class=tate-cursor-anchor> of node, or null if not found.
+    private findCursorAnchorAncestor(node: Node): HTMLElement | null {
+        let el: HTMLElement | null = node instanceof HTMLElement ? node : node.parentElement;
+        while (el && el !== this.el) {
+            if (el.classList.contains('tate-cursor-anchor')) return el;
+            el = el.parentElement;
+        }
+        return null;
+    }
+
+    // Creates a new cursor anchor span containing U+200B.
+    private createCursorAnchor(): HTMLSpanElement {
+        const anchor = document.createElement('span');
+        anchor.className = 'tate-cursor-anchor';
+        anchor.appendChild(document.createTextNode('\u200B'));
+        return anchor;
+    }
+
+    // Returns true if the current cursor is inside a tate-cursor-anchor span.
+    isCursorInsideAnchor(): boolean {
+        const sel = window.getSelection();
+        if (!sel || sel.rangeCount === 0) return false;
+        return this.findCursorAnchorAncestor(sel.getRangeAt(0).startContainer) !== null;
+    }
+
+    // Moves the cursor to just before or just after the ancestor tate-cursor-anchor span.
+    moveCursorOutOfAnchor(direction: 'before' | 'after'): void {
+        const sel = window.getSelection();
+        if (!sel || sel.rangeCount === 0) return;
+        const anchor = this.findCursorAnchorAncestor(sel.getRangeAt(0).startContainer);
+        if (!anchor) return;
+        try {
+            const r = document.createRange();
+            if (direction === 'before') r.setStartBefore(anchor);
+            else r.setStartAfter(anchor);
+            r.collapse(true);
+            sel.removeAllRanges();
+            sel.addRange(r);
+        } catch { /* ignore if detached */ }
+    }
+
+    // Called after input/compositionend when cursor may be inside a tate-cursor-anchor span.
+    // Removes U+200B once real characters have been typed, or re-inserts it when the span is empty.
+    handleCursorAnchorInput(): void {
+        const sel = window.getSelection();
+        if (!sel || sel.rangeCount === 0) return;
+        const range = sel.getRangeAt(0);
+        const anchor = this.findCursorAnchorAncestor(range.startContainer);
+        if (!anchor) return;
+
+        const text = anchor.textContent ?? '';
+        this.isModifyingDom = true;
+        try {
+            if (text === '') {
+                // Span emptied by deletion: restore U+200B placeholder
+                const zws = document.createTextNode('\u200B');
+                anchor.replaceChildren(zws);
+                const r = document.createRange();
+                r.setStart(zws, 0);
+                r.collapse(true);
+                sel.removeAllRanges();
+                sel.addRange(r);
+            } else if (text !== '\u200B' && text.includes('\u200B')) {
+                // Real chars mixed with U+200B: strip placeholder
+                const cleaned = text.replace(/\u200B/g, '');
+                const textNode = anchor.firstChild;
+                if (textNode?.nodeType === Node.TEXT_NODE) {
+                    const prevOffset = range.startContainer === textNode ? range.startOffset : cleaned.length;
+                    textNode.textContent = cleaned;
+                    const adjustedOffset = text.slice(0, prevOffset).replace(/\u200B/g, '').length;
+                    const r = document.createRange();
+                    r.setStart(textNode, Math.min(adjustedOffset, cleaned.length));
+                    r.collapse(true);
+                    sel.removeAllRanges();
+                    sel.addRange(r);
+                }
+            }
+        } finally {
+            this.isModifyingDom = false;
+        }
     }
 }

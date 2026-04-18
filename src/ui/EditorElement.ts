@@ -174,7 +174,22 @@ export class EditorElement {
         return this.getVisibleOffset();
     }
 
-    // ---- Cursor operations (offset managed in visible character count, excluding <rt>) ----
+    // Returns true if the cursor is currently inside a <span class=tate-cursor-anchor> element.
+    isCursorInsideAnchor(): boolean {
+        return this.inlineEditor.isCursorInsideAnchor();
+    }
+
+    // Moves the cursor to just before or just after the ancestor tate-cursor-anchor span.
+    moveCursorOutOfAnchor(direction: 'before' | 'after'): void {
+        this.inlineEditor.moveCursorOutOfAnchor(direction);
+    }
+
+    // Called after input/compositionend to manage U+200B in the cursor anchor span.
+    handleCursorAnchorInput(): void {
+        this.inlineEditor.handleCursorAnchorInput();
+    }
+
+    // ---- Cursor operations (offset managed in visible character count, excluding <rt> and U+200B) ----
 
     private getVisibleOffset(): number {
         const sel = window.getSelection();
@@ -186,10 +201,20 @@ export class EditorElement {
 
         while (node) {
             if (node === range.startContainer) {
-                if (!this.isInsideRt(node)) count += range.startOffset;
+                if (!this.isInsideRt(node)) {
+                    const text = node.textContent ?? '';
+                    const beforeCursor = this.isInsideAnchorSpan(node)
+                        ? text.slice(0, range.startOffset).replace(/\u200B/g, '').length
+                        : range.startOffset;
+                    count += beforeCursor;
+                }
                 break;
             }
-            if (!this.isInsideRt(node)) count += node.length;
+            if (!this.isInsideRt(node)) {
+                count += this.isInsideAnchorSpan(node)
+                    ? (node.textContent ?? '').replace(/\u200B/g, '').length
+                    : node.length;
+            }
             node = walker.nextNode() as Text | null;
         }
         return count;
@@ -204,15 +229,32 @@ export class EditorElement {
 
         while (node) {
             if (!this.isInsideRt(node)) {
-                if (remaining <= node.length) {
+                const visLen = this.isInsideAnchorSpan(node)
+                    ? (node.textContent ?? '').replace(/\u200B/g, '').length
+                    : node.length;
+                if (remaining <= visLen) {
                     const range = document.createRange();
-                    range.setStart(node, remaining);
+                    let actualOffset: number;
+                    if (this.isInsideAnchorSpan(node)) {
+                        // Map visible offset to actual offset, skipping U+200B
+                        const text = node.textContent ?? '';
+                        actualOffset = 0;
+                        let visible = 0;
+                        for (let i = 0; i < text.length; i++) {
+                            if (visible === remaining) { actualOffset = i; break; }
+                            if (text[i] !== '\u200B') visible++;
+                            actualOffset = i + 1;
+                        }
+                    } else {
+                        actualOffset = remaining;
+                    }
+                    range.setStart(node, actualOffset);
                     range.collapse(true);
                     sel.removeAllRanges();
                     sel.addRange(range);
                     return;
                 }
-                remaining -= node.length;
+                remaining -= visLen;
             }
             node = walker.nextNode() as Text | null;
         }
@@ -228,6 +270,15 @@ export class EditorElement {
         let parent = node.parentElement;
         while (parent && parent !== this.el) {
             if (parent.tagName === 'RT') return true;
+            parent = parent.parentElement;
+        }
+        return false;
+    }
+
+    private isInsideAnchorSpan(node: Node): boolean {
+        let parent = node.parentElement;
+        while (parent && parent !== this.el) {
+            if (parent.classList.contains('tate-cursor-anchor')) return true;
             parent = parent.parentElement;
         }
         return false;

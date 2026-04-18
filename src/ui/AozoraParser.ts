@@ -176,6 +176,10 @@ export function serializeNode(node: Node, rootEl: HTMLElement): string {
                 const content = node.textContent ?? '';
                 return `${content}［＃「${content}」に傍点］`;
             }
+            if (node.classList.contains('tate-cursor-anchor')) {
+                // Cursor anchor: transparent to serialization; strip U+200B placeholder
+                return (node.textContent ?? '').replace(/\u200B/g, '');
+            }
             // tate-editing span or unknown span: serialize child nodes
             return Array.from(node.childNodes)
                 .map(n => serializeNode(n, rootEl))
