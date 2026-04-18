@@ -654,7 +654,8 @@ var InlineEditor = class {
       }
       const target = this.findExpandableAncestor(currentRange.startContainer);
       if (target) {
-        if (target.tagName === "RUBY") this.ensureCursorAnchorAfter(target);
+        if (target.tagName === "RUBY" || target.getAttribute("data-tcy") === "explicit")
+          this.ensureCursorAnchorAfter(target);
         this.expandForEditing(target, currentRange);
       }
     } finally {

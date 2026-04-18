@@ -203,9 +203,10 @@ export class InlineEditor {
             // Expand if the cursor is inside an expandable element (ruby/tcy)
             const target = this.findExpandableAncestor(currentRange.startContainer);
             if (target) {
-                // For ruby at end-of-line, insert a cursor anchor before expanding so that
-                // when the user exits past 》, nextSibling is already the anchor.
-                if (target.tagName === 'RUBY') this.ensureCursorAnchorAfter(target);
+                // For expandable elements at end-of-line, insert a cursor anchor before expanding so
+                // that when the user exits past the closing bracket, nextSibling is already the anchor.
+                if (target.tagName === 'RUBY' || target.getAttribute('data-tcy') === 'explicit')
+                    this.ensureCursorAnchorAfter(target);
                 this.expandForEditing(target, currentRange);
             }
         } finally {
