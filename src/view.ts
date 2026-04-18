@@ -97,6 +97,15 @@ export class VerticalWritingView extends ItemView {
                 this.doUndoRedo(editorEl, e.shiftKey);
                 return;
             }
+            // ArrowUp/ArrowDown inside a tcy span: move left/right within the horizontal text
+            if (!e.isComposing && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+                if (editorEl.handleTcyNavigation(e.key)) {
+                    e.preventDefault();
+                    this.commitToCm6();
+                    editorEl.resetBurst();
+                    return;
+                }
+            }
             // Navigation keys are commit points (to record the next input as a separate CM6 history entry)
             // Skip while isComposing=true (user is selecting IME candidates)
             if (!e.isComposing && ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown',

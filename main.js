@@ -785,6 +785,49 @@ var InlineEditor = class {
   wrapSelectionWithBouten() {
     return this.wrapSelectionWith((c) => this.createBoutenEl(c));
   }
+  // Handles ArrowUp (→ move left) and ArrowDown (→ move right) when cursor is inside a tcy span.
+  // In vertical writing mode the tcy element is laid out horizontally, so the vertical arrow keys
+  // should navigate within the tcy text rather than jumping to the adjacent line.
+  // Returns true if the key was consumed (caller should call preventDefault).
+  handleTcyNavigation(key) {
+    if (key !== "ArrowUp" && key !== "ArrowDown") return false;
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return false;
+    const range = sel.getRangeAt(0);
+    const tcySpan = this.findTcyAncestor(range.startContainer);
+    if (!tcySpan) return false;
+    const moveLeft = key === "ArrowUp";
+    const textNode = tcySpan.firstChild instanceof Text ? tcySpan.firstChild : null;
+    const r = document.createRange();
+    if (!textNode) {
+      if (moveLeft) r.setStartBefore(tcySpan);
+      else r.setStartAfter(tcySpan);
+      r.collapse(true);
+      sel.removeAllRanges();
+      sel.addRange(r);
+      return true;
+    }
+    let currentOffset;
+    if (range.startContainer === textNode) {
+      currentOffset = range.startOffset;
+    } else if (range.startContainer === tcySpan) {
+      currentOffset = range.startOffset === 0 ? 0 : textNode.length;
+    } else {
+      return false;
+    }
+    const newOffset = currentOffset + (moveLeft ? -1 : 1);
+    if (newOffset < 0) {
+      r.setStartBefore(tcySpan);
+    } else if (newOffset > textNode.length) {
+      r.setStartAfter(tcySpan);
+    } else {
+      r.setStart(textNode, newOffset);
+    }
+    r.collapse(true);
+    sel.removeAllRanges();
+    sel.addRange(r);
+    return true;
+  }
   // Called on the beforeinput event (registered from view.ts).
   // Sets the inBurst flag to indicate there are uncommitted changes pending for CM6.
   onBeforeInput() {
@@ -1017,6 +1060,14 @@ var InlineEditor = class {
       }
     }
     return "";
+  }
+  findTcyAncestor(node) {
+    let el = node;
+    while (el && el !== this.el) {
+      if (el instanceof HTMLElement && el.classList.contains("tcy")) return el;
+      el = el.parentElement;
+    }
+    return null;
   }
   isInsideRuby(node) {
     let parent = node.parentElement;
@@ -1555,6 +1606,11 @@ var EditorElement = class {
   notifyNavigationKey(key) {
     this.inlineEditor.notifyNavigationKey(key);
   }
+  // Intercepts ArrowUp/ArrowDown inside a tcy span and moves the cursor left/right instead.
+  // Returns true if the key was consumed (caller should call preventDefault).
+  handleTcyNavigation(key) {
+    return this.inlineEditor.handleTcyNavigation(key);
+  }
   // ---- Cursor operations (offset managed in visible character count, excluding <rt> and U+200B) ----
   getVisibleOffset() {
     var _a, _b;
@@ -1727,6 +1783,14 @@ var VerticalWritingView = class extends import_obsidian4.ItemView {
         e.preventDefault();
         this.doUndoRedo(editorEl, e.shiftKey);
         return;
+      }
+      if (!e.isComposing && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
+        if (editorEl.handleTcyNavigation(e.key)) {
+          e.preventDefault();
+          this.commitToCm6();
+          editorEl.resetBurst();
+          return;
+        }
       }
       if (!e.isComposing && [
         "ArrowLeft",
