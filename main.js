@@ -88,7 +88,7 @@ var DEFAULT_SETTINGS = {
   matchPrecedingIndent: true,
   removeBracketIndent: true,
   expandRubyInline: true,
-  expandTcyInline: false,
+  expandTcyInline: true,
   expandBoutenInline: false
 };
 var TateSettingTab = class extends import_obsidian.PluginSettingTab {

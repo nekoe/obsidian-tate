@@ -23,7 +23,7 @@ export const DEFAULT_SETTINGS: TatePluginSettings = {
     matchPrecedingIndent: true,
     removeBracketIndent: true,
     expandRubyInline: true,
-    expandTcyInline: false,
+    expandTcyInline: true,
     expandBoutenInline: false,
 };
 
