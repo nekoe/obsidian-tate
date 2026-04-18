@@ -174,16 +174,6 @@ export class EditorElement {
         return this.getVisibleOffset();
     }
 
-    // Returns true if the cursor is currently inside a <span class=tate-cursor-anchor> element.
-    isCursorInsideAnchor(): boolean {
-        return this.inlineEditor.isCursorInsideAnchor();
-    }
-
-    // Moves the cursor to just before or just after the ancestor tate-cursor-anchor span.
-    moveCursorOutOfAnchor(direction: 'before' | 'after'): void {
-        this.inlineEditor.moveCursorOutOfAnchor(direction);
-    }
-
     // Called after input/compositionend to manage U+200B in the cursor anchor span.
     handleCursorAnchorInput(): void {
         this.inlineEditor.handleCursorAnchorInput();

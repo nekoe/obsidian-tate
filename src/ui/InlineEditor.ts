@@ -169,6 +169,9 @@ export class InlineEditor {
             // Expand if the cursor is inside an expandable element (ruby/tcy)
             const target = this.findExpandableAncestor(currentRange.startContainer);
             if (target) {
+                // For ruby at end-of-line, insert a cursor anchor before expanding so that
+                // when the user exits past 》, nextSibling is already the anchor.
+                if (target.tagName === 'RUBY') this.ensureCursorAnchorAfter(target);
                 this.expandForEditing(target, currentRange);
             }
         } finally {
@@ -658,6 +661,21 @@ export class InlineEditor {
 
     // ---- Cursor anchor span management ----
 
+    // Inserts a cursor anchor after el if el is at end-of-line and has no anchor yet.
+    // Must be called before expandForEditing so that the anchor survives as nextSibling
+    // of the tate-editing span and is available when the user exits past the closing bracket.
+    private ensureCursorAnchorAfter(el: HTMLElement): void {
+        const next = el.nextSibling;
+        if (next instanceof HTMLElement && next.classList.contains('tate-cursor-anchor')) return;
+        // End-of-line: no next sibling, or only the decorative <br> Chrome appends
+        const isEndOfLine = !next
+            || (next instanceof HTMLElement && next.tagName === 'BR'
+                && next === next.parentElement?.lastChild);
+        if (!isEndOfLine) return;
+        const anchor = this.createCursorAnchor();
+        el.parentNode!.insertBefore(anchor, next);
+    }
+
     // Records the direction of the most recent navigation key so handleSelectionChange
     // can skip the U+200B placeholder in the correct direction.
     // Call from the keydown handler before the browser moves the cursor.
@@ -685,29 +703,6 @@ export class InlineEditor {
         return anchor;
     }
 
-    // Returns true if the current cursor is inside a tate-cursor-anchor span.
-    isCursorInsideAnchor(): boolean {
-        const sel = window.getSelection();
-        if (!sel || sel.rangeCount === 0) return false;
-        return this.findCursorAnchorAncestor(sel.getRangeAt(0).startContainer) !== null;
-    }
-
-    // Moves the cursor to just before or just after the ancestor tate-cursor-anchor span.
-    moveCursorOutOfAnchor(direction: 'before' | 'after'): void {
-        const sel = window.getSelection();
-        if (!sel || sel.rangeCount === 0) return;
-        const anchor = this.findCursorAnchorAncestor(sel.getRangeAt(0).startContainer);
-        if (!anchor) return;
-        try {
-            const r = document.createRange();
-            if (direction === 'before') r.setStartBefore(anchor);
-            else r.setStartAfter(anchor);
-            r.collapse(true);
-            sel.removeAllRanges();
-            sel.addRange(r);
-        } catch { /* ignore if detached */ }
-    }
-
     // Returns the first non-<rt> text position in the next paragraph after the anchor's parent div.
     // Used for forward anchor skip (ArrowDown).
     private findPositionAfterAnchor(anchor: HTMLElement): { node: Text; offset: number } | null {
@@ -726,8 +721,9 @@ export class InlineEditor {
         return null;
     }
 
-    // Returns the last non-<rt> text position before the anchor on the same line,
-    // skipping over inline elements (e.g. <ruby>) without descending into them.
+    // Returns the last non-<rt> text position before the anchor on the same line.
+    // Descends into element siblings (e.g. <ruby>) to find their last base text node,
+    // which causes selectionchange to trigger expandForEditing on the ruby.
     // Falls back to the last text of the previous paragraph if nothing is found on the same line.
     private findPositionBeforeAnchor(anchor: HTMLElement): { node: Text; offset: number } | null {
         // Search backward among siblings of the anchor on the same line
@@ -735,6 +731,10 @@ export class InlineEditor {
         while (prev) {
             if (prev.nodeType === Node.TEXT_NODE) {
                 return { node: prev as Text, offset: (prev as Text).length };
+            }
+            if (prev.nodeType === Node.ELEMENT_NODE) {
+                const pos = this.findLastBaseTextInElement(prev as HTMLElement);
+                if (pos) return pos;
             }
             prev = prev.previousSibling;
         }
@@ -754,6 +754,19 @@ export class InlineEditor {
             prevDiv = prevDiv.previousSibling;
         }
         return null;
+    }
+
+    // Finds the last non-<rt> text node inside el (used to land inside <ruby> on backward skip).
+    private findLastBaseTextInElement(el: HTMLElement): { node: Text; offset: number } | null {
+        const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+        let lastText: Text | null = null;
+        let node = walker.nextNode() as Text | null;
+        while (node) {
+            if (!this.isInsideRtNode(node)) lastText = node;
+            node = walker.nextNode() as Text | null;
+        }
+        if (!lastText) return null;
+        return { node: lastText, offset: lastText.length };
     }
 
     // Returns true if node has an <rt> ancestor within the editor root.

@@ -614,6 +614,7 @@ var InlineEditor = class {
       }
       const target = this.findExpandableAncestor(currentRange.startContainer);
       if (target) {
+        if (target.tagName === "RUBY") this.ensureCursorAnchorAfter(target);
         this.expandForEditing(target, currentRange);
       }
     } finally {
@@ -1009,6 +1010,18 @@ var InlineEditor = class {
     return span;
   }
   // ---- Cursor anchor span management ----
+  // Inserts a cursor anchor after el if el is at end-of-line and has no anchor yet.
+  // Must be called before expandForEditing so that the anchor survives as nextSibling
+  // of the tate-editing span and is available when the user exits past the closing bracket.
+  ensureCursorAnchorAfter(el) {
+    var _a;
+    const next = el.nextSibling;
+    if (next instanceof HTMLElement && next.classList.contains("tate-cursor-anchor")) return;
+    const isEndOfLine = !next || next instanceof HTMLElement && next.tagName === "BR" && next === ((_a = next.parentElement) == null ? void 0 : _a.lastChild);
+    if (!isEndOfLine) return;
+    const anchor = this.createCursorAnchor();
+    el.parentNode.insertBefore(anchor, next);
+  }
   // Records the direction of the most recent navigation key so handleSelectionChange
   // can skip the U+200B placeholder in the correct direction.
   // Call from the keydown handler before the browser moves the cursor.
@@ -1033,28 +1046,6 @@ var InlineEditor = class {
     anchor.appendChild(document.createTextNode("\u200B"));
     return anchor;
   }
-  // Returns true if the current cursor is inside a tate-cursor-anchor span.
-  isCursorInsideAnchor() {
-    const sel = window.getSelection();
-    if (!sel || sel.rangeCount === 0) return false;
-    return this.findCursorAnchorAncestor(sel.getRangeAt(0).startContainer) !== null;
-  }
-  // Moves the cursor to just before or just after the ancestor tate-cursor-anchor span.
-  moveCursorOutOfAnchor(direction) {
-    const sel = window.getSelection();
-    if (!sel || sel.rangeCount === 0) return;
-    const anchor = this.findCursorAnchorAncestor(sel.getRangeAt(0).startContainer);
-    if (!anchor) return;
-    try {
-      const r = document.createRange();
-      if (direction === "before") r.setStartBefore(anchor);
-      else r.setStartAfter(anchor);
-      r.collapse(true);
-      sel.removeAllRanges();
-      sel.addRange(r);
-    } catch (e) {
-    }
-  }
   // Returns the first non-<rt> text position in the next paragraph after the anchor's parent div.
   // Used for forward anchor skip (ArrowDown).
   findPositionAfterAnchor(anchor) {
@@ -1072,14 +1063,19 @@ var InlineEditor = class {
     }
     return null;
   }
-  // Returns the last non-<rt> text position before the anchor on the same line,
-  // skipping over inline elements (e.g. <ruby>) without descending into them.
+  // Returns the last non-<rt> text position before the anchor on the same line.
+  // Descends into element siblings (e.g. <ruby>) to find their last base text node,
+  // which causes selectionchange to trigger expandForEditing on the ruby.
   // Falls back to the last text of the previous paragraph if nothing is found on the same line.
   findPositionBeforeAnchor(anchor) {
     let prev = anchor.previousSibling;
     while (prev) {
       if (prev.nodeType === Node.TEXT_NODE) {
         return { node: prev, offset: prev.length };
+      }
+      if (prev.nodeType === Node.ELEMENT_NODE) {
+        const pos = this.findLastBaseTextInElement(prev);
+        if (pos) return pos;
       }
       prev = prev.previousSibling;
     }
@@ -1098,6 +1094,18 @@ var InlineEditor = class {
       prevDiv = prevDiv.previousSibling;
     }
     return null;
+  }
+  // Finds the last non-<rt> text node inside el (used to land inside <ruby> on backward skip).
+  findLastBaseTextInElement(el) {
+    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+    let lastText = null;
+    let node = walker.nextNode();
+    while (node) {
+      if (!this.isInsideRtNode(node)) lastText = node;
+      node = walker.nextNode();
+    }
+    if (!lastText) return null;
+    return { node: lastText, offset: lastText.length };
   }
   // Returns true if node has an <rt> ancestor within the editor root.
   isInsideRtNode(node) {
@@ -1478,14 +1486,6 @@ var EditorElement = class {
   /** Returns the current cursor position in the vertical writing view as a visible offset (used by view.ts for cursor sync). */
   getViewCursorOffset() {
     return this.getVisibleOffset();
-  }
-  // Returns true if the cursor is currently inside a <span class=tate-cursor-anchor> element.
-  isCursorInsideAnchor() {
-    return this.inlineEditor.isCursorInsideAnchor();
-  }
-  // Moves the cursor to just before or just after the ancestor tate-cursor-anchor span.
-  moveCursorOutOfAnchor(direction) {
-    this.inlineEditor.moveCursorOutOfAnchor(direction);
   }
   // Called after input/compositionend to manage U+200B in the cursor anchor span.
   handleCursorAnchorInput() {
