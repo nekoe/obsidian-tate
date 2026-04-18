@@ -510,7 +510,7 @@ var InlineEditor = class {
   // Called on every cursor movement to expand or collapse ruby/tcy elements.
   // Returns true if collapse changed the content (signal for view.ts to call commitToCm6).
   handleSelectionChange() {
-    var _a;
+    var _a, _b;
     if (!this.isModifyingDom) {
       if (!this.expandedEl || !this.expandedEl.isConnected) {
         const actualSpan = this.el.querySelector("span.tate-editing");
@@ -553,7 +553,11 @@ var InlineEditor = class {
           try {
             const r = document.createRange();
             if (nextSib && nextSib.isConnected) {
-              r.setStartBefore(nextSib);
+              if (nextSib instanceof HTMLElement && nextSib.classList.contains("tate-cursor-anchor") && ((_a = nextSib.firstChild) == null ? void 0 : _a.nodeType) === Node.TEXT_NODE) {
+                r.setStart(nextSib.firstChild, 0);
+              } else {
+                r.setStartBefore(nextSib);
+              }
             } else {
               const anchor = this.createCursorAnchor();
               parentEl.appendChild(anchor);
@@ -591,7 +595,7 @@ var InlineEditor = class {
       const savedSkip = this.pendingAnchorSkip;
       this.pendingAnchorSkip = null;
       if (anchorSpan) {
-        const text = (_a = anchorSpan.textContent) != null ? _a : "";
+        const text = (_b = anchorSpan.textContent) != null ? _b : "";
         if ((text === "\u200B" || text === "") && savedSkip !== null) {
           try {
             const r = document.createRange();
@@ -1046,9 +1050,24 @@ var InlineEditor = class {
     anchor.appendChild(document.createTextNode("\u200B"));
     return anchor;
   }
-  // Returns the first non-<rt> text position in the next paragraph after the anchor's parent div.
-  // Used for forward anchor skip (ArrowDown).
+  // Returns the first non-<rt> text position after the anchor.
+  // Checks siblings within the same paragraph first; falls back to the next paragraph.
   findPositionAfterAnchor(anchor) {
+    let sibling = anchor.nextSibling;
+    while (sibling) {
+      if (sibling.nodeType === Node.TEXT_NODE) {
+        const t = sibling;
+        if (!this.isInsideRtNode(t)) return { node: t, offset: 0 };
+      } else if (sibling.nodeType === Node.ELEMENT_NODE) {
+        const walker = document.createTreeWalker(sibling, NodeFilter.SHOW_TEXT);
+        let node = walker.nextNode();
+        while (node) {
+          if (!this.isInsideRtNode(node)) return { node, offset: 0 };
+          node = walker.nextNode();
+        }
+      }
+      sibling = sibling.nextSibling;
+    }
     const parentDiv = anchor.parentElement;
     if (!parentDiv) return null;
     let next = parentDiv.nextSibling;

@@ -95,7 +95,16 @@ export class InlineEditor {
                     try {
                         const r = document.createRange();
                         if (nextSib && nextSib.isConnected) {
-                            r.setStartBefore(nextSib);
+                            if (nextSib instanceof HTMLElement
+                                    && nextSib.classList.contains('tate-cursor-anchor')
+                                    && nextSib.firstChild?.nodeType === Node.TEXT_NODE) {
+                                // Use a text-level position inside the anchor to avoid Chrome
+                                // creating an element-level position that fires an intermediate
+                                // selectionchange and clears pendingAnchorSkip before the skip runs.
+                                r.setStart(nextSib.firstChild, 0);
+                            } else {
+                                r.setStartBefore(nextSib);
+                            }
                         } else {
                             // End-of-line after ruby: insert cursor anchor span with U+200B so
                             // Chrome has a real text position and does not normalize into <rt>.
@@ -703,9 +712,26 @@ export class InlineEditor {
         return anchor;
     }
 
-    // Returns the first non-<rt> text position in the next paragraph after the anchor's parent div.
-    // Used for forward anchor skip (ArrowDown).
+    // Returns the first non-<rt> text position after the anchor.
+    // Checks siblings within the same paragraph first; falls back to the next paragraph.
     private findPositionAfterAnchor(anchor: HTMLElement): { node: Text; offset: number } | null {
+        // Same paragraph: siblings after the anchor (e.g. content merged in by Backspace)
+        let sibling: Node | null = anchor.nextSibling;
+        while (sibling) {
+            if (sibling.nodeType === Node.TEXT_NODE) {
+                const t = sibling as Text;
+                if (!this.isInsideRtNode(t)) return { node: t, offset: 0 };
+            } else if (sibling.nodeType === Node.ELEMENT_NODE) {
+                const walker = document.createTreeWalker(sibling, NodeFilter.SHOW_TEXT);
+                let node = walker.nextNode() as Text | null;
+                while (node) {
+                    if (!this.isInsideRtNode(node)) return { node, offset: 0 };
+                    node = walker.nextNode() as Text | null;
+                }
+            }
+            sibling = sibling.nextSibling;
+        }
+        // Fallback: first text in the next paragraph
         const parentDiv = anchor.parentElement;
         if (!parentDiv) return null;
         let next = parentDiv.nextSibling;
