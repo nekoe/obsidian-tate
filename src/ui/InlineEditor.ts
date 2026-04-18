@@ -21,8 +21,8 @@ export class InlineEditor {
     private pendingAnchorSkip: 'forward' | 'backward' | null = null;
     // Per-element-type flags controlling whether cursor entry triggers inline expansion.
     private expandRuby = true;
-    private expandTcy = false;
-    private expandBouten = false;
+    private expandTcy = true;
+    private expandBouten = true;
 
     constructor(private readonly el: HTMLDivElement) {}
 

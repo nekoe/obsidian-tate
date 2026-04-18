@@ -89,7 +89,7 @@ var DEFAULT_SETTINGS = {
   removeBracketIndent: true,
   expandRubyInline: true,
   expandTcyInline: true,
-  expandBoutenInline: false
+  expandBoutenInline: true
 };
 var TateSettingTab = class extends import_obsidian.PluginSettingTab {
   constructor(app, plugin) {
@@ -516,8 +516,8 @@ var InlineEditor = class {
     this.pendingAnchorSkip = null;
     // Per-element-type flags controlling whether cursor entry triggers inline expansion.
     this.expandRuby = true;
-    this.expandTcy = false;
-    this.expandBouten = false;
+    this.expandTcy = true;
+    this.expandBouten = true;
   }
   setExpandSettings(ruby, tcy, bouten) {
     this.expandRuby = ruby;

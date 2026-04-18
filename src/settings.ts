@@ -24,7 +24,7 @@ export const DEFAULT_SETTINGS: TatePluginSettings = {
     removeBracketIndent: true,
     expandRubyInline: true,
     expandTcyInline: true,
-    expandBoutenInline: false,
+    expandBoutenInline: true,
 };
 
 export class TateSettingTab extends PluginSettingTab {
