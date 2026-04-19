@@ -16,8 +16,28 @@ export class InlineEditor {
     // Flag indicating there are uncommitted changes pending for CM6.
     // Set by onBeforeInput, cleared by resetBurst() when commitToCm6() completes.
     private inBurst = false;
+    // Direction of the most recent navigation key; used by handleSelectionChange to skip
+    // the U+200B placeholder in the cursor anchor span in the correct direction.
+    private pendingAnchorSkip: 'forward' | 'backward' | null = null;
+    // After a bouten span collapses (atSpanEnd), Chrome normalizes the cursor from the
+    // adjacent anchor position back into the bouten span, triggering re-expansion.
+    // Stores the restored bouten element and its original text so the next selectionchange
+    // can detect the normalization and redirect instead of re-expanding, and so
+    // handleBoutenPostCollapseInput can extract IME text that landed inside the span.
+    // Cleared on the next user action (navigation key, mouse click, or character insertion).
+    private boutenJustCollapsed: { el: HTMLElement; originalText: string } | null = null;
+    // Per-element-type flags controlling whether cursor entry triggers inline expansion.
+    private expandRuby = true;
+    private expandTcy = true;
+    private expandBouten = true;
 
     constructor(private readonly el: HTMLDivElement) {}
+
+    setExpandSettings(ruby: boolean, tcy: boolean, bouten: boolean): void {
+        this.expandRuby = ruby;
+        this.expandTcy = tcy;
+        this.expandBouten = bouten;
+    }
 
     // Resets expansion state, selection cache, and burst flag (called from setValue / applyFromCm6)
     reset(): void {
@@ -25,6 +45,7 @@ export class InlineEditor {
         this.expandedElOriginalText = null;
         this.savedRange = null;
         this.inBurst = false;
+        this.boutenJustCollapsed = null;
     }
 
     isExpanded(): boolean {
@@ -76,9 +97,20 @@ export class InlineEditor {
             if (!sel || sel.rangeCount === 0) return false;
             const range = sel.getRangeAt(0);
 
-            // Cursor is still inside the expanded span — do nothing
+            // Cursor is still inside the expanded span — do nothing (unless past the closing bracket)
             if (this.expandedEl && this.expandedEl.contains(range.startContainer)) {
-                return false;
+                const spanText = this.expandedEl.firstChild as Text | null;
+                const atSpanEnd = spanText
+                    && range.startContainer === spanText
+                    && range.startOffset >= spanText.length;
+                if (!atSpanEnd) return false;
+                // Cursor is past the closing bracket (》 or ］): collapse and place cursor just after
+                const nextSib = this.expandedEl.nextSibling;
+                const parentEl = this.expandedEl.parentElement;
+                contentChanged = this.collapseEditing();
+                this.savedRange = null;
+                if (parentEl) this.placeCursorAfterCollapse(nextSib, parentEl, sel);
+                return contentChanged;
             }
 
             // Cursor moved outside the expanded span — collapse, then restore the intended position
@@ -109,9 +141,50 @@ export class InlineEditor {
             const currentRange = sel.getRangeAt(0);
             if (!this.el.contains(currentRange.startContainer)) return contentChanged;
 
-            // Expand if the cursor is inside an expandable element (ruby/tcy)
+            // If cursor is inside a U+200B-only anchor span and a navigation key was just pressed,
+            // skip in the recorded direction to make the invisible placeholder transparent.
+            const anchorSpan = this.findCursorAnchorAncestor(currentRange.startContainer);
+            const savedSkip = this.pendingAnchorSkip;
+            this.pendingAnchorSkip = null;
+            if (anchorSpan) {
+                const text = anchorSpan.textContent ?? '';
+                if ((text === '\u200B' || text === '') && savedSkip !== null) {
+                    try {
+                        const r = document.createRange();
+                        if (savedSkip === 'forward') {
+                            const pos = this.findPositionAfterAnchor(anchorSpan);
+                            if (pos) r.setStart(pos.node, pos.offset);
+                            else r.setStartAfter(anchorSpan);
+                        } else {
+                            const pos = this.findPositionBeforeAnchor(anchorSpan);
+                            if (pos) r.setStart(pos.node, pos.offset);
+                            else r.setStartAfter(anchorSpan);
+                        }
+                        r.collapse(true);
+                        sel.removeAllRanges();
+                        sel.addRange(r);
+                    } catch { /* ignore if detached */ }
+                }
+                return contentChanged; // Don't try to expand anchor span
+            }
+
+            // Expand if the cursor is inside an expandable element (ruby/tcy/bouten)
             const target = this.findExpandableAncestor(currentRange.startContainer);
             if (target) {
+                // After a bouten collapse, Chrome normalizes the cursor from the adjacent anchor
+                // back into the bouten span. Detect this and redirect cursor instead of re-expanding.
+                if (target === this.boutenJustCollapsed?.el) {
+                    this.redirectCursorOutOfCollapsedBouten(target, sel);
+                    // Keep boutenJustCollapsed set; cleared only on user action (nav key / mouse).
+                    return contentChanged;
+                }
+                // Cursor entered a different expandable element: clear the post-collapse guard.
+                this.boutenJustCollapsed = null;
+                // For expandable elements at end-of-line, insert a cursor anchor before expanding so
+                // that when the user exits past the closing bracket, nextSibling is already the anchor.
+                if (target.tagName === 'RUBY' || target.getAttribute('data-tcy') === 'explicit'
+                        || target.getAttribute('data-bouten'))
+                    this.ensureCursorAnchorAfter(target);
                 this.expandForEditing(target, currentRange);
             }
         } finally {
@@ -272,15 +345,177 @@ export class InlineEditor {
         return this.wrapSelectionWith(c => this.createBoutenEl(c));
     }
 
+    // Handles ArrowUp (→ move left) and ArrowDown (→ move right) when cursor is inside a tcy span.
+    // In vertical writing mode the tcy element is laid out horizontally, so the vertical arrow keys
+    // should navigate within the tcy text rather than jumping to the adjacent line.
+    // Returns true if the key was consumed (caller should call preventDefault).
+    handleTcyNavigation(key: string): boolean {
+        if (key !== 'ArrowUp' && key !== 'ArrowDown') return false;
+        const sel = window.getSelection();
+        if (!sel || sel.rangeCount === 0) return false;
+        const range = sel.getRangeAt(0);
+
+        const tcySpan = this.findTcyAncestor(range.startContainer);
+        if (!tcySpan) return false;
+
+        const moveLeft = key === 'ArrowUp';
+        const textNode = tcySpan.firstChild instanceof Text ? tcySpan.firstChild as Text : null;
+        const r = document.createRange();
+
+        if (!textNode) {
+            if (moveLeft) r.setStartBefore(tcySpan); else r.setStartAfter(tcySpan);
+            r.collapse(true);
+            sel.removeAllRanges();
+            sel.addRange(r);
+            return true;
+        }
+
+        let currentOffset: number;
+        if (range.startContainer === textNode) {
+            currentOffset = range.startOffset;
+        } else if (range.startContainer === tcySpan) {
+            currentOffset = range.startOffset === 0 ? 0 : textNode.length;
+        } else {
+            return false;
+        }
+
+        const newOffset = currentOffset + (moveLeft ? -1 : 1);
+        if (newOffset < 0) {
+            r.setStartBefore(tcySpan);
+        } else if (newOffset > textNode.length) {
+            r.setStartAfter(tcySpan);
+        } else {
+            r.setStart(textNode, newOffset);
+        }
+        r.collapse(true);
+        sel.removeAllRanges();
+        sel.addRange(r);
+        return true;
+    }
+
     // Called on the beforeinput event (registered from view.ts).
     // Sets the inBurst flag to indicate there are uncommitted changes pending for CM6.
     onBeforeInput(): void {
         this.inBurst = true;
     }
 
+    // Returns the bouten span that should intercept the next insertText event due to Chrome's
+    // post-collapse cursor behavior, or null if not applicable.
+    // Covers three cursor positions that occur after collapse:
+    //   1. cursor normalized into bouten itself (Chrome moves it back synchronously)
+    //   2. cursor redirected into the adjacent anchor span (end-of-line)
+    //   3. cursor redirected to the start of the next text node (mid-line)
+    // Non-collapsed selections (e.g. Ctrl+A) are excluded to avoid false positives.
+    getCursorBoutenSpan(): HTMLElement | null {
+        if (!this.boutenJustCollapsed || !this.expandBouten || this.expandedEl) return null;
+        const bouten = this.boutenJustCollapsed.el;
+        if (!bouten.isConnected) {
+            this.boutenJustCollapsed = null;
+            return null;
+        }
+        const sel = window.getSelection();
+        if (!sel || sel.rangeCount === 0 || !sel.getRangeAt(0).collapsed) return null;
+
+        const range = sel.getRangeAt(0);
+        const container = range.startContainer;
+
+        // Case 1: Chrome normalized cursor back into bouten span itself
+        if (this.findBoutenAncestor(container) === bouten) return bouten;
+
+        // Case 2 / 3: cursor is at the immediate next sibling of bouten
+        // (anchor span for end-of-line, or text node for mid-line),
+        // including descendants of that sibling and element-level cursor positions.
+        const nextSib = bouten.nextSibling;  // bouten is still in DOM (checked above)
+        if (nextSib) {
+            if (nextSib === container
+                    || (nextSib instanceof HTMLElement && nextSib.contains(container))) {
+                return bouten;
+            }
+            // Element-level cursor: {parentDiv, indexOf(nextSib)}
+            if (container.nodeType === Node.ELEMENT_NODE
+                    && (container as Element).childNodes[range.startOffset] === nextSib) {
+                return bouten;
+            }
+        }
+
+        return null;
+    }
+
+    // Inserts chars into the DOM immediately after bouten without going through the Selection API.
+    // End-of-line (anchor span follows): creates a new text node between bouten and anchor.
+    // Mid-line (text node follows): prepends to that text node.
+    // Moves the cursor to just after the inserted text.
+    insertAfterBouten(bouten: HTMLElement, chars: string): void {
+        const next = bouten.nextSibling;
+        let targetNode: Text;
+        let targetOffset: number;
+
+        if (next instanceof HTMLElement && next.classList.contains('tate-cursor-anchor')
+                && next.firstChild?.nodeType === Node.TEXT_NODE) {
+            // End-of-line: new text node between bouten and anchor preserves anchor for future navigation
+            const textNode = document.createTextNode(chars);
+            bouten.parentNode!.insertBefore(textNode, next);
+            targetNode = textNode;
+            targetOffset = chars.length;
+        } else if (next?.nodeType === Node.TEXT_NODE) {
+            // Mid-line: prepend to existing text node (avoids creating a node split)
+            const textNode = next as Text;
+            textNode.insertData(0, chars);
+            targetNode = textNode;
+            targetOffset = chars.length;
+        } else {
+            const textNode = document.createTextNode(chars);
+            bouten.parentNode!.insertBefore(textNode, next ?? null);
+            targetNode = textNode;
+            targetOffset = chars.length;
+        }
+
+        const sel = window.getSelection();
+        if (sel) {
+            const r = document.createRange();
+            r.setStart(targetNode, targetOffset);
+            r.collapse(true);
+            sel.removeAllRanges();
+            sel.addRange(r);
+        }
+
+        // Insertion succeeded: cursor is now outside bouten. Clear the guard so that
+        // subsequent keystrokes are handled by normal input logic at the correct position.
+        this.boutenJustCollapsed = null;
+    }
+
+    // Called in compositionend (before commitToCm6) to move IME text that landed inside a
+    // post-collapse bouten span out to after the span. Returns true if the DOM was changed.
+    handleBoutenPostCollapseInput(): boolean {
+        if (!this.boutenJustCollapsed) return false;
+        const { el: bouten, originalText } = this.boutenJustCollapsed;
+        if (!bouten.isConnected) {
+            this.boutenJustCollapsed = null;
+            return false;
+        }
+
+        const currentText = bouten.textContent ?? '';
+
+        if (currentText === originalText) return false;
+
+        if (!currentText.startsWith(originalText)) {
+            // IME changed content unexpectedly: clear guard, let expansion handle naturally
+            this.boutenJustCollapsed = null;
+            return false;
+        }
+
+        const extraChars = currentText.slice(originalText.length);
+        bouten.textContent = originalText;
+        this.insertAfterBouten(bouten, extraChars);
+        // insertAfterBouten clears boutenJustCollapsed
+        return true;
+    }
+
     // Resets the burst flag (call after commitToCm6() completes or on navigation in view.ts).
     resetBurst(): void {
         this.inBurst = false;
+        // Mouse click or navigation commits the current position; allow future bouten expansion.
+        this.boutenJustCollapsed = null;
     }
 
     // ---- Shared logic for selection wrap and annotation completion ----
@@ -361,9 +596,9 @@ export class InlineEditor {
     private findExpandableAncestor(node: Node): HTMLElement | null {
         let el: HTMLElement | null = node instanceof HTMLElement ? node : node.parentElement;
         while (el && el !== this.el) {
-            if (el.tagName === 'RUBY') return el;
-            if (el.tagName === 'SPAN' && el.getAttribute('data-tcy') === 'explicit') return el;
-            if (el.tagName === 'SPAN' && el.getAttribute('data-bouten')) return el;
+            if (el.tagName === 'RUBY' && this.expandRuby) return el;
+            if (el.tagName === 'SPAN' && el.getAttribute('data-tcy') === 'explicit' && this.expandTcy) return el;
+            if (el.tagName === 'SPAN' && el.getAttribute('data-bouten') && this.expandBouten) return el;
             el = el.parentElement;
         }
         return null;
@@ -394,6 +629,59 @@ export class InlineEditor {
                 r.collapse(true);
                 sel.removeAllRanges();
                 sel.addRange(r);
+            }
+        }
+    }
+
+    // Places the cursor just after a collapsed annotation element.
+    // Inserts a cursor-anchor span at end-of-line if needed, and records boutenJustCollapsed.
+    private placeCursorAfterCollapse(nextSib: Node | null, parentEl: HTMLElement, sel: Selection): void {
+        try {
+            const r = document.createRange();
+            let placedAnchor: HTMLElement | null = null;
+            if (nextSib && nextSib.isConnected) {
+                if (nextSib instanceof HTMLElement
+                        && nextSib.classList.contains('tate-cursor-anchor')
+                        && nextSib.firstChild?.nodeType === Node.TEXT_NODE) {
+                    // Use a text-level position inside the anchor to avoid Chrome creating an
+                    // element-level position that fires an intermediate selectionchange and
+                    // clears pendingAnchorSkip before the skip runs.
+                    r.setStart(nextSib.firstChild, 0);
+                    placedAnchor = nextSib;
+                } else {
+                    r.setStartBefore(nextSib);
+                }
+            } else {
+                // End-of-line: insert cursor anchor span with U+200B so Chrome has a real
+                // text position and does not normalize into <rt> or the annotation span.
+                const anchor = this.createCursorAnchor();
+                parentEl.appendChild(anchor);
+                r.setStart(anchor.firstChild!, 0);
+                placedAnchor = anchor;
+            }
+            r.collapse(true);
+            sel.removeAllRanges();
+            sel.addRange(r);
+            // If the anchor is at end-of-line, clear pendingAnchorSkip so the cursor rests
+            // there; if content follows, keep the flag so the skip fires on landing.
+            if (placedAnchor) {
+                const nextAfterAnchor = placedAnchor.nextSibling;
+                const atEndOfLine = !nextAfterAnchor
+                    || (nextAfterAnchor instanceof HTMLElement
+                        && nextAfterAnchor.tagName === 'BR'
+                        && nextAfterAnchor === nextAfterAnchor.parentElement?.lastChild);
+                if (atEndOfLine) this.pendingAnchorSkip = null;
+            }
+        } catch { /* ignore if node detached */ }
+        // After collapsing a bouten span, record it so handleSelectionChange can detect
+        // Chrome's cursor normalization back into the span and redirect instead of re-expanding.
+        if (nextSib?.isConnected) {
+            const prevOfNextSib = nextSib.previousSibling;
+            if (prevOfNextSib instanceof HTMLElement && prevOfNextSib.getAttribute('data-bouten')) {
+                this.boutenJustCollapsed = {
+                    el: prevOfNextSib,
+                    originalText: prevOfNextSib.textContent ?? '',
+                };
             }
         }
     }
@@ -564,13 +852,27 @@ export class InlineEditor {
         return '';
     }
 
-    private isInsideRuby(node: Node): boolean {
-        let parent = node.parentElement;
-        while (parent && parent !== this.el) {
-            if (parent.tagName === 'RUBY') return true;
-            parent = parent.parentElement;
+    // Walks up the ancestor chain from node (inclusive if HTMLElement, parent-first if Text)
+    // and returns the first element satisfying pred, or null if none is found before the editor root.
+    private findAncestor(node: Node, pred: (el: HTMLElement) => boolean): HTMLElement | null {
+        let el: HTMLElement | null = node instanceof HTMLElement ? node : node.parentElement;
+        while (el && el !== this.el) {
+            if (pred(el)) return el;
+            el = el.parentElement;
         }
-        return false;
+        return null;
+    }
+
+    private findBoutenAncestor(node: Node): HTMLElement | null {
+        return this.findAncestor(node, el => !!el.getAttribute('data-bouten'));
+    }
+
+    private findTcyAncestor(node: Node): HTMLElement | null {
+        return this.findAncestor(node, el => el.classList.contains('tcy'));
+    }
+
+    private isInsideRuby(node: Node): boolean {
+        return this.findAncestor(node, el => el.tagName === 'RUBY') !== null;
     }
 
     private createRubyEl(base: string, rt: string, explicit: boolean): HTMLElement {
@@ -597,5 +899,205 @@ export class InlineEditor {
         span.className = 'bouten';
         span.textContent = content;
         return span;
+    }
+
+    // ---- Cursor anchor span management ----
+
+    // Redirects cursor to a stable position after the bouten span to prevent re-expansion.
+    // Called when Chrome normalizes the cursor from the adjacent anchor back into bouten.
+    // End-of-line: redirects to end of anchor text (after U+200B), which the anchor span handler
+    // intercepts on the next selectionchange so expansion does not fire.
+    // Mid-line: redirects to the start of the following text node, a true text-level stable position.
+    private redirectCursorOutOfCollapsedBouten(bouten: HTMLElement, sel: Selection): void {
+        const next = bouten.nextSibling;
+        const r = document.createRange();
+        if (next instanceof HTMLElement && next.classList.contains('tate-cursor-anchor')
+                && next.firstChild?.nodeType === Node.TEXT_NODE) {
+            // Place cursor at the END of the anchor text (after U+200B) rather than the start,
+            // so Chrome does not re-normalize this position back into the preceding bouten span.
+            const anchorText = next.firstChild as Text;
+            r.setStart(anchorText, anchorText.length);
+        } else if (next?.nodeType === Node.TEXT_NODE) {
+            r.setStart(next as Text, 0);
+        } else if (next) {
+            r.setStartBefore(next);
+        } else {
+            // Defensive fallback: bouten is at end-of-line with no anchor.
+            // In normal operation this branch is unreachable because ensureCursorAnchorAfter
+            // always inserts an anchor before expandForEditing, so collapseEditing leaves
+            // the anchor as nextSibling. Reached only if the anchor was removed externally.
+            r.setStartAfter(bouten);
+        }
+        r.collapse(true);
+        sel.removeAllRanges();
+        sel.addRange(r);
+    }
+
+    // Inserts a cursor anchor after el if el is at end-of-line and has no anchor yet.
+    // Must be called before expandForEditing so that the anchor survives as nextSibling
+    // of the tate-editing span and is available when the user exits past the closing bracket.
+    private ensureCursorAnchorAfter(el: HTMLElement): void {
+        const next = el.nextSibling;
+        if (next instanceof HTMLElement && next.classList.contains('tate-cursor-anchor')) return;
+        // End-of-line: no next sibling, or only the decorative <br> Chrome appends
+        const isEndOfLine = !next
+            || (next instanceof HTMLElement && next.tagName === 'BR'
+                && next === next.parentElement?.lastChild);
+        if (!isEndOfLine) return;
+        const anchor = this.createCursorAnchor();
+        el.parentNode!.insertBefore(anchor, next);
+    }
+
+    // Records the direction of the most recent navigation key so handleSelectionChange
+    // can skip the U+200B placeholder in the correct direction.
+    // Call from the keydown handler before the browser moves the cursor.
+    notifyNavigationKey(key: string): void {
+        // Intentional navigation clears the post-collapse guard so bouten can be entered again.
+        this.boutenJustCollapsed = null;
+        if (key === 'ArrowDown') this.pendingAnchorSkip = 'forward';
+        else if (key === 'ArrowUp') this.pendingAnchorSkip = 'backward';
+        else this.pendingAnchorSkip = null;
+    }
+
+
+    // Returns an ancestor <span class=tate-cursor-anchor> of node, or null if not found.
+    private findCursorAnchorAncestor(node: Node): HTMLElement | null {
+        return this.findAncestor(node, el => el.classList.contains('tate-cursor-anchor'));
+    }
+
+    // Creates a new cursor anchor span containing U+200B.
+    private createCursorAnchor(): HTMLSpanElement {
+        const anchor = document.createElement('span');
+        anchor.className = 'tate-cursor-anchor';
+        anchor.appendChild(document.createTextNode('\u200B'));
+        return anchor;
+    }
+
+    // Returns the first non-<rt> text position after the anchor.
+    // Checks siblings within the same paragraph first; falls back to the next paragraph.
+    private findPositionAfterAnchor(anchor: HTMLElement): { node: Text; offset: number } | null {
+        let sibling: Node | null = anchor.nextSibling;
+        while (sibling) {
+            if (sibling.nodeType === Node.TEXT_NODE) {
+                const t = sibling as Text;
+                if (!this.isInsideRtNode(t)) return { node: t, offset: 0 };
+            } else if (sibling.nodeType === Node.ELEMENT_NODE) {
+                const walker = document.createTreeWalker(sibling, NodeFilter.SHOW_TEXT);
+                let node = walker.nextNode() as Text | null;
+                while (node) {
+                    if (!this.isInsideRtNode(node)) return { node, offset: 0 };
+                    node = walker.nextNode() as Text | null;
+                }
+            }
+            sibling = sibling.nextSibling;
+        }
+        // Fallback: first text in the next paragraph
+        const parentDiv = anchor.parentElement;
+        if (!parentDiv) return null;
+        let next = parentDiv.nextSibling;
+        while (next) {
+            const walker = document.createTreeWalker(next, NodeFilter.SHOW_TEXT);
+            let node = walker.nextNode() as Text | null;
+            while (node) {
+                if (!this.isInsideRtNode(node)) return { node, offset: 0 };
+                node = walker.nextNode() as Text | null;
+            }
+            next = next.nextSibling;
+        }
+        return null;
+    }
+
+    // Returns the last non-<rt> text position before the anchor on the same line.
+    // Descends into element siblings (e.g. <ruby>) to find their last base text node,
+    // which causes selectionchange to trigger expandForEditing on the ruby.
+    // Falls back to the last text of the previous paragraph if nothing is found on the same line.
+    private findPositionBeforeAnchor(anchor: HTMLElement): { node: Text; offset: number } | null {
+        // Search backward among siblings of the anchor on the same line
+        let prev: Node | null = anchor.previousSibling;
+        while (prev) {
+            if (prev.nodeType === Node.TEXT_NODE) {
+                return { node: prev as Text, offset: (prev as Text).length };
+            }
+            if (prev.nodeType === Node.ELEMENT_NODE) {
+                const pos = this.findLastBaseTextInElement(prev as HTMLElement);
+                if (pos) return pos;
+            }
+            prev = prev.previousSibling;
+        }
+        // Nothing usable on the same line: fall back to end of previous paragraph
+        const parentDiv = anchor.parentElement;
+        if (!parentDiv) return null;
+        let prevDiv = parentDiv.previousSibling;
+        while (prevDiv) {
+            const walker = document.createTreeWalker(prevDiv, NodeFilter.SHOW_TEXT);
+            let lastText: Text | null = null;
+            let node = walker.nextNode() as Text | null;
+            while (node) {
+                if (!this.isInsideRtNode(node)) lastText = node;
+                node = walker.nextNode() as Text | null;
+            }
+            if (lastText) return { node: lastText, offset: lastText.length };
+            prevDiv = prevDiv.previousSibling;
+        }
+        return null;
+    }
+
+    // Finds the last non-<rt> text node inside el (used to land inside <ruby> on backward skip).
+    private findLastBaseTextInElement(el: HTMLElement): { node: Text; offset: number } | null {
+        const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+        let lastText: Text | null = null;
+        let node = walker.nextNode() as Text | null;
+        while (node) {
+            if (!this.isInsideRtNode(node)) lastText = node;
+            node = walker.nextNode() as Text | null;
+        }
+        if (!lastText) return null;
+        return { node: lastText, offset: lastText.length };
+    }
+
+    // Returns true if node has an <rt> ancestor within the editor root.
+    private isInsideRtNode(node: Node): boolean {
+        return this.findAncestor(node.parentElement ?? node, el => el.tagName === 'RT') !== null;
+    }
+
+    // Called after input/compositionend when cursor may be inside a tate-cursor-anchor span.
+    // Removes U+200B once real characters have been typed, or re-inserts it when the span is empty.
+    handleCursorAnchorInput(): void {
+        const sel = window.getSelection();
+        if (!sel || sel.rangeCount === 0) return;
+        const range = sel.getRangeAt(0);
+        const anchor = this.findCursorAnchorAncestor(range.startContainer);
+        if (!anchor) return;
+
+        const text = anchor.textContent ?? '';
+        this.isModifyingDom = true;
+        try {
+            if (text === '') {
+                // Span emptied by deletion: restore U+200B placeholder
+                const zws = document.createTextNode('\u200B');
+                anchor.replaceChildren(zws);
+                const r = document.createRange();
+                r.setStart(zws, 0);
+                r.collapse(true);
+                sel.removeAllRanges();
+                sel.addRange(r);
+            } else if (text !== '\u200B' && text.includes('\u200B')) {
+                // Real chars mixed with U+200B: strip placeholder
+                const cleaned = text.replace(/\u200B/g, '');
+                const textNode = anchor.firstChild;
+                if (textNode?.nodeType === Node.TEXT_NODE) {
+                    const prevOffset = range.startContainer === textNode ? range.startOffset : cleaned.length;
+                    textNode.textContent = cleaned;
+                    const adjustedOffset = text.slice(0, prevOffset).replace(/\u200B/g, '').length;
+                    const r = document.createRange();
+                    r.setStart(textNode, Math.min(adjustedOffset, cleaned.length));
+                    r.collapse(true);
+                    sel.removeAllRanges();
+                    sel.addRange(r);
+                }
+            }
+        } finally {
+            this.isModifyingDom = false;
+        }
     }
 }

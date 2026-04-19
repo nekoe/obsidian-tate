@@ -9,6 +9,9 @@ export interface TatePluginSettings {
     autoIndentOnInput: boolean;
     matchPrecedingIndent: boolean;
     removeBracketIndent: boolean;
+    expandRubyInline: boolean;
+    expandTcyInline: boolean;
+    expandBoutenInline: boolean;
 }
 
 export const DEFAULT_SETTINGS: TatePluginSettings = {
@@ -19,6 +22,9 @@ export const DEFAULT_SETTINGS: TatePluginSettings = {
     autoIndentOnInput: true,
     matchPrecedingIndent: true,
     removeBracketIndent: true,
+    expandRubyInline: true,
+    expandTcyInline: true,
+    expandBoutenInline: true,
 };
 
 export class TateSettingTab extends PluginSettingTab {
@@ -32,7 +38,7 @@ export class TateSettingTab extends PluginSettingTab {
     display(): void {
         const { containerEl } = this;
         containerEl.empty();
-        new Setting(containerEl).setName('縦書きビュー 設定').setHeading();
+        new Setting(containerEl).setName('フォント').setHeading();
 
         new Setting(containerEl)
             .setName('フォントファミリー')
@@ -59,7 +65,7 @@ export class TateSettingTab extends PluginSettingTab {
                     this.plugin.applySettingsToAllViews();
                 }));
 
-        new Setting(containerEl).setName('字下げ設定').setHeading();
+        new Setting(containerEl).setName('字下げ').setHeading();
 
         new Setting(containerEl)
             .setName('入力された半角スペースを全角スペースに変換')
@@ -105,6 +111,8 @@ export class TateSettingTab extends PluginSettingTab {
                     this.plugin.applySettingsToAllViews();
                 }));
 
+        new Setting(containerEl).setName('禁則処理').setHeading();
+
         new Setting(containerEl)
             .setName('禁則処理')
             .setDesc('行頭・行末に置けない文字のルールセット（CSS line-break プロパティ）')
@@ -116,6 +124,46 @@ export class TateSettingTab extends PluginSettingTab {
                 .setValue(this.plugin.settings.lineBreak)
                 .onChange(async (value) => {
                     this.plugin.settings.lineBreak = value as TatePluginSettings['lineBreak'];
+                    await this.plugin.saveSettings();
+                    this.plugin.applySettingsToAllViews();
+                }));
+
+        new Setting(containerEl).setName('Experimental settings').setHeading();
+
+        containerEl.createEl('p', {
+            text: 'デフォルト値以外に設定する場合、カーソル移動の挙動が不安定になる場合があります。',
+            cls: 'setting-item-description',
+        });
+
+        new Setting(containerEl)
+            .setName('ルビをインライン展開する')
+            .setDesc('カーソルがルビ上に移動したとき、青空記法テキストに展開して編集できるようにする (default on)')
+            .addToggle(toggle => toggle
+                .setValue(this.plugin.settings.expandRubyInline)
+                .onChange(async (value) => {
+                    this.plugin.settings.expandRubyInline = value;
+                    await this.plugin.saveSettings();
+                    this.plugin.applySettingsToAllViews();
+                }));
+
+        new Setting(containerEl)
+            .setName('縦中横をインライン展開する')
+            .setDesc('カーソルが縦中横上に移動したとき、青空記法テキストに展開して編集できるようにする (default on)')
+            .addToggle(toggle => toggle
+                .setValue(this.plugin.settings.expandTcyInline)
+                .onChange(async (value) => {
+                    this.plugin.settings.expandTcyInline = value;
+                    await this.plugin.saveSettings();
+                    this.plugin.applySettingsToAllViews();
+                }));
+
+        new Setting(containerEl)
+            .setName('傍点をインライン展開する')
+            .setDesc('カーソルが傍点上に移動したとき、青空記法テキストに展開して編集できるようにする (default on)')
+            .addToggle(toggle => toggle
+                .setValue(this.plugin.settings.expandBoutenInline)
+                .onChange(async (value) => {
+                    this.plugin.settings.expandBoutenInline = value;
                     await this.plugin.saveSettings();
                     this.plugin.applySettingsToAllViews();
                 }));

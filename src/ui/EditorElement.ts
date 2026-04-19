@@ -115,6 +115,11 @@ export class EditorElement {
         this.el.style.fontSize = `${settings.fontSize}px`;
         this.el.style.lineBreak = settings.lineBreak;
         this.inputTransformer.updateSettings(settings);
+        this.inlineEditor.setExpandSettings(
+            settings.expandRubyInline,
+            settings.expandTcyInline,
+            settings.expandBoutenInline,
+        );
     }
 
     adjustWidth(): void { /* no-op: contenteditable div auto-sizes */ }
@@ -124,8 +129,21 @@ export class EditorElement {
     }
 
     // Called on beforeinput event (registered from view.ts).
+    // For non-IME insertText when cursor is inside a post-collapse bouten span
+    // (Chrome normalized it back in), intercepts the event and inserts the character
+    // after the span instead. Chrome's Selection API normalization is synchronous and
+    // cannot be countered with sel.addRange, so Range-level insertion is used instead.
     onBeforeInput(e: InputEvent): void {
         this.inlineEditor.onBeforeInput();
+        if (!e.isComposing && e.inputType === 'insertText' && e.data) {
+            const boutenSpan = this.inlineEditor.getCursorBoutenSpan();
+            if (boutenSpan) {
+                e.preventDefault();
+                const char = this.inputTransformer.applySpaceConversion(e.data);
+                this.inlineEditor.insertAfterBouten(boutenSpan, char);
+                return;
+            }
+        }
         this.inputTransformer.handleBeforeInput(e);
     }
 
@@ -137,6 +155,12 @@ export class EditorElement {
     // Called on compositionstart (registered from view.ts).
     onCompositionStart(): void {
         this.inputTransformer.handleCompositionStart();
+    }
+
+    // Called in compositionend (before commitToCm6) to move IME text that landed inside a
+    // post-collapse bouten span out to after the span. Returns true if the DOM was changed.
+    handleBoutenPostCollapseInput(): boolean {
+        return this.inlineEditor.handleBoutenPostCollapseInput();
     }
 
     // Called on compositionend (registered from view.ts), before commitToCm6.
@@ -174,7 +198,23 @@ export class EditorElement {
         return this.getVisibleOffset();
     }
 
-    // ---- Cursor operations (offset managed in visible character count, excluding <rt>) ----
+    // Called after input/compositionend to manage U+200B in the cursor anchor span.
+    handleCursorAnchorInput(): void {
+        this.inlineEditor.handleCursorAnchorInput();
+    }
+
+    // Records the direction of the most recent navigation key for anchor skip.
+    notifyNavigationKey(key: string): void {
+        this.inlineEditor.notifyNavigationKey(key);
+    }
+
+    // Intercepts ArrowUp/ArrowDown inside a tcy span and moves the cursor left/right instead.
+    // Returns true if the key was consumed (caller should call preventDefault).
+    handleTcyNavigation(key: string): boolean {
+        return this.inlineEditor.handleTcyNavigation(key);
+    }
+
+    // ---- Cursor operations (offset managed in visible character count, excluding <rt> and U+200B) ----
 
     private getVisibleOffset(): number {
         const sel = window.getSelection();
@@ -186,10 +226,20 @@ export class EditorElement {
 
         while (node) {
             if (node === range.startContainer) {
-                if (!this.isInsideRt(node)) count += range.startOffset;
+                if (!this.isInsideRt(node)) {
+                    const text = node.textContent ?? '';
+                    const beforeCursor = this.isInsideAnchorSpan(node)
+                        ? text.slice(0, range.startOffset).replace(/\u200B/g, '').length
+                        : range.startOffset;
+                    count += beforeCursor;
+                }
                 break;
             }
-            if (!this.isInsideRt(node)) count += node.length;
+            if (!this.isInsideRt(node)) {
+                count += this.isInsideAnchorSpan(node)
+                    ? (node.textContent ?? '').replace(/\u200B/g, '').length
+                    : node.length;
+            }
             node = walker.nextNode() as Text | null;
         }
         return count;
@@ -204,15 +254,32 @@ export class EditorElement {
 
         while (node) {
             if (!this.isInsideRt(node)) {
-                if (remaining <= node.length) {
+                const visLen = this.isInsideAnchorSpan(node)
+                    ? (node.textContent ?? '').replace(/\u200B/g, '').length
+                    : node.length;
+                if (remaining <= visLen) {
                     const range = document.createRange();
-                    range.setStart(node, remaining);
+                    let actualOffset: number;
+                    if (this.isInsideAnchorSpan(node)) {
+                        // Map visible offset to actual offset, skipping U+200B
+                        const text = node.textContent ?? '';
+                        actualOffset = 0;
+                        let visible = 0;
+                        for (let i = 0; i < text.length; i++) {
+                            if (visible === remaining) { actualOffset = i; break; }
+                            if (text[i] !== '\u200B') visible++;
+                            actualOffset = i + 1;
+                        }
+                    } else {
+                        actualOffset = remaining;
+                    }
+                    range.setStart(node, actualOffset);
                     range.collapse(true);
                     sel.removeAllRanges();
                     sel.addRange(range);
                     return;
                 }
-                remaining -= node.length;
+                remaining -= visLen;
             }
             node = walker.nextNode() as Text | null;
         }
@@ -228,6 +295,15 @@ export class EditorElement {
         let parent = node.parentElement;
         while (parent && parent !== this.el) {
             if (parent.tagName === 'RT') return true;
+            parent = parent.parentElement;
+        }
+        return false;
+    }
+
+    private isInsideAnchorSpan(node: Node): boolean {
+        let parent = node.parentElement;
+        while (parent && parent !== this.el) {
+            if (parent.classList.contains('tate-cursor-anchor')) return true;
             parent = parent.parentElement;
         }
         return false;

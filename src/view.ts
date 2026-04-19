@@ -67,6 +67,7 @@ export class VerticalWritingView extends ItemView {
                                || editorEl.handleTcyCompletion()
                                || editorEl.handleBoutenCompletion();
                 if (annotated) this.commitToCm6(); // Notation conversion is an immediate commit point
+                editorEl.handleCursorAnchorInput(); // Manage U+200B placeholder in cursor anchor span
             }
         });
         this.registerDomEvent(editorEl.el, 'compositionstart', () => {
@@ -78,6 +79,8 @@ export class VerticalWritingView extends ItemView {
             editorEl.handleTcyCompletion();
             editorEl.handleBoutenCompletion();
             editorEl.onCompositionEnd(); // bracket de-indent for IME input
+            editorEl.handleCursorAnchorInput(); // Manage U+200B placeholder after IME input
+            editorEl.handleBoutenPostCollapseInput(); // Move IME text out of post-collapse bouten span
             this.commitToCm6(); // IME confirmation is a commit point
         });
         this.registerDomEvent(document, 'selectionchange', () => {
@@ -95,10 +98,20 @@ export class VerticalWritingView extends ItemView {
                 this.doUndoRedo(editorEl, e.shiftKey);
                 return;
             }
+            // ArrowUp/ArrowDown inside a tcy span: move left/right within the horizontal text
+            if (!e.isComposing && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+                if (editorEl.handleTcyNavigation(e.key)) {
+                    e.preventDefault();
+                    this.commitToCm6();
+                    editorEl.resetBurst();
+                    return;
+                }
+            }
             // Navigation keys are commit points (to record the next input as a separate CM6 history entry)
             // Skip while isComposing=true (user is selecting IME candidates)
             if (!e.isComposing && ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown',
                  'Home', 'End', 'PageUp', 'PageDown'].includes(e.key)) {
+                editorEl.notifyNavigationKey(e.key);
                 this.commitToCm6();
                 editorEl.resetBurst();
             }

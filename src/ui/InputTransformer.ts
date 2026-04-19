@@ -30,6 +30,10 @@ export class InputTransformer {
         this.settings = { ...settings };
     }
 
+    applySpaceConversion(char: string): string {
+        return this.settings.convertHalfWidthSpace && char === ' ' ? '\u3000' : char;
+    }
+
     // Called on compositionstart. Inserts one indent space at line start before IME composition begins
     // so that Japanese characters are typed after the indent, not before it.
     handleCompositionStart(): void {
