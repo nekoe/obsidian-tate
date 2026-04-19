@@ -1,7 +1,7 @@
 {
 	"id": "tate",
 	"name": "TATE",
-	"version": "1.2.0",
+	"version": "1.2.1",
 	"minAppVersion": "0.15.0",
 	"description": "Vertical writing mode for Japanese text.",
 	"author": "nekoe",
