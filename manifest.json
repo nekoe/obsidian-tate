@@ -6,5 +6,5 @@
 	"description": "Vertical writing mode for Japanese text.",
 	"author": "nekoe",
 	"authorUrl": "https://github.com/nekoe",
-	"isDesktopOnly": false
+	"isDesktopOnly": true
 }
