@@ -516,13 +516,11 @@ var InlineEditor = class {
     this.pendingAnchorSkip = null;
     // After a bouten span collapses (atSpanEnd), Chrome normalizes the cursor from the
     // adjacent anchor position back into the bouten span, triggering re-expansion.
-    // This field holds the restored bouten element so the next selectionchange can
-    // detect the normalization and redirect the cursor instead of re-expanding.
-    // Cleared on the next user action (navigation key, mouse click).
+    // Stores the restored bouten element and its original text so the next selectionchange
+    // can detect the normalization and redirect instead of re-expanding, and so
+    // handleBoutenPostCollapseInput can extract IME text that landed inside the span.
+    // Cleared on the next user action (navigation key, mouse click, or character insertion).
     this.boutenJustCollapsed = null;
-    // Original text content of boutenJustCollapsed at collapse time, used by
-    // handleBoutenPostCollapseInput to extract IME text that went into the span.
-    this.boutenJustCollapsedText = null;
     // Per-element-type flags controlling whether cursor entry triggers inline expansion.
     this.expandRuby = true;
     this.expandTcy = true;
@@ -540,7 +538,6 @@ var InlineEditor = class {
     this.savedRange = null;
     this.inBurst = false;
     this.boutenJustCollapsed = null;
-    this.boutenJustCollapsedText = null;
   }
   isExpanded() {
     return this.expandedEl !== null;
@@ -549,7 +546,7 @@ var InlineEditor = class {
   // Called on every cursor movement to expand or collapse ruby/tcy elements.
   // Returns true if collapse changed the content (signal for view.ts to call commitToCm6).
   handleSelectionChange() {
-    var _a, _b, _c, _d;
+    var _a, _b;
     if (!this.isModifyingDom) {
       if (!this.expandedEl || !this.expandedEl.isConnected) {
         const actualSpan = this.el.querySelector("span.tate-editing");
@@ -588,41 +585,7 @@ var InlineEditor = class {
         const parentEl = this.expandedEl.parentElement;
         contentChanged = this.collapseEditing();
         this.savedRange = null;
-        if (parentEl) {
-          try {
-            const r = document.createRange();
-            let placedAnchor = null;
-            if (nextSib && nextSib.isConnected) {
-              if (nextSib instanceof HTMLElement && nextSib.classList.contains("tate-cursor-anchor") && ((_a = nextSib.firstChild) == null ? void 0 : _a.nodeType) === Node.TEXT_NODE) {
-                r.setStart(nextSib.firstChild, 0);
-                placedAnchor = nextSib;
-              } else {
-                r.setStartBefore(nextSib);
-              }
-            } else {
-              const anchor = this.createCursorAnchor();
-              parentEl.appendChild(anchor);
-              r.setStart(anchor.firstChild, 0);
-              placedAnchor = anchor;
-            }
-            r.collapse(true);
-            sel.removeAllRanges();
-            sel.addRange(r);
-            if (placedAnchor) {
-              const nextAfterAnchor = placedAnchor.nextSibling;
-              const atEndOfLine = !nextAfterAnchor || nextAfterAnchor instanceof HTMLElement && nextAfterAnchor.tagName === "BR" && nextAfterAnchor === ((_b = nextAfterAnchor.parentElement) == null ? void 0 : _b.lastChild);
-              if (atEndOfLine) this.pendingAnchorSkip = null;
-            }
-          } catch (e) {
-          }
-        }
-        if (nextSib == null ? void 0 : nextSib.isConnected) {
-          const prevOfNextSib = nextSib.previousSibling;
-          if (prevOfNextSib instanceof HTMLElement && prevOfNextSib.getAttribute("data-bouten")) {
-            this.boutenJustCollapsed = prevOfNextSib;
-            this.boutenJustCollapsedText = (_c = prevOfNextSib.textContent) != null ? _c : "";
-          }
-        }
+        if (parentEl) this.placeCursorAfterCollapse(nextSib, parentEl, sel);
         return contentChanged;
       }
       if (this.expandedEl) {
@@ -649,7 +612,7 @@ var InlineEditor = class {
       const savedSkip = this.pendingAnchorSkip;
       this.pendingAnchorSkip = null;
       if (anchorSpan) {
-        const text = (_d = anchorSpan.textContent) != null ? _d : "";
+        const text = (_a = anchorSpan.textContent) != null ? _a : "";
         if ((text === "\u200B" || text === "") && savedSkip !== null) {
           try {
             const r = document.createRange();
@@ -672,7 +635,7 @@ var InlineEditor = class {
       }
       const target = this.findExpandableAncestor(currentRange.startContainer);
       if (target) {
-        if (target === this.boutenJustCollapsed) {
+        if (target === ((_b = this.boutenJustCollapsed) == null ? void 0 : _b.el)) {
           this.redirectCursorOutOfCollapsedBouten(target, sel);
           return contentChanged;
         }
@@ -866,16 +829,15 @@ var InlineEditor = class {
   // Non-collapsed selections (e.g. Ctrl+A) are excluded to avoid false positives.
   getCursorBoutenSpan() {
     if (!this.boutenJustCollapsed || !this.expandBouten || this.expandedEl) return null;
-    if (!this.boutenJustCollapsed.isConnected) {
+    const bouten = this.boutenJustCollapsed.el;
+    if (!bouten.isConnected) {
       this.boutenJustCollapsed = null;
-      this.boutenJustCollapsedText = null;
       return null;
     }
     const sel = window.getSelection();
     if (!sel || sel.rangeCount === 0 || !sel.getRangeAt(0).collapsed) return null;
     const range = sel.getRangeAt(0);
     const container = range.startContainer;
-    const bouten = this.boutenJustCollapsed;
     if (this.findBoutenAncestor(container) === bouten) return bouten;
     const nextSib = bouten.nextSibling;
     if (nextSib) {
@@ -922,39 +884,32 @@ var InlineEditor = class {
       sel.addRange(r);
     }
     this.boutenJustCollapsed = null;
-    this.boutenJustCollapsedText = null;
   }
   // Called in compositionend (before commitToCm6) to move IME text that landed inside a
   // post-collapse bouten span out to after the span. Returns true if the DOM was changed.
   handleBoutenPostCollapseInput() {
-    var _a, _b;
+    var _a;
     if (!this.boutenJustCollapsed) return false;
-    const bouten = this.boutenJustCollapsed;
+    const { el: bouten, originalText } = this.boutenJustCollapsed;
     if (!bouten.isConnected) {
       this.boutenJustCollapsed = null;
-      this.boutenJustCollapsedText = null;
       return false;
     }
     const currentText = (_a = bouten.textContent) != null ? _a : "";
-    const originalText = (_b = this.boutenJustCollapsedText) != null ? _b : "";
     if (currentText === originalText) return false;
     if (!currentText.startsWith(originalText)) {
       this.boutenJustCollapsed = null;
-      this.boutenJustCollapsedText = null;
       return false;
     }
     const extraChars = currentText.slice(originalText.length);
     bouten.textContent = originalText;
     this.insertAfterBouten(bouten, extraChars);
-    this.boutenJustCollapsed = null;
-    this.boutenJustCollapsedText = null;
     return true;
   }
   // Resets the burst flag (call after commitToCm6() completes or on navigation in view.ts).
   resetBurst() {
     this.inBurst = false;
     this.boutenJustCollapsed = null;
-    this.boutenJustCollapsedText = null;
   }
   // ---- Shared logic for selection wrap and annotation completion ----
   // Shared implementation for element-replacement wraps (tcy, bouten, etc.)
@@ -1051,6 +1006,46 @@ var InlineEditor = class {
         r.collapse(true);
         sel.removeAllRanges();
         sel.addRange(r);
+      }
+    }
+  }
+  // Places the cursor just after a collapsed annotation element.
+  // Inserts a cursor-anchor span at end-of-line if needed, and records boutenJustCollapsed.
+  placeCursorAfterCollapse(nextSib, parentEl, sel) {
+    var _a, _b, _c;
+    try {
+      const r = document.createRange();
+      let placedAnchor = null;
+      if (nextSib && nextSib.isConnected) {
+        if (nextSib instanceof HTMLElement && nextSib.classList.contains("tate-cursor-anchor") && ((_a = nextSib.firstChild) == null ? void 0 : _a.nodeType) === Node.TEXT_NODE) {
+          r.setStart(nextSib.firstChild, 0);
+          placedAnchor = nextSib;
+        } else {
+          r.setStartBefore(nextSib);
+        }
+      } else {
+        const anchor = this.createCursorAnchor();
+        parentEl.appendChild(anchor);
+        r.setStart(anchor.firstChild, 0);
+        placedAnchor = anchor;
+      }
+      r.collapse(true);
+      sel.removeAllRanges();
+      sel.addRange(r);
+      if (placedAnchor) {
+        const nextAfterAnchor = placedAnchor.nextSibling;
+        const atEndOfLine = !nextAfterAnchor || nextAfterAnchor instanceof HTMLElement && nextAfterAnchor.tagName === "BR" && nextAfterAnchor === ((_b = nextAfterAnchor.parentElement) == null ? void 0 : _b.lastChild);
+        if (atEndOfLine) this.pendingAnchorSkip = null;
+      }
+    } catch (e) {
+    }
+    if (nextSib == null ? void 0 : nextSib.isConnected) {
+      const prevOfNextSib = nextSib.previousSibling;
+      if (prevOfNextSib instanceof HTMLElement && prevOfNextSib.getAttribute("data-bouten")) {
+        this.boutenJustCollapsed = {
+          el: prevOfNextSib,
+          originalText: (_c = prevOfNextSib.textContent) != null ? _c : ""
+        };
       }
     }
   }
@@ -1180,29 +1175,24 @@ var InlineEditor = class {
     }
     return "";
   }
-  findBoutenAncestor(node) {
+  // Walks up the ancestor chain from node (inclusive if HTMLElement, parent-first if Text)
+  // and returns the first element satisfying pred, or null if none is found before the editor root.
+  findAncestor(node, pred) {
     let el = node instanceof HTMLElement ? node : node.parentElement;
     while (el && el !== this.el) {
-      if (el.getAttribute("data-bouten")) return el;
+      if (pred(el)) return el;
       el = el.parentElement;
     }
     return null;
+  }
+  findBoutenAncestor(node) {
+    return this.findAncestor(node, (el) => !!el.getAttribute("data-bouten"));
   }
   findTcyAncestor(node) {
-    let el = node;
-    while (el && el !== this.el) {
-      if (el instanceof HTMLElement && el.classList.contains("tcy")) return el;
-      el = el.parentElement;
-    }
-    return null;
+    return this.findAncestor(node, (el) => el.classList.contains("tcy"));
   }
   isInsideRuby(node) {
-    let parent = node.parentElement;
-    while (parent && parent !== this.el) {
-      if (parent.tagName === "RUBY") return true;
-      parent = parent.parentElement;
-    }
-    return false;
+    return this.findAncestor(node, (el) => el.tagName === "RUBY") !== null;
   }
   createRubyEl(base, rt, explicit) {
     const rubyEl = document.createElement("ruby");
@@ -1274,12 +1264,7 @@ var InlineEditor = class {
   }
   // Returns an ancestor <span class=tate-cursor-anchor> of node, or null if not found.
   findCursorAnchorAncestor(node) {
-    let el = node instanceof HTMLElement ? node : node.parentElement;
-    while (el && el !== this.el) {
-      if (el.classList.contains("tate-cursor-anchor")) return el;
-      el = el.parentElement;
-    }
-    return null;
+    return this.findAncestor(node, (el) => el.classList.contains("tate-cursor-anchor"));
   }
   // Creates a new cursor anchor span containing U+200B.
   createCursorAnchor() {
@@ -1366,12 +1351,8 @@ var InlineEditor = class {
   }
   // Returns true if node has an <rt> ancestor within the editor root.
   isInsideRtNode(node) {
-    let parent = node.parentElement;
-    while (parent && parent !== this.el) {
-      if (parent.tagName === "RT") return true;
-      parent = parent.parentElement;
-    }
-    return false;
+    var _a;
+    return this.findAncestor((_a = node.parentElement) != null ? _a : node, (el) => el.tagName === "RT") !== null;
   }
   // Called after input/compositionend when cursor may be inside a tate-cursor-anchor span.
   // Removes U+200B once real characters have been typed, or re-inserts it when the span is empty.
