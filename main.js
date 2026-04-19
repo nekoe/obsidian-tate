@@ -99,7 +99,7 @@ var TateSettingTab = class extends import_obsidian.PluginSettingTab {
   display() {
     const { containerEl } = this;
     containerEl.empty();
-    new import_obsidian.Setting(containerEl).setName("\u7E26\u66F8\u304D\u30D3\u30E5\u30FC \u8A2D\u5B9A").setHeading();
+    new import_obsidian.Setting(containerEl).setName("\u30D5\u30A9\u30F3\u30C8").setHeading();
     new import_obsidian.Setting(containerEl).setName("\u30D5\u30A9\u30F3\u30C8\u30D5\u30A1\u30DF\u30EA\u30FC").setDesc("\u7E26\u66F8\u304D\u8868\u793A\u306B\u4F7F\u3046\u30D5\u30A9\u30F3\u30C8\uFF08CSS font-family \u5F62\u5F0F\uFF09").addText((text) => text.setPlaceholder('"Hiragino Mincho ProN", serif').setValue(this.plugin.settings.fontFamily).onChange(async (value) => {
       this.plugin.settings.fontFamily = value;
       await this.plugin.saveSettings();
@@ -110,7 +110,7 @@ var TateSettingTab = class extends import_obsidian.PluginSettingTab {
       await this.plugin.saveSettings();
       this.plugin.applySettingsToAllViews();
     }));
-    new import_obsidian.Setting(containerEl).setName("\u5B57\u4E0B\u3052\u8A2D\u5B9A").setHeading();
+    new import_obsidian.Setting(containerEl).setName("\u5B57\u4E0B\u3052").setHeading();
     new import_obsidian.Setting(containerEl).setName("\u5165\u529B\u3055\u308C\u305F\u534A\u89D2\u30B9\u30DA\u30FC\u30B9\u3092\u5168\u89D2\u30B9\u30DA\u30FC\u30B9\u306B\u5909\u63DB").setDesc("\u30B9\u30DA\u30FC\u30B9\u30AD\u30FC\u3067\u5165\u529B\u3057\u305F\u534A\u89D2\u30B9\u30DA\u30FC\u30B9\u3092\u5168\u89D2\u30B9\u30DA\u30FC\u30B9\uFF08\u3000\uFF09\u306B\u5909\u63DB\u3059\u308B").addToggle((toggle) => toggle.setValue(this.plugin.settings.convertHalfWidthSpace).onChange(async (value) => {
       this.plugin.settings.convertHalfWidthSpace = value;
       await this.plugin.saveSettings();
@@ -131,23 +131,28 @@ var TateSettingTab = class extends import_obsidian.PluginSettingTab {
       await this.plugin.saveSettings();
       this.plugin.applySettingsToAllViews();
     }));
+    new import_obsidian.Setting(containerEl).setName("\u7981\u5247\u51E6\u7406").setHeading();
     new import_obsidian.Setting(containerEl).setName("\u7981\u5247\u51E6\u7406").setDesc("\u884C\u982D\u30FB\u884C\u672B\u306B\u7F6E\u3051\u306A\u3044\u6587\u5B57\u306E\u30EB\u30FC\u30EB\u30BB\u30C3\u30C8\uFF08CSS line-break \u30D7\u30ED\u30D1\u30C6\u30A3\uFF09").addDropdown((dropdown) => dropdown.addOption("normal", "Normal   \u2014 \u4E00\u822C\u7684\u306A\u7981\u5247\u30EB\u30FC\u30EB").addOption("strict", "Strict   \u2014 \u6700\u3082\u53B3\u683C\uFF08\u5C0F\u66F8\u304D\u4EEE\u540D\u3082\u884C\u982D\u4E0D\u53EF\uFF09").addOption("loose", "Loose    \u2014 \u65B0\u805E\u30B9\u30BF\u30A4\u30EB\uFF08\u6539\u884C\u3092\u512A\u5148\uFF09").addOption("anywhere", "Anywhere \u2014 \u7981\u5247\u306A\u3057\uFF08\u3069\u3053\u3067\u3082\u6539\u884C\uFF09").setValue(this.plugin.settings.lineBreak).onChange(async (value) => {
       this.plugin.settings.lineBreak = value;
       await this.plugin.saveSettings();
       this.plugin.applySettingsToAllViews();
     }));
-    new import_obsidian.Setting(containerEl).setName("\u30A4\u30F3\u30E9\u30A4\u30F3\u5C55\u958B").setHeading();
-    new import_obsidian.Setting(containerEl).setName("\u30EB\u30D3\u3092\u30A4\u30F3\u30E9\u30A4\u30F3\u5C55\u958B\u3059\u308B").setDesc("\u30AB\u30FC\u30BD\u30EB\u304C\u30EB\u30D3\u4E0A\u306B\u79FB\u52D5\u3057\u305F\u3068\u304D\u3001\u9752\u7A7A\u8A18\u6CD5\u30C6\u30AD\u30B9\u30C8\u306B\u5C55\u958B\u3057\u3066\u7DE8\u96C6\u3067\u304D\u308B\u3088\u3046\u306B\u3059\u308B").addToggle((toggle) => toggle.setValue(this.plugin.settings.expandRubyInline).onChange(async (value) => {
+    new import_obsidian.Setting(containerEl).setName("Experimental settings").setHeading();
+    containerEl.createEl("p", {
+      text: "\u30C7\u30D5\u30A9\u30EB\u30C8\u5024\u4EE5\u5916\u306B\u8A2D\u5B9A\u3059\u308B\u5834\u5408\u3001\u30AB\u30FC\u30BD\u30EB\u79FB\u52D5\u306E\u6319\u52D5\u304C\u4E0D\u5B89\u5B9A\u306B\u306A\u308B\u5834\u5408\u304C\u3042\u308A\u307E\u3059\u3002",
+      cls: "setting-item-description"
+    });
+    new import_obsidian.Setting(containerEl).setName("\u30EB\u30D3\u3092\u30A4\u30F3\u30E9\u30A4\u30F3\u5C55\u958B\u3059\u308B").setDesc("\u30AB\u30FC\u30BD\u30EB\u304C\u30EB\u30D3\u4E0A\u306B\u79FB\u52D5\u3057\u305F\u3068\u304D\u3001\u9752\u7A7A\u8A18\u6CD5\u30C6\u30AD\u30B9\u30C8\u306B\u5C55\u958B\u3057\u3066\u7DE8\u96C6\u3067\u304D\u308B\u3088\u3046\u306B\u3059\u308B (default on)").addToggle((toggle) => toggle.setValue(this.plugin.settings.expandRubyInline).onChange(async (value) => {
       this.plugin.settings.expandRubyInline = value;
       await this.plugin.saveSettings();
       this.plugin.applySettingsToAllViews();
     }));
-    new import_obsidian.Setting(containerEl).setName("\u7E26\u4E2D\u6A2A\u3092\u30A4\u30F3\u30E9\u30A4\u30F3\u5C55\u958B\u3059\u308B").setDesc("\u30AB\u30FC\u30BD\u30EB\u304C\u7E26\u4E2D\u6A2A\u4E0A\u306B\u79FB\u52D5\u3057\u305F\u3068\u304D\u3001\u9752\u7A7A\u8A18\u6CD5\u30C6\u30AD\u30B9\u30C8\u306B\u5C55\u958B\u3057\u3066\u7DE8\u96C6\u3067\u304D\u308B\u3088\u3046\u306B\u3059\u308B").addToggle((toggle) => toggle.setValue(this.plugin.settings.expandTcyInline).onChange(async (value) => {
+    new import_obsidian.Setting(containerEl).setName("\u7E26\u4E2D\u6A2A\u3092\u30A4\u30F3\u30E9\u30A4\u30F3\u5C55\u958B\u3059\u308B").setDesc("\u30AB\u30FC\u30BD\u30EB\u304C\u7E26\u4E2D\u6A2A\u4E0A\u306B\u79FB\u52D5\u3057\u305F\u3068\u304D\u3001\u9752\u7A7A\u8A18\u6CD5\u30C6\u30AD\u30B9\u30C8\u306B\u5C55\u958B\u3057\u3066\u7DE8\u96C6\u3067\u304D\u308B\u3088\u3046\u306B\u3059\u308B (default on)").addToggle((toggle) => toggle.setValue(this.plugin.settings.expandTcyInline).onChange(async (value) => {
       this.plugin.settings.expandTcyInline = value;
       await this.plugin.saveSettings();
       this.plugin.applySettingsToAllViews();
     }));
-    new import_obsidian.Setting(containerEl).setName("\u508D\u70B9\u3092\u30A4\u30F3\u30E9\u30A4\u30F3\u5C55\u958B\u3059\u308B").setDesc("\u30AB\u30FC\u30BD\u30EB\u304C\u508D\u70B9\u4E0A\u306B\u79FB\u52D5\u3057\u305F\u3068\u304D\u3001\u9752\u7A7A\u8A18\u6CD5\u30C6\u30AD\u30B9\u30C8\u306B\u5C55\u958B\u3057\u3066\u7DE8\u96C6\u3067\u304D\u308B\u3088\u3046\u306B\u3059\u308B").addToggle((toggle) => toggle.setValue(this.plugin.settings.expandBoutenInline).onChange(async (value) => {
+    new import_obsidian.Setting(containerEl).setName("\u508D\u70B9\u3092\u30A4\u30F3\u30E9\u30A4\u30F3\u5C55\u958B\u3059\u308B").setDesc("\u30AB\u30FC\u30BD\u30EB\u304C\u508D\u70B9\u4E0A\u306B\u79FB\u52D5\u3057\u305F\u3068\u304D\u3001\u9752\u7A7A\u8A18\u6CD5\u30C6\u30AD\u30B9\u30C8\u306B\u5C55\u958B\u3057\u3066\u7DE8\u96C6\u3067\u304D\u308B\u3088\u3046\u306B\u3059\u308B (default on)").addToggle((toggle) => toggle.setValue(this.plugin.settings.expandBoutenInline).onChange(async (value) => {
       this.plugin.settings.expandBoutenInline = value;
       await this.plugin.saveSettings();
       this.plugin.applySettingsToAllViews();
