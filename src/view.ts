@@ -80,6 +80,7 @@ export class VerticalWritingView extends ItemView {
             editorEl.handleBoutenCompletion();
             editorEl.onCompositionEnd(); // bracket de-indent for IME input
             editorEl.handleCursorAnchorInput(); // Manage U+200B placeholder after IME input
+            editorEl.handleBoutenPostCollapseInput(); // Move IME text out of post-collapse bouten span
             this.commitToCm6(); // IME confirmation is a commit point
         });
         this.registerDomEvent(document, 'selectionchange', () => {

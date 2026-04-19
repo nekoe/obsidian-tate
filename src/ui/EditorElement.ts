@@ -129,8 +129,21 @@ export class EditorElement {
     }
 
     // Called on beforeinput event (registered from view.ts).
+    // For non-IME insertText when cursor is inside a post-collapse bouten span
+    // (Chrome normalized it back in), intercepts the event and inserts the character
+    // after the span instead. Chrome's Selection API normalization is synchronous and
+    // cannot be countered with sel.addRange, so Range-level insertion is used instead.
     onBeforeInput(e: InputEvent): void {
         this.inlineEditor.onBeforeInput();
+        if (!e.isComposing && e.inputType === 'insertText' && e.data) {
+            const boutenSpan = this.inlineEditor.getCursorBoutenSpan();
+            if (boutenSpan) {
+                e.preventDefault();
+                const char = this.inputTransformer.applySpaceConversion(e.data);
+                this.inlineEditor.insertAfterBouten(boutenSpan, char);
+                return;
+            }
+        }
         this.inputTransformer.handleBeforeInput(e);
     }
 
@@ -142,6 +155,12 @@ export class EditorElement {
     // Called on compositionstart (registered from view.ts).
     onCompositionStart(): void {
         this.inputTransformer.handleCompositionStart();
+    }
+
+    // Called in compositionend (before commitToCm6) to move IME text that landed inside a
+    // post-collapse bouten span out to after the span. Returns true if the DOM was changed.
+    handleBoutenPostCollapseInput(): boolean {
+        return this.inlineEditor.handleBoutenPostCollapseInput();
     }
 
     // Called on compositionend (registered from view.ts), before commitToCm6.

@@ -514,6 +514,15 @@ var InlineEditor = class {
     // Direction of the most recent navigation key; used by handleSelectionChange to skip
     // the U+200B placeholder in the cursor anchor span in the correct direction.
     this.pendingAnchorSkip = null;
+    // After a bouten span collapses (atSpanEnd), Chrome normalizes the cursor from the
+    // adjacent anchor position back into the bouten span, triggering re-expansion.
+    // This field holds the restored bouten element so the next selectionchange can
+    // detect the normalization and redirect the cursor instead of re-expanding.
+    // Cleared on the next user action (navigation key, mouse click).
+    this.boutenJustCollapsed = null;
+    // Original text content of boutenJustCollapsed at collapse time, used by
+    // handleBoutenPostCollapseInput to extract IME text that went into the span.
+    this.boutenJustCollapsedText = null;
     // Per-element-type flags controlling whether cursor entry triggers inline expansion.
     this.expandRuby = true;
     this.expandTcy = true;
@@ -530,6 +539,8 @@ var InlineEditor = class {
     this.expandedElOriginalText = null;
     this.savedRange = null;
     this.inBurst = false;
+    this.boutenJustCollapsed = null;
+    this.boutenJustCollapsedText = null;
   }
   isExpanded() {
     return this.expandedEl !== null;
@@ -538,7 +549,7 @@ var InlineEditor = class {
   // Called on every cursor movement to expand or collapse ruby/tcy elements.
   // Returns true if collapse changed the content (signal for view.ts to call commitToCm6).
   handleSelectionChange() {
-    var _a, _b, _c;
+    var _a, _b, _c, _d;
     if (!this.isModifyingDom) {
       if (!this.expandedEl || !this.expandedEl.isConnected) {
         const actualSpan = this.el.querySelector("span.tate-editing");
@@ -605,6 +616,13 @@ var InlineEditor = class {
           } catch (e) {
           }
         }
+        if (nextSib == null ? void 0 : nextSib.isConnected) {
+          const prevOfNextSib = nextSib.previousSibling;
+          if (prevOfNextSib instanceof HTMLElement && prevOfNextSib.getAttribute("data-bouten")) {
+            this.boutenJustCollapsed = prevOfNextSib;
+            this.boutenJustCollapsedText = (_c = prevOfNextSib.textContent) != null ? _c : "";
+          }
+        }
         return contentChanged;
       }
       if (this.expandedEl) {
@@ -631,7 +649,7 @@ var InlineEditor = class {
       const savedSkip = this.pendingAnchorSkip;
       this.pendingAnchorSkip = null;
       if (anchorSpan) {
-        const text = (_c = anchorSpan.textContent) != null ? _c : "";
+        const text = (_d = anchorSpan.textContent) != null ? _d : "";
         if ((text === "\u200B" || text === "") && savedSkip !== null) {
           try {
             const r = document.createRange();
@@ -654,6 +672,11 @@ var InlineEditor = class {
       }
       const target = this.findExpandableAncestor(currentRange.startContainer);
       if (target) {
+        if (target === this.boutenJustCollapsed) {
+          this.redirectCursorOutOfCollapsedBouten(target, sel);
+          return contentChanged;
+        }
+        this.boutenJustCollapsed = null;
         if (target.tagName === "RUBY" || target.getAttribute("data-tcy") === "explicit" || target.getAttribute("data-bouten"))
           this.ensureCursorAnchorAfter(target);
         this.expandForEditing(target, currentRange);
@@ -834,9 +857,104 @@ var InlineEditor = class {
   onBeforeInput() {
     this.inBurst = true;
   }
+  // Returns the bouten span that should intercept the next insertText event due to Chrome's
+  // post-collapse cursor behavior, or null if not applicable.
+  // Covers three cursor positions that occur after collapse:
+  //   1. cursor normalized into bouten itself (Chrome moves it back synchronously)
+  //   2. cursor redirected into the adjacent anchor span (end-of-line)
+  //   3. cursor redirected to the start of the next text node (mid-line)
+  // Non-collapsed selections (e.g. Ctrl+A) are excluded to avoid false positives.
+  getCursorBoutenSpan() {
+    if (!this.boutenJustCollapsed || !this.expandBouten || this.expandedEl) return null;
+    if (!this.boutenJustCollapsed.isConnected) {
+      this.boutenJustCollapsed = null;
+      this.boutenJustCollapsedText = null;
+      return null;
+    }
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0 || !sel.getRangeAt(0).collapsed) return null;
+    const range = sel.getRangeAt(0);
+    const container = range.startContainer;
+    const bouten = this.boutenJustCollapsed;
+    if (this.findBoutenAncestor(container) === bouten) return bouten;
+    const nextSib = bouten.nextSibling;
+    if (nextSib) {
+      if (nextSib === container || nextSib instanceof HTMLElement && nextSib.contains(container)) {
+        return bouten;
+      }
+      if (container.nodeType === Node.ELEMENT_NODE && container.childNodes[range.startOffset] === nextSib) {
+        return bouten;
+      }
+    }
+    return null;
+  }
+  // Inserts chars into the DOM immediately after bouten without going through the Selection API.
+  // End-of-line (anchor span follows): creates a new text node between bouten and anchor.
+  // Mid-line (text node follows): prepends to that text node.
+  // Moves the cursor to just after the inserted text.
+  insertAfterBouten(bouten, chars) {
+    var _a;
+    const next = bouten.nextSibling;
+    let targetNode;
+    let targetOffset;
+    if (next instanceof HTMLElement && next.classList.contains("tate-cursor-anchor") && ((_a = next.firstChild) == null ? void 0 : _a.nodeType) === Node.TEXT_NODE) {
+      const textNode = document.createTextNode(chars);
+      bouten.parentNode.insertBefore(textNode, next);
+      targetNode = textNode;
+      targetOffset = chars.length;
+    } else if ((next == null ? void 0 : next.nodeType) === Node.TEXT_NODE) {
+      const textNode = next;
+      textNode.insertData(0, chars);
+      targetNode = textNode;
+      targetOffset = chars.length;
+    } else {
+      const textNode = document.createTextNode(chars);
+      bouten.parentNode.insertBefore(textNode, next != null ? next : null);
+      targetNode = textNode;
+      targetOffset = chars.length;
+    }
+    const sel = window.getSelection();
+    if (sel) {
+      const r = document.createRange();
+      r.setStart(targetNode, targetOffset);
+      r.collapse(true);
+      sel.removeAllRanges();
+      sel.addRange(r);
+    }
+    this.boutenJustCollapsed = null;
+    this.boutenJustCollapsedText = null;
+  }
+  // Called in compositionend (before commitToCm6) to move IME text that landed inside a
+  // post-collapse bouten span out to after the span. Returns true if the DOM was changed.
+  handleBoutenPostCollapseInput() {
+    var _a, _b;
+    if (!this.boutenJustCollapsed) return false;
+    const bouten = this.boutenJustCollapsed;
+    if (!bouten.isConnected) {
+      this.boutenJustCollapsed = null;
+      this.boutenJustCollapsedText = null;
+      return false;
+    }
+    const currentText = (_a = bouten.textContent) != null ? _a : "";
+    const originalText = (_b = this.boutenJustCollapsedText) != null ? _b : "";
+    if (currentText === originalText) return false;
+    if (!currentText.startsWith(originalText)) {
+      this.boutenJustCollapsed = null;
+      this.boutenJustCollapsedText = null;
+      return false;
+    }
+    const extraChars = currentText.slice(originalText.length);
+    bouten.textContent = originalText;
+    this.insertAfterBouten(bouten, extraChars);
+    this.boutenJustCollapsed = null;
+    this.boutenJustCollapsedText = null;
+    return true;
+  }
   // Resets the burst flag (call after commitToCm6() completes or on navigation in view.ts).
   resetBurst() {
     this.inBurst = false;
+    this.boutenJustCollapsed = null;
+    this.boutenJustCollapsedText = null;
   }
   // ---- Shared logic for selection wrap and annotation completion ----
   // Shared implementation for element-replacement wraps (tcy, bouten, etc.)
@@ -1062,6 +1180,14 @@ var InlineEditor = class {
     }
     return "";
   }
+  findBoutenAncestor(node) {
+    let el = node instanceof HTMLElement ? node : node.parentElement;
+    while (el && el !== this.el) {
+      if (el.getAttribute("data-bouten")) return el;
+      el = el.parentElement;
+    }
+    return null;
+  }
   findTcyAncestor(node) {
     let el = node;
     while (el && el !== this.el) {
@@ -1102,6 +1228,29 @@ var InlineEditor = class {
     return span;
   }
   // ---- Cursor anchor span management ----
+  // Redirects cursor to a stable position after the bouten span to prevent re-expansion.
+  // Called when Chrome normalizes the cursor from the adjacent anchor back into bouten.
+  // End-of-line: redirects to end of anchor text (after U+200B), which the anchor span handler
+  // intercepts on the next selectionchange so expansion does not fire.
+  // Mid-line: redirects to the start of the following text node, a true text-level stable position.
+  redirectCursorOutOfCollapsedBouten(bouten, sel) {
+    var _a;
+    const next = bouten.nextSibling;
+    const r = document.createRange();
+    if (next instanceof HTMLElement && next.classList.contains("tate-cursor-anchor") && ((_a = next.firstChild) == null ? void 0 : _a.nodeType) === Node.TEXT_NODE) {
+      const anchorText = next.firstChild;
+      r.setStart(anchorText, anchorText.length);
+    } else if ((next == null ? void 0 : next.nodeType) === Node.TEXT_NODE) {
+      r.setStart(next, 0);
+    } else if (next) {
+      r.setStartBefore(next);
+    } else {
+      r.setStartAfter(bouten);
+    }
+    r.collapse(true);
+    sel.removeAllRanges();
+    sel.addRange(r);
+  }
   // Inserts a cursor anchor after el if el is at end-of-line and has no anchor yet.
   // Must be called before expandForEditing so that the anchor survives as nextSibling
   // of the tate-editing span and is available when the user exits past the closing bracket.
@@ -1118,6 +1267,7 @@ var InlineEditor = class {
   // can skip the U+200B placeholder in the correct direction.
   // Call from the keydown handler before the browser moves the cursor.
   notifyNavigationKey(key) {
+    this.boutenJustCollapsed = null;
     if (key === "ArrowDown") this.pendingAnchorSkip = "forward";
     else if (key === "ArrowUp") this.pendingAnchorSkip = "backward";
     else this.pendingAnchorSkip = null;
@@ -1295,6 +1445,9 @@ var InputTransformer = class {
   }
   updateSettings(settings) {
     this.settings = { ...settings };
+  }
+  applySpaceConversion(char) {
+    return this.settings.convertHalfWidthSpace && char === " " ? "\u3000" : char;
   }
   // Called on compositionstart. Inserts one indent space at line start before IME composition begins
   // so that Japanese characters are typed after the indent, not before it.
@@ -1560,8 +1713,21 @@ var EditorElement = class {
     this.el.focus();
   }
   // Called on beforeinput event (registered from view.ts).
+  // For non-IME insertText when cursor is inside a post-collapse bouten span
+  // (Chrome normalized it back in), intercepts the event and inserts the character
+  // after the span instead. Chrome's Selection API normalization is synchronous and
+  // cannot be countered with sel.addRange, so Range-level insertion is used instead.
   onBeforeInput(e) {
     this.inlineEditor.onBeforeInput();
+    if (!e.isComposing && e.inputType === "insertText" && e.data) {
+      const boutenSpan = this.inlineEditor.getCursorBoutenSpan();
+      if (boutenSpan) {
+        e.preventDefault();
+        const char = this.inputTransformer.applySpaceConversion(e.data);
+        this.inlineEditor.insertAfterBouten(boutenSpan, char);
+        return;
+      }
+    }
     this.inputTransformer.handleBeforeInput(e);
   }
   // Called after Enter (insertParagraph input event) from view.ts.
@@ -1571,6 +1737,11 @@ var EditorElement = class {
   // Called on compositionstart (registered from view.ts).
   onCompositionStart() {
     this.inputTransformer.handleCompositionStart();
+  }
+  // Called in compositionend (before commitToCm6) to move IME text that landed inside a
+  // post-collapse bouten span out to after the span. Returns true if the DOM was changed.
+  handleBoutenPostCollapseInput() {
+    return this.inlineEditor.handleBoutenPostCollapseInput();
   }
   // Called on compositionend (registered from view.ts), before commitToCm6.
   onCompositionEnd() {
@@ -1769,6 +1940,7 @@ var VerticalWritingView = class extends import_obsidian4.ItemView {
       editorEl.handleBoutenCompletion();
       editorEl.onCompositionEnd();
       editorEl.handleCursorAnchorInput();
+      editorEl.handleBoutenPostCollapseInput();
       this.commitToCm6();
     });
     this.registerDomEvent(document, "selectionchange", () => {
