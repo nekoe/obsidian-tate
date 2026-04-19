@@ -77,6 +77,10 @@ cp main.js manifest.json styles.css {YOUR_VAULT_PATH}/.obsidian/plugins/tate/
 - The view opens as a tab and automatically loads the active file.
 - Edits are kept in sync with the underlying Obsidian file in both directions.
 
+## Known Limitations
+
+- **IME composition after emphasis marks:** When typing with an IME immediately after an inline-expanded emphasis mark (bouten) collapses, the composition text temporarily appears with sesame marks applied. The marks are removed when the IME input is confirmed. This is a browser limitation — Chrome's cursor normalization forces composition text into the span during composition, and it cannot be intercepted before the candidate is committed.
+
 ## Settings
 
 Configure under **Settings → TATE**:
