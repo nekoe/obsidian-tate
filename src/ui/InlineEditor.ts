@@ -1,5 +1,12 @@
 import { sanitizeHTMLToDom } from 'obsidian';
 import { KANJI_RE_STR, parseInlineToHtml, serializeNode } from './AozoraParser';
+import {
+    createRubyEl, createTcyEl, createBoutenEl, createCursorAnchor,
+    insertAnnotationElement, setCursorAfter,
+    findBoutenAncestor, findTcyAncestor, isInsideRuby, findCursorAnchorAncestor,
+    isInsideRtNode, findLastBaseTextInElement,
+    rawOffsetForExpand, getExtraCharsFromAnnotation,
+} from './domHelpers';
 
 export class InlineEditor {
     // The editing span currently expanded inline. null if not expanded.
@@ -143,7 +150,7 @@ export class InlineEditor {
 
             // If cursor is inside a U+200B-only anchor span and a navigation key was just pressed,
             // skip in the recorded direction to make the invisible placeholder transparent.
-            const anchorSpan = this.findCursorAnchorAncestor(currentRange.startContainer);
+            const anchorSpan = findCursorAnchorAncestor(currentRange.startContainer, this.el);
             const savedSkip = this.pendingAnchorSkip;
             this.pendingAnchorSkip = null;
             if (anchorSpan) {
@@ -206,7 +213,7 @@ export class InlineEditor {
         if (!sel || sel.rangeCount === 0) return false;
         const range = sel.getRangeAt(0);
         if (range.startContainer.nodeType !== Node.TEXT_NODE) return false;
-        if (this.isInsideRuby(range.startContainer)) return false;
+        if (isInsideRuby(range.startContainer, this.el)) return false;
 
         const textNode = range.startContainer as Text;
         const textBefore = textNode.textContent?.slice(0, range.startOffset) ?? '';
@@ -236,7 +243,7 @@ export class InlineEditor {
 
             this.isModifyingDom = true;
             try {
-                this.insertAnnotationElement(textNode, matchStart, range.startOffset, span);
+                insertAnnotationElement(textNode, matchStart, range.startOffset, span);
                 this.expandedEl = span;
                 this.expandedElOriginalText = rawText;
 
@@ -258,14 +265,14 @@ export class InlineEditor {
 
         this.isModifyingDom = true;
         try {
-            const rubyEl = this.createRubyEl(base, rt, explicit);
-            const inserted = this.insertAnnotationElement(
+            const rubyEl = createRubyEl(base, rt, explicit);
+            const inserted = insertAnnotationElement(
                 textNode, matchStart, range.startOffset, rubyEl,
             );
 
             // Place cursor just after the element
             // If the cursor is inside the ruby, selectionchange fires expandForEditing() immediately
-            this.setCursorAfter(inserted);
+            setCursorAfter(inserted);
             return true;
         } finally {
             this.isModifyingDom = false;
@@ -275,13 +282,13 @@ export class InlineEditor {
     // Converts a tate-chu-yoko notation just before the cursor to a <span class="tcy"> when ］ is typed.
     // Returns true if a conversion occurred.
     handleTcyCompletion(): boolean {
-        return this.handleAnnotationCompletion('］', /［＃「([^「」\n]+)」は縦中横］$/, c => this.createTcyEl(c));
+        return this.handleAnnotationCompletion('］', /［＃「([^「」\n]+)」は縦中横］$/, createTcyEl);
     }
 
     // Converts a bouten notation just before the cursor to a <span class="bouten"> when ］ is typed.
     // Returns true if a conversion occurred.
     handleBoutenCompletion(): boolean {
-        return this.handleAnnotationCompletion('］', /［＃「([^「」\n]+)」に傍点］$/, c => this.createBoutenEl(c));
+        return this.handleAnnotationCompletion('］', /［＃「([^「」\n]+)」に傍点］$/, createBoutenEl);
     }
 
     // ---- Selection wrap methods called from the command palette ----
@@ -337,12 +344,12 @@ export class InlineEditor {
 
     // Wraps the selected text in a tate-chu-yoko element
     wrapSelectionWithTcy(): boolean {
-        return this.wrapSelectionWith(c => this.createTcyEl(c));
+        return this.wrapSelectionWith(createTcyEl);
     }
 
     // Wraps the selected text in a bouten element
     wrapSelectionWithBouten(): boolean {
-        return this.wrapSelectionWith(c => this.createBoutenEl(c));
+        return this.wrapSelectionWith(createBoutenEl);
     }
 
     // Handles ArrowUp (→ move left) and ArrowDown (→ move right) when cursor is inside a tcy span.
@@ -355,7 +362,7 @@ export class InlineEditor {
         if (!sel || sel.rangeCount === 0) return false;
         const range = sel.getRangeAt(0);
 
-        const tcySpan = this.findTcyAncestor(range.startContainer);
+        const tcySpan = findTcyAncestor(range.startContainer, this.el);
         if (!tcySpan) return false;
 
         const moveLeft = key === 'ArrowUp';
@@ -420,7 +427,7 @@ export class InlineEditor {
         const container = range.startContainer;
 
         // Case 1: Chrome normalized cursor back into bouten span itself
-        if (this.findBoutenAncestor(container) === bouten) return bouten;
+        if (findBoutenAncestor(container, this.el) === bouten) return bouten;
 
         // Case 2 / 3: cursor is at the immediate next sibling of bouten
         // (anchor span for end-of-line, or text node for mid-line),
@@ -533,13 +540,13 @@ export class InlineEditor {
 
         this.isModifyingDom = true;
         try {
-            const inserted = this.insertAnnotationElement(
+            const inserted = insertAnnotationElement(
                 textNode, startOffset, endOffset, newEl,
             );
 
             // Place cursor just after the inserted element
             // If the cursor is inside the element, selectionchange would trigger expandForEditing()
-            this.setCursorAfter(inserted);
+            setCursorAfter(inserted);
         } finally {
             this.isModifyingDom = false;
         }
@@ -561,7 +568,7 @@ export class InlineEditor {
         if (!sel || sel.rangeCount === 0) return false;
         const range = sel.getRangeAt(0);
         if (range.startContainer.nodeType !== Node.TEXT_NODE) return false;
-        if (this.isInsideRuby(range.startContainer)) return false;
+        if (isInsideRuby(range.startContainer, this.el)) return false;
 
         const textNode = range.startContainer as Text;
         const textBefore = textNode.textContent?.slice(0, range.startOffset) ?? '';
@@ -577,13 +584,13 @@ export class InlineEditor {
         this.isModifyingDom = true;
         try {
             const newEl = createElement(content);
-            const inserted = this.insertAnnotationElement(
+            const inserted = insertAnnotationElement(
                 textNode, annotationStart - content.length, range.startOffset, newEl,
             );
 
             // Place cursor just after the element
             // If the cursor is inside the element, selectionchange fires expandForEditing() immediately
-            this.setCursorAfter(inserted);
+            setCursorAfter(inserted);
             return true;
         } finally {
             this.isModifyingDom = false;
@@ -607,7 +614,7 @@ export class InlineEditor {
     // Expands target into a raw-text editing span and sets the cursor to the corresponding position
     private expandForEditing(target: HTMLElement, range: Range): void {
         const rawText = serializeNode(target, this.el);
-        const cursorOffset = this.rawOffsetForExpand(
+        const cursorOffset = rawOffsetForExpand(
             target, range.startContainer, range.startOffset
         );
 
@@ -654,7 +661,7 @@ export class InlineEditor {
             } else {
                 // End-of-line: insert cursor anchor span with U+200B so Chrome has a real
                 // text position and does not normalize into <rt> or the annotation span.
-                const anchor = this.createCursorAnchor();
+                const anchor = createCursorAnchor();
                 parentEl.appendChild(anchor);
                 r.setStart(anchor.firstChild!, 0);
                 placedAnchor = anchor;
@@ -727,7 +734,7 @@ export class InlineEditor {
         let precedingTextNode: Text | null = null;
         let precedingChars = '';
         if (hasChanged) {
-            const extraChars = this.getExtraCharsFromAnnotation(rawText);
+            const extraChars = getExtraCharsFromAnnotation(rawText);
             if (extraChars.length > 0) {
                 const prev = this.expandedEl.previousSibling;
                 if (prev?.nodeType === Node.TEXT_NODE) {
@@ -764,30 +771,6 @@ export class InlineEditor {
         return hasChanged;
     }
 
-    // Converts the cursor position inside an element to a character offset in raw text
-    private rawOffsetForExpand(el: HTMLElement, node: Node, offset: number): number {
-        if (el.tagName === 'RUBY') {
-            const explicit = el.getAttribute('data-ruby-explicit') !== 'false';
-            const prefix = explicit ? 1 : 0; // '|'
-            const baseLen = Array.from(el.childNodes)
-                .filter(n => !(n instanceof HTMLElement && n.tagName === 'RT'))
-                .reduce((sum, n) => sum + (n.textContent?.length ?? 0), 0);
-            const rt = el.querySelector('rt');
-
-            if (rt && rt.contains(node)) {
-                // Cursor is inside <rt>: prefix + base + '《' + offset
-                return prefix + baseLen + 1 + offset;
-            } else {
-                // Cursor is inside the base text: prefix + offset
-                return prefix + offset;
-            }
-        } else {
-            // <span data-tcy="explicit"> / <span data-bouten>: raw = 'X［＃「X」は縦中横/に傍点］'
-            // The content part (X) is at the beginning
-            return offset;
-        }
-    }
-
     // Normalizes savedRange and returns { textNode, startOffset, endOffset }.
     private resolveSelectionRange(): { textNode: Text; startOffset: number; endOffset: number } | null {
         const r = this.savedRange;
@@ -817,106 +800,6 @@ export class InlineEditor {
         }
 
         return null;
-    }
-
-    // Direct DOM operation: replaces the range [matchStart, matchEnd) of the text node with element.
-    private insertAnnotationElement(
-        textNode: Text,
-        matchStart: number,
-        matchEnd: number,
-        element: HTMLElement,
-    ): HTMLElement {
-        const parentEl = textNode.parentNode as HTMLElement;
-
-        const precedingText = textNode.data.slice(0, matchStart);
-        const followingText = textNode.data.slice(matchEnd);
-        const next = textNode.nextSibling;
-        parentEl.removeChild(textNode);
-        if (precedingText) parentEl.insertBefore(document.createTextNode(precedingText), next);
-        parentEl.insertBefore(element, next);
-        if (followingText) parentEl.insertBefore(document.createTextNode(followingText), next);
-
-        return element;
-    }
-
-    // Moves the cursor to just after node.
-    private setCursorAfter(node: Node): void {
-        const sel = window.getSelection();
-        if (!sel) return;
-        const r = document.createRange();
-        r.setStartAfter(node);
-        r.collapse(true);
-        sel.removeAllRanges();
-        sel.addRange(r);
-    }
-
-    // After inline editing, on collapse: returns the characters to absorb from the preceding text node
-    // when the annotation 「」content is longer than the leading text inside the span.
-    private getExtraCharsFromAnnotation(rawText: string): string {
-        const patterns = [
-            /［＃「([^「」\n]+)」は縦中横］/,
-            /［＃「([^「」\n]+)」に傍点］/,
-        ];
-        for (const re of patterns) {
-            const m = rawText.match(re);
-            if (!m || m.index === undefined) continue;
-            const content = m[1];
-            const leadingText = rawText.slice(0, m.index);
-            if (!leadingText.endsWith(content) && content.length > leadingText.length) {
-                const extraCount = content.length - leadingText.length;
-                return content.slice(0, extraCount);
-            }
-        }
-        return '';
-    }
-
-    // Walks up the ancestor chain from node (inclusive if HTMLElement, parent-first if Text)
-    // and returns the first element satisfying pred, or null if none is found before the editor root.
-    private findAncestor(node: Node, pred: (el: HTMLElement) => boolean): HTMLElement | null {
-        let el: HTMLElement | null = node instanceof HTMLElement ? node : node.parentElement;
-        while (el && el !== this.el) {
-            if (pred(el)) return el;
-            el = el.parentElement;
-        }
-        return null;
-    }
-
-    private findBoutenAncestor(node: Node): HTMLElement | null {
-        return this.findAncestor(node, el => !!el.getAttribute('data-bouten'));
-    }
-
-    private findTcyAncestor(node: Node): HTMLElement | null {
-        return this.findAncestor(node, el => el.classList.contains('tcy'));
-    }
-
-    private isInsideRuby(node: Node): boolean {
-        return this.findAncestor(node, el => el.tagName === 'RUBY') !== null;
-    }
-
-    private createRubyEl(base: string, rt: string, explicit: boolean): HTMLElement {
-        const rubyEl = document.createElement('ruby');
-        rubyEl.setAttribute('data-ruby-explicit', String(explicit));
-        rubyEl.appendChild(document.createTextNode(base));
-        const rtEl = document.createElement('rt');
-        rtEl.textContent = rt;
-        rubyEl.appendChild(rtEl);
-        return rubyEl;
-    }
-
-    private createTcyEl(content: string): HTMLElement {
-        const span = document.createElement('span');
-        span.setAttribute('data-tcy', 'explicit');
-        span.className = 'tcy';
-        span.textContent = content;
-        return span;
-    }
-
-    private createBoutenEl(content: string): HTMLElement {
-        const span = document.createElement('span');
-        span.setAttribute('data-bouten', 'sesame');
-        span.className = 'bouten';
-        span.textContent = content;
-        return span;
     }
 
     // ---- Cursor anchor span management ----
@@ -962,7 +845,7 @@ export class InlineEditor {
             || (next instanceof HTMLElement && next.tagName === 'BR'
                 && next === next.parentElement?.lastChild);
         if (!isEndOfLine) return;
-        const anchor = this.createCursorAnchor();
+        const anchor = createCursorAnchor();
         el.parentNode!.insertBefore(anchor, next);
     }
 
@@ -977,20 +860,6 @@ export class InlineEditor {
         else this.pendingAnchorSkip = null;
     }
 
-
-    // Returns an ancestor <span class=tate-cursor-anchor> of node, or null if not found.
-    private findCursorAnchorAncestor(node: Node): HTMLElement | null {
-        return this.findAncestor(node, el => el.classList.contains('tate-cursor-anchor'));
-    }
-
-    // Creates a new cursor anchor span containing U+200B.
-    private createCursorAnchor(): HTMLSpanElement {
-        const anchor = document.createElement('span');
-        anchor.className = 'tate-cursor-anchor';
-        anchor.appendChild(document.createTextNode('\u200B'));
-        return anchor;
-    }
-
     // Returns the first non-<rt> text position after the anchor.
     // Checks siblings within the same paragraph first; falls back to the next paragraph.
     private findPositionAfterAnchor(anchor: HTMLElement): { node: Text; offset: number } | null {
@@ -998,12 +867,12 @@ export class InlineEditor {
         while (sibling) {
             if (sibling.nodeType === Node.TEXT_NODE) {
                 const t = sibling as Text;
-                if (!this.isInsideRtNode(t)) return { node: t, offset: 0 };
+                if (!isInsideRtNode(t, this.el)) return { node: t, offset: 0 };
             } else if (sibling.nodeType === Node.ELEMENT_NODE) {
                 const walker = document.createTreeWalker(sibling, NodeFilter.SHOW_TEXT);
                 let node = walker.nextNode() as Text | null;
                 while (node) {
-                    if (!this.isInsideRtNode(node)) return { node, offset: 0 };
+                    if (!isInsideRtNode(node, this.el)) return { node, offset: 0 };
                     node = walker.nextNode() as Text | null;
                 }
             }
@@ -1017,7 +886,7 @@ export class InlineEditor {
             const walker = document.createTreeWalker(next, NodeFilter.SHOW_TEXT);
             let node = walker.nextNode() as Text | null;
             while (node) {
-                if (!this.isInsideRtNode(node)) return { node, offset: 0 };
+                if (!isInsideRtNode(node, this.el)) return { node, offset: 0 };
                 node = walker.nextNode() as Text | null;
             }
             next = next.nextSibling;
@@ -1037,7 +906,7 @@ export class InlineEditor {
                 return { node: prev as Text, offset: (prev as Text).length };
             }
             if (prev.nodeType === Node.ELEMENT_NODE) {
-                const pos = this.findLastBaseTextInElement(prev as HTMLElement);
+                const pos = findLastBaseTextInElement(prev as HTMLElement, this.el);
                 if (pos) return pos;
             }
             prev = prev.previousSibling;
@@ -1051,7 +920,7 @@ export class InlineEditor {
             let lastText: Text | null = null;
             let node = walker.nextNode() as Text | null;
             while (node) {
-                if (!this.isInsideRtNode(node)) lastText = node;
+                if (!isInsideRtNode(node, this.el)) lastText = node;
                 node = walker.nextNode() as Text | null;
             }
             if (lastText) return { node: lastText, offset: lastText.length };
@@ -1060,31 +929,13 @@ export class InlineEditor {
         return null;
     }
 
-    // Finds the last non-<rt> text node inside el (used to land inside <ruby> on backward skip).
-    private findLastBaseTextInElement(el: HTMLElement): { node: Text; offset: number } | null {
-        const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
-        let lastText: Text | null = null;
-        let node = walker.nextNode() as Text | null;
-        while (node) {
-            if (!this.isInsideRtNode(node)) lastText = node;
-            node = walker.nextNode() as Text | null;
-        }
-        if (!lastText) return null;
-        return { node: lastText, offset: lastText.length };
-    }
-
-    // Returns true if node has an <rt> ancestor within the editor root.
-    private isInsideRtNode(node: Node): boolean {
-        return this.findAncestor(node.parentElement ?? node, el => el.tagName === 'RT') !== null;
-    }
-
     // Called after input/compositionend when cursor may be inside a tate-cursor-anchor span.
     // Removes U+200B once real characters have been typed, or re-inserts it when the span is empty.
     handleCursorAnchorInput(): void {
         const sel = window.getSelection();
         if (!sel || sel.rangeCount === 0) return;
         const range = sel.getRangeAt(0);
-        const anchor = this.findCursorAnchorAncestor(range.startContainer);
+        const anchor = findCursorAnchorAncestor(range.startContainer, this.el);
         if (!anchor) return;
 
         const text = anchor.textContent ?? '';
