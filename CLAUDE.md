@@ -32,16 +32,21 @@ src/
     ├── AozoraParser.ts        # Aozora notation ↔ DOM bidirectional conversion (parse + serialize)
     ├── AozoraParser.test.ts   # AozoraParser unit tests (vitest)
     ├── InlineEditor.ts        # Orchestrator: inline expand/collapse, delegates to sub-modules below
-    ├── InlineExpander.ts      # Expand/collapse core: expandForEditing, collapseEditing, findExpandableAncestor
-    ├── LiveConverter.ts       # Live notation conversion: ruby/tcy/bouten completion as user types
-    ├── BoutenGuard.ts         # Bouten post-collapse guard: prevents cursor re-entry into collapsed bouten spans
-    ├── BoutenGuard.test.ts    # BoutenGuard unit tests (vitest)
-    ├── CursorAnchorManager.ts # Cursor anchor span lifecycle and navigation skip logic
-    ├── domHelpers.ts          # Pure DOM helpers: element factories, ancestor traversal, pure computation
-    ├── domHelpers.test.ts     # domHelpers unit tests (vitest)
-    ├── InputTransformer.ts    # Space conversion, auto-indent, and bracket de-indent on beforeinput
-    ├── SegmentMap.ts          # Source offset ↔ view offset bidirectional mapping
-    └── SegmentMap.test.ts     # SegmentMap unit tests (vitest)
+    ├── InlineExpander.ts             # Expand/collapse core: expandForEditing, collapseEditing, findExpandableAncestor
+    ├── InlineExpander.test.ts        # InlineExpander unit tests (vitest)
+    ├── LiveConverter.ts              # Live notation conversion: ruby/tcy/bouten completion as user types
+    ├── BoutenGuard.ts                # Bouten post-collapse guard: prevents cursor re-entry into collapsed bouten spans
+    ├── BoutenGuard.test.ts           # BoutenGuard unit tests (vitest)
+    ├── CursorAnchorManager.ts        # Cursor anchor span lifecycle and navigation skip logic
+    ├── CursorAnchorManager.test.ts   # CursorAnchorManager unit tests (vitest)
+    ├── domHelpers.ts                 # Pure DOM helpers: element factories, ancestor traversal, pure computation
+    ├── domHelpers.test.ts            # domHelpers unit tests (vitest)
+    ├── InputTransformer.ts           # Space conversion, auto-indent, and bracket de-indent on beforeinput
+    ├── SegmentMap.ts                 # Source offset ↔ view offset bidirectional mapping
+    └── SegmentMap.test.ts            # SegmentMap unit tests (vitest)
+__mocks__/
+└── obsidian.ts                # sanitizeHTMLToDom stub for unit tests (aliased via vitest.config.ts)
+vitest.config.ts               # Vitest config: aliases obsidian to __mocks__/obsidian.ts
 styles.css                     # Vertical writing CSS (writing-mode: vertical-rl)
 manifest.json                  # Plugin metadata (id: obsidian-tate)
 ```
