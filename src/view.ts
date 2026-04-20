@@ -20,7 +20,7 @@ export class VerticalWritingView extends ItemView {
 
     getViewType(): string { return TATE_VIEW_TYPE; }
     getDisplayText(): string { return '縦書き'; }
-    getIcon(): string { return 'pilcrow'; }
+    getIcon(): string { return 'tally-3'; }
 
     async onOpen(): Promise<void> {
         const container = this.containerEl.children[1] as HTMLElement;

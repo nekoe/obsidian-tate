@@ -2089,7 +2089,7 @@ var VerticalWritingView = class extends import_obsidian4.ItemView {
     return "\u7E26\u66F8\u304D";
   }
   getIcon() {
-    return "pilcrow";
+    return "tally-3";
   }
   async onOpen() {
     const container = this.containerEl.children[1];
