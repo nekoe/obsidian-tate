@@ -624,6 +624,132 @@ function getExtraCharsFromAnnotation(rawText) {
   return "";
 }
 
+// src/ui/BoutenGuard.ts
+var BoutenGuard = class {
+  constructor(el) {
+    this.el = el;
+    this.boutenJustCollapsed = null;
+  }
+  clear() {
+    this.boutenJustCollapsed = null;
+  }
+  set(bouten, originalText) {
+    this.boutenJustCollapsed = { el: bouten, originalText };
+  }
+  get() {
+    return this.boutenJustCollapsed;
+  }
+  // Returns the bouten span that should intercept the next insertText event due to Chrome's
+  // post-collapse cursor behavior, or null if not applicable.
+  // Covers three cursor positions that occur after collapse:
+  //   1. cursor normalized into bouten itself (Chrome moves it back synchronously)
+  //   2. cursor redirected into the adjacent anchor span (end-of-line)
+  //   3. cursor redirected to the start of the next text node (mid-line)
+  // Non-collapsed selections (e.g. Ctrl+A) are excluded to avoid false positives.
+  getCursorBoutenSpan(expandBouten, expandedEl) {
+    if (!this.boutenJustCollapsed || !expandBouten || expandedEl) return null;
+    const bouten = this.boutenJustCollapsed.el;
+    if (!bouten.isConnected) {
+      this.boutenJustCollapsed = null;
+      return null;
+    }
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0 || !sel.getRangeAt(0).collapsed) return null;
+    const range = sel.getRangeAt(0);
+    const container = range.startContainer;
+    if (findBoutenAncestor(container, this.el) === bouten) return bouten;
+    const nextSib = bouten.nextSibling;
+    if (nextSib) {
+      if (nextSib === container || nextSib instanceof HTMLElement && nextSib.contains(container)) {
+        return bouten;
+      }
+      if (container.nodeType === Node.ELEMENT_NODE && container.childNodes[range.startOffset] === nextSib) {
+        return bouten;
+      }
+    }
+    return null;
+  }
+  // Inserts chars into the DOM immediately after bouten without going through the Selection API.
+  // End-of-line (anchor span follows): creates a new text node between bouten and anchor.
+  // Mid-line (text node follows): prepends to that text node.
+  // Moves the cursor to just after the inserted text.
+  insertAfterBouten(bouten, chars) {
+    var _a;
+    const next = bouten.nextSibling;
+    let targetNode;
+    let targetOffset;
+    if (next instanceof HTMLElement && next.classList.contains("tate-cursor-anchor") && ((_a = next.firstChild) == null ? void 0 : _a.nodeType) === Node.TEXT_NODE) {
+      const textNode = document.createTextNode(chars);
+      bouten.parentNode.insertBefore(textNode, next);
+      targetNode = textNode;
+      targetOffset = chars.length;
+    } else if ((next == null ? void 0 : next.nodeType) === Node.TEXT_NODE) {
+      const textNode = next;
+      textNode.insertData(0, chars);
+      targetNode = textNode;
+      targetOffset = chars.length;
+    } else {
+      const textNode = document.createTextNode(chars);
+      bouten.parentNode.insertBefore(textNode, next != null ? next : null);
+      targetNode = textNode;
+      targetOffset = chars.length;
+    }
+    const sel = window.getSelection();
+    if (sel) {
+      const r = document.createRange();
+      r.setStart(targetNode, targetOffset);
+      r.collapse(true);
+      sel.removeAllRanges();
+      sel.addRange(r);
+    }
+    this.boutenJustCollapsed = null;
+  }
+  // Called in compositionend (before commitToCm6) to move IME text that landed inside a
+  // post-collapse bouten span out to after the span. Returns true if the DOM was changed.
+  handleBoutenPostCollapseInput() {
+    var _a;
+    if (!this.boutenJustCollapsed) return false;
+    const { el: bouten, originalText } = this.boutenJustCollapsed;
+    if (!bouten.isConnected) {
+      this.boutenJustCollapsed = null;
+      return false;
+    }
+    const currentText = (_a = bouten.textContent) != null ? _a : "";
+    if (currentText === originalText) return false;
+    if (!currentText.startsWith(originalText)) {
+      this.boutenJustCollapsed = null;
+      return false;
+    }
+    const extraChars = currentText.slice(originalText.length);
+    bouten.textContent = originalText;
+    this.insertAfterBouten(bouten, extraChars);
+    return true;
+  }
+  // Redirects cursor to a stable position after the bouten span to prevent re-expansion.
+  // Called when Chrome normalizes the cursor from the adjacent anchor back into bouten.
+  // End-of-line: redirects to end of anchor text (after U+200B), which the anchor span handler
+  // intercepts on the next selectionchange so expansion does not fire.
+  // Mid-line: redirects to the start of the following text node, a true text-level stable position.
+  redirectCursorOutOfCollapsedBouten(bouten, sel) {
+    var _a;
+    const next = bouten.nextSibling;
+    const r = document.createRange();
+    if (next instanceof HTMLElement && next.classList.contains("tate-cursor-anchor") && ((_a = next.firstChild) == null ? void 0 : _a.nodeType) === Node.TEXT_NODE) {
+      const anchorText = next.firstChild;
+      r.setStart(anchorText, anchorText.length);
+    } else if ((next == null ? void 0 : next.nodeType) === Node.TEXT_NODE) {
+      r.setStart(next, 0);
+    } else if (next) {
+      r.setStartBefore(next);
+    } else {
+      r.setStartAfter(bouten);
+    }
+    r.collapse(true);
+    sel.removeAllRanges();
+    sel.addRange(r);
+  }
+};
+
 // src/ui/InlineEditor.ts
 var InlineEditor = class {
   constructor(el) {
@@ -642,17 +768,11 @@ var InlineEditor = class {
     // Direction of the most recent navigation key; used by handleSelectionChange to skip
     // the U+200B placeholder in the cursor anchor span in the correct direction.
     this.pendingAnchorSkip = null;
-    // After a bouten span collapses (atSpanEnd), Chrome normalizes the cursor from the
-    // adjacent anchor position back into the bouten span, triggering re-expansion.
-    // Stores the restored bouten element and its original text so the next selectionchange
-    // can detect the normalization and redirect instead of re-expanding, and so
-    // handleBoutenPostCollapseInput can extract IME text that landed inside the span.
-    // Cleared on the next user action (navigation key, mouse click, or character insertion).
-    this.boutenJustCollapsed = null;
     // Per-element-type flags controlling whether cursor entry triggers inline expansion.
     this.expandRuby = true;
     this.expandTcy = true;
     this.expandBouten = true;
+    this.boutenGuard = new BoutenGuard(el);
   }
   setExpandSettings(ruby, tcy, bouten) {
     this.expandRuby = ruby;
@@ -665,7 +785,7 @@ var InlineEditor = class {
     this.expandedElOriginalText = null;
     this.savedRange = null;
     this.inBurst = false;
-    this.boutenJustCollapsed = null;
+    this.boutenGuard.clear();
   }
   isExpanded() {
     return this.expandedEl !== null;
@@ -674,7 +794,7 @@ var InlineEditor = class {
   // Called on every cursor movement to expand or collapse ruby/tcy elements.
   // Returns true if collapse changed the content (signal for view.ts to call commitToCm6).
   handleSelectionChange() {
-    var _a, _b;
+    var _a;
     if (!this.isModifyingDom) {
       if (!this.expandedEl || !this.expandedEl.isConnected) {
         const actualSpan = this.el.querySelector("span.tate-editing");
@@ -763,11 +883,12 @@ var InlineEditor = class {
       }
       const target = this.findExpandableAncestor(currentRange.startContainer);
       if (target) {
-        if (target === ((_b = this.boutenJustCollapsed) == null ? void 0 : _b.el)) {
-          this.redirectCursorOutOfCollapsedBouten(target, sel);
+        const bjc = this.boutenGuard.get();
+        if (bjc && target === bjc.el) {
+          this.boutenGuard.redirectCursorOutOfCollapsedBouten(target, sel);
           return contentChanged;
         }
-        this.boutenJustCollapsed = null;
+        this.boutenGuard.clear();
         if (target.tagName === "RUBY" || target.getAttribute("data-tcy") === "explicit" || target.getAttribute("data-bouten"))
           this.ensureCursorAnchorAfter(target);
         this.expandForEditing(target, currentRange);
@@ -950,94 +1071,22 @@ var InlineEditor = class {
   }
   // Returns the bouten span that should intercept the next insertText event due to Chrome's
   // post-collapse cursor behavior, or null if not applicable.
-  // Covers three cursor positions that occur after collapse:
-  //   1. cursor normalized into bouten itself (Chrome moves it back synchronously)
-  //   2. cursor redirected into the adjacent anchor span (end-of-line)
-  //   3. cursor redirected to the start of the next text node (mid-line)
-  // Non-collapsed selections (e.g. Ctrl+A) are excluded to avoid false positives.
   getCursorBoutenSpan() {
-    if (!this.boutenJustCollapsed || !this.expandBouten || this.expandedEl) return null;
-    const bouten = this.boutenJustCollapsed.el;
-    if (!bouten.isConnected) {
-      this.boutenJustCollapsed = null;
-      return null;
-    }
-    const sel = window.getSelection();
-    if (!sel || sel.rangeCount === 0 || !sel.getRangeAt(0).collapsed) return null;
-    const range = sel.getRangeAt(0);
-    const container = range.startContainer;
-    if (findBoutenAncestor(container, this.el) === bouten) return bouten;
-    const nextSib = bouten.nextSibling;
-    if (nextSib) {
-      if (nextSib === container || nextSib instanceof HTMLElement && nextSib.contains(container)) {
-        return bouten;
-      }
-      if (container.nodeType === Node.ELEMENT_NODE && container.childNodes[range.startOffset] === nextSib) {
-        return bouten;
-      }
-    }
-    return null;
+    return this.boutenGuard.getCursorBoutenSpan(this.expandBouten, this.expandedEl);
   }
   // Inserts chars into the DOM immediately after bouten without going through the Selection API.
-  // End-of-line (anchor span follows): creates a new text node between bouten and anchor.
-  // Mid-line (text node follows): prepends to that text node.
-  // Moves the cursor to just after the inserted text.
   insertAfterBouten(bouten, chars) {
-    var _a;
-    const next = bouten.nextSibling;
-    let targetNode;
-    let targetOffset;
-    if (next instanceof HTMLElement && next.classList.contains("tate-cursor-anchor") && ((_a = next.firstChild) == null ? void 0 : _a.nodeType) === Node.TEXT_NODE) {
-      const textNode = document.createTextNode(chars);
-      bouten.parentNode.insertBefore(textNode, next);
-      targetNode = textNode;
-      targetOffset = chars.length;
-    } else if ((next == null ? void 0 : next.nodeType) === Node.TEXT_NODE) {
-      const textNode = next;
-      textNode.insertData(0, chars);
-      targetNode = textNode;
-      targetOffset = chars.length;
-    } else {
-      const textNode = document.createTextNode(chars);
-      bouten.parentNode.insertBefore(textNode, next != null ? next : null);
-      targetNode = textNode;
-      targetOffset = chars.length;
-    }
-    const sel = window.getSelection();
-    if (sel) {
-      const r = document.createRange();
-      r.setStart(targetNode, targetOffset);
-      r.collapse(true);
-      sel.removeAllRanges();
-      sel.addRange(r);
-    }
-    this.boutenJustCollapsed = null;
+    this.boutenGuard.insertAfterBouten(bouten, chars);
   }
   // Called in compositionend (before commitToCm6) to move IME text that landed inside a
   // post-collapse bouten span out to after the span. Returns true if the DOM was changed.
   handleBoutenPostCollapseInput() {
-    var _a;
-    if (!this.boutenJustCollapsed) return false;
-    const { el: bouten, originalText } = this.boutenJustCollapsed;
-    if (!bouten.isConnected) {
-      this.boutenJustCollapsed = null;
-      return false;
-    }
-    const currentText = (_a = bouten.textContent) != null ? _a : "";
-    if (currentText === originalText) return false;
-    if (!currentText.startsWith(originalText)) {
-      this.boutenJustCollapsed = null;
-      return false;
-    }
-    const extraChars = currentText.slice(originalText.length);
-    bouten.textContent = originalText;
-    this.insertAfterBouten(bouten, extraChars);
-    return true;
+    return this.boutenGuard.handleBoutenPostCollapseInput();
   }
   // Resets the burst flag (call after commitToCm6() completes or on navigation in view.ts).
   resetBurst() {
     this.inBurst = false;
-    this.boutenJustCollapsed = null;
+    this.boutenGuard.clear();
   }
   // ---- Shared logic for selection wrap and annotation completion ----
   // Shared implementation for element-replacement wraps (tcy, bouten, etc.)
@@ -1170,10 +1219,7 @@ var InlineEditor = class {
     if (nextSib == null ? void 0 : nextSib.isConnected) {
       const prevOfNextSib = nextSib.previousSibling;
       if (prevOfNextSib instanceof HTMLElement && prevOfNextSib.getAttribute("data-bouten")) {
-        this.boutenJustCollapsed = {
-          el: prevOfNextSib,
-          originalText: (_c = prevOfNextSib.textContent) != null ? _c : ""
-        };
+        this.boutenGuard.set(prevOfNextSib, (_c = prevOfNextSib.textContent) != null ? _c : "");
       }
     }
   }
@@ -1261,29 +1307,6 @@ var InlineEditor = class {
     return null;
   }
   // ---- Cursor anchor span management ----
-  // Redirects cursor to a stable position after the bouten span to prevent re-expansion.
-  // Called when Chrome normalizes the cursor from the adjacent anchor back into bouten.
-  // End-of-line: redirects to end of anchor text (after U+200B), which the anchor span handler
-  // intercepts on the next selectionchange so expansion does not fire.
-  // Mid-line: redirects to the start of the following text node, a true text-level stable position.
-  redirectCursorOutOfCollapsedBouten(bouten, sel) {
-    var _a;
-    const next = bouten.nextSibling;
-    const r = document.createRange();
-    if (next instanceof HTMLElement && next.classList.contains("tate-cursor-anchor") && ((_a = next.firstChild) == null ? void 0 : _a.nodeType) === Node.TEXT_NODE) {
-      const anchorText = next.firstChild;
-      r.setStart(anchorText, anchorText.length);
-    } else if ((next == null ? void 0 : next.nodeType) === Node.TEXT_NODE) {
-      r.setStart(next, 0);
-    } else if (next) {
-      r.setStartBefore(next);
-    } else {
-      r.setStartAfter(bouten);
-    }
-    r.collapse(true);
-    sel.removeAllRanges();
-    sel.addRange(r);
-  }
   // Inserts a cursor anchor after el if el is at end-of-line and has no anchor yet.
   // Must be called before expandForEditing so that the anchor survives as nextSibling
   // of the tate-editing span and is available when the user exits past the closing bracket.
@@ -1300,7 +1323,7 @@ var InlineEditor = class {
   // can skip the U+200B placeholder in the correct direction.
   // Call from the keydown handler before the browser moves the cursor.
   notifyNavigationKey(key) {
-    this.boutenJustCollapsed = null;
+    this.boutenGuard.clear();
     if (key === "ArrowDown") this.pendingAnchorSkip = "forward";
     else if (key === "ArrowUp") this.pendingAnchorSkip = "backward";
     else this.pendingAnchorSkip = null;
