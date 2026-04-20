@@ -69,6 +69,7 @@ See the design documents in `docs/design/` for details:
 - [DOM and UX Design Decisions (contenteditable div, events, paste)](docs/design/20260415_dom_and_ux.md)
 - [Input Transformer: Space Conversion, Auto-Indent, and Bracket De-indent](docs/design/20260417_input_transformer.md)
 - [Inline Editing: Cursor Anchor, TCY Navigation, and Bouten Post-Collapse Input](docs/design/20260419_inline_editing_cursor_anchor.md)
+- [Copy / Cut / Paste with Aozora Notation](docs/design/20260420_paste_aozora_parsing.md)
 
 ## Settings
 
