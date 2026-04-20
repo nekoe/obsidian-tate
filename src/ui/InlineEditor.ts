@@ -686,6 +686,24 @@ export class InlineEditor {
         }
     }
 
+    // Called when Enter is pressed while expanded. Collapses and places cursor after the element.
+    // Returns true if content changed (signal for view.ts to call commitToCm6).
+    collapseForEnter(): boolean {
+        if (!this.expandedEl) return false;
+        const nextSib = this.expandedEl.nextSibling;
+        const parentEl = this.expandedEl.parentElement;
+        this.isModifyingDom = true;
+        let changed = false;
+        try {
+            changed = this.collapseEditing();
+            const sel = window.getSelection();
+            if (parentEl && sel) this.placeCursorAfterCollapse(nextSib, parentEl, sel);
+        } finally {
+            this.isModifyingDom = false;
+        }
+        return changed;
+    }
+
     // Collapses the editing span, re-parses its content, and inserts the result at the original position (caller handles cursor).
     // Returns true if content changed (signal for view.ts to call commitToCm6).
     private collapseEditing(): boolean {

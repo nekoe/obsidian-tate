@@ -46,6 +46,10 @@ export class EditorElement {
         return this.inlineEditor.handleSelectionChange();
     }
 
+    collapseForEnter(): boolean {
+        return this.inlineEditor.collapseForEnter();
+    }
+
     // ---- Ruby / tcy live conversion (call from input/compositionend) ----
 
     handleRubyCompletion(): boolean {

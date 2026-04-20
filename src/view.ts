@@ -61,6 +61,12 @@ export class VerticalWritingView extends ItemView {
         });
         this.registerDomEvent(editorEl.el, 'beforeinput', (e: InputEvent) => {
             if (!this.guardCm6(e)) return; // Block input if CM6 is unavailable (read-only)
+            if (!e.isComposing && e.inputType === 'insertParagraph' && editorEl.isInlineExpanded()) {
+                e.preventDefault();
+                const contentChanged = editorEl.collapseForEnter();
+                if (contentChanged) this.commitToCm6();
+                return;
+            }
             editorEl.onBeforeInput(e);
         });
         this.registerDomEvent(editorEl.el, 'input', (e: Event) => {
