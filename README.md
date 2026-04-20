@@ -26,7 +26,7 @@ Select text, open the command palette (`Ctrl+P` / `Cmd+P`), and run one of:
 
 **Inline Editing**
 
-Moving the cursor into a ruby, tate-chu-yoko, or emphasis mark element expands it into raw Aozora text in place — the same behavior as Obsidian's Markdown editor. Moving the cursor out collapses it back to the rendered form.
+Moving the cursor into a ruby, tate-chu-yoko, or emphasis mark element expands it into raw Aozora text in place — the same behavior as Obsidian's Markdown editor. Moving the cursor out collapses it back to the rendered form. Pressing **Enter** while an element is expanded also collapses it immediately.
 
 ### Auto-indent and Typography Helpers
 
