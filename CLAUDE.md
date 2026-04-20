@@ -55,6 +55,7 @@ npm version major   # 1.x.y → (x+1).0.0
 - All source code comments (TypeScript and CSS) must be written in English.
 - Important design decisions and research findings must be saved as design documents under `docs/design/YYYYMMDD_{topic}.md`. Dates are embedded in filenames to preserve a history of decision-making over time.
 - When multiple design documents conflict, the document with the more recent date takes precedence.
+- When a design document conflicts with the source code, the source code takes precedence.
 - When designing, implementing, investigating bugs, or reviewing, consult the design documents in `docs/design/` as needed.
 - When using the Obsidian API, consult the official documentation as needed: [Obsidian Developer Documentation](https://docs.obsidian.md)
 - When using the CodeMirror 6 API, consult the official documentation as needed: [CodeMirror Documentation](https://codemirror.net/docs/)
