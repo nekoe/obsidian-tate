@@ -500,9 +500,6 @@ function serializeNode(node, rootEl) {
   }
 }
 
-// src/ui/InlineEditor.ts
-var import_obsidian2 = require("obsidian");
-
 // src/ui/domHelpers.ts
 function createRubyEl(base, rt, explicit) {
   const rubyEl = document.createElement("ruby");
@@ -1028,6 +1025,87 @@ var LiveConverter = class {
   }
 };
 
+// src/ui/InlineExpander.ts
+var import_obsidian2 = require("obsidian");
+var InlineExpander = class {
+  constructor(el) {
+    this.el = el;
+  }
+  // Returns the first ancestor of node that is an expandable annotation element,
+  // filtered by the caller-provided expand flags.
+  findExpandableAncestor(node, ruby, tcy, bouten) {
+    let el = node instanceof HTMLElement ? node : node.parentElement;
+    while (el && el !== this.el) {
+      if (el.tagName === "RUBY" && ruby) return el;
+      if (el.tagName === "SPAN" && el.getAttribute("data-tcy") === "explicit" && tcy) return el;
+      if (el.tagName === "SPAN" && el.getAttribute("data-bouten") && bouten) return el;
+      el = el.parentElement;
+    }
+    return null;
+  }
+  // Replaces target with a tate-editing span and positions the cursor.
+  // Returns the created span and its raw text (for InlineEditor to store as expandedEl/originalText).
+  // Caller is responsible for setting isModifyingDom and clearing inBurst.
+  expandForEditing(target, range) {
+    const rawText = serializeNode(target, this.el);
+    const cursorOffset = rawOffsetForExpand(target, range.startContainer, range.startOffset);
+    const span = document.createElement("span");
+    span.className = "tate-editing";
+    span.textContent = rawText;
+    target.parentNode.replaceChild(span, target);
+    const textNode = span.firstChild;
+    if (textNode) {
+      const sel = window.getSelection();
+      if (sel) {
+        const r = document.createRange();
+        r.setStart(textNode, Math.min(cursorOffset, textNode.length));
+        r.collapse(true);
+        sel.removeAllRanges();
+        sel.addRange(r);
+      }
+    }
+    return { el: span, originalText: rawText };
+  }
+  // Collapses the editing span, re-parses its content, and inserts the result in place.
+  // Cursor placement after collapse is handled by the caller.
+  // Returns hasChanged (whether content differs from when expansion started) and detached
+  // (true when the span was already removed from the DOM — caller must NOT clear inBurst).
+  collapseEditing(expandedEl, expandedElOriginalText) {
+    var _a, _b, _c;
+    if (!expandedEl.isConnected) return { hasChanged: false, detached: true };
+    let rawText = (_a = expandedEl.textContent) != null ? _a : "";
+    const hasChanged = expandedElOriginalText === null || rawText !== expandedElOriginalText;
+    const parent = expandedEl.parentNode;
+    const nextSibling = expandedEl.nextSibling;
+    let precedingTextNode = null;
+    let precedingChars = "";
+    if (hasChanged) {
+      const extraChars = getExtraCharsFromAnnotation(rawText);
+      if (extraChars.length > 0) {
+        const prev = expandedEl.previousSibling;
+        if ((prev == null ? void 0 : prev.nodeType) === Node.TEXT_NODE) {
+          const prevText = prev;
+          if (((_b = prevText.textContent) != null ? _b : "").endsWith(extraChars)) {
+            precedingTextNode = prevText;
+            precedingChars = extraChars;
+            rawText = precedingChars + rawText;
+          }
+        }
+      }
+    }
+    const html = parseInlineToHtml(rawText);
+    if (precedingTextNode == null ? void 0 : precedingTextNode.isConnected) {
+      precedingTextNode.textContent = ((_c = precedingTextNode.textContent) != null ? _c : "").slice(0, -precedingChars.length);
+    }
+    parent.removeChild(expandedEl);
+    const fragment = (0, import_obsidian2.sanitizeHTMLToDom)(html);
+    while (fragment.firstChild) {
+      parent.insertBefore(fragment.firstChild, nextSibling);
+    }
+    return { hasChanged, detached: false };
+  }
+};
+
 // src/ui/InlineEditor.ts
 var InlineEditor = class {
   constructor(el) {
@@ -1050,6 +1128,7 @@ var InlineEditor = class {
     this.boutenGuard = new BoutenGuard(el);
     this.anchorManager = new CursorAnchorManager(el);
     this.liveConverter = new LiveConverter(el);
+    this.expander = new InlineExpander(el);
   }
   setExpandSettings(ruby, tcy, bouten) {
     this.expandRuby = ruby;
@@ -1335,41 +1414,14 @@ var InlineEditor = class {
   // ---- Private helpers for inline expand/collapse ----
   // Walks up ancestors from node and returns the first expandable element (ruby or explicit tcy)
   findExpandableAncestor(node) {
-    let el = node instanceof HTMLElement ? node : node.parentElement;
-    while (el && el !== this.el) {
-      if (el.tagName === "RUBY" && this.expandRuby) return el;
-      if (el.tagName === "SPAN" && el.getAttribute("data-tcy") === "explicit" && this.expandTcy) return el;
-      if (el.tagName === "SPAN" && el.getAttribute("data-bouten") && this.expandBouten) return el;
-      el = el.parentElement;
-    }
-    return null;
+    return this.expander.findExpandableAncestor(node, this.expandRuby, this.expandTcy, this.expandBouten);
   }
   // Expands target into a raw-text editing span and sets the cursor to the corresponding position
   expandForEditing(target, range) {
-    const rawText = serializeNode(target, this.el);
-    const cursorOffset = rawOffsetForExpand(
-      target,
-      range.startContainer,
-      range.startOffset
-    );
-    const span = document.createElement("span");
-    span.className = "tate-editing";
-    span.textContent = rawText;
-    target.parentNode.replaceChild(span, target);
+    const { el: span, originalText } = this.expander.expandForEditing(target, range);
     this.expandedEl = span;
-    this.expandedElOriginalText = rawText;
+    this.expandedElOriginalText = originalText;
     this.inBurst = false;
-    const textNode = span.firstChild;
-    if (textNode) {
-      const sel = window.getSelection();
-      if (sel) {
-        const r = document.createRange();
-        r.setStart(textNode, Math.min(cursorOffset, textNode.length));
-        r.collapse(true);
-        sel.removeAllRanges();
-        sel.addRange(r);
-      }
-    }
   }
   // Places the cursor just after a collapsed annotation element.
   // Inserts a cursor-anchor span at end-of-line if needed, and records boutenJustCollapsed.
@@ -1403,45 +1455,14 @@ var InlineEditor = class {
   // Collapses the editing span, re-parses its content, and inserts the result at the original position (caller handles cursor).
   // Returns true if content changed (signal for view.ts to call commitToCm6).
   collapseEditing() {
-    var _a, _b, _c;
     if (!this.expandedEl) return false;
-    if (!this.expandedEl.isConnected) {
-      this.expandedEl = null;
-      this.expandedElOriginalText = null;
-      return false;
-    }
-    let rawText = (_a = this.expandedEl.textContent) != null ? _a : "";
-    const hasChanged = this.expandedElOriginalText === null || rawText !== this.expandedElOriginalText;
-    const parent = this.expandedEl.parentNode;
-    const nextSibling = this.expandedEl.nextSibling;
-    let precedingTextNode = null;
-    let precedingChars = "";
-    if (hasChanged) {
-      const extraChars = getExtraCharsFromAnnotation(rawText);
-      if (extraChars.length > 0) {
-        const prev = this.expandedEl.previousSibling;
-        if ((prev == null ? void 0 : prev.nodeType) === Node.TEXT_NODE) {
-          const prevText = prev;
-          if (((_b = prevText.textContent) != null ? _b : "").endsWith(extraChars)) {
-            precedingTextNode = prevText;
-            precedingChars = extraChars;
-            rawText = precedingChars + rawText;
-          }
-        }
-      }
-    }
-    const html = parseInlineToHtml(rawText);
-    if (precedingTextNode == null ? void 0 : precedingTextNode.isConnected) {
-      precedingTextNode.textContent = ((_c = precedingTextNode.textContent) != null ? _c : "").slice(0, -precedingChars.length);
-    }
-    parent.removeChild(this.expandedEl);
+    const { hasChanged, detached } = this.expander.collapseEditing(
+      this.expandedEl,
+      this.expandedElOriginalText
+    );
     this.expandedEl = null;
     this.expandedElOriginalText = null;
-    const fragment = (0, import_obsidian2.sanitizeHTMLToDom)(html);
-    while (fragment.firstChild) {
-      parent.insertBefore(fragment.firstChild, nextSibling);
-    }
-    this.inBurst = false;
+    if (!detached) this.inBurst = false;
     return hasChanged;
   }
   // Normalizes savedRange and returns { textNode, startOffset, endOffset }.
