@@ -1653,7 +1653,8 @@ var EditorElement = class {
   wrapSelectionWithBouten() {
     return this.inlineEditor.wrapSelectionWithBouten();
   }
-  // Paste handler: strips rich text and inserts plain text only
+  // Paste handler: parses Aozora notation in the pasted text and inserts rendered inline elements.
+  // Multi-line paste creates one <div> per line (matching Enter-key paragraph behavior).
   handlePaste(e) {
     var _a, _b;
     e.preventDefault();
@@ -1664,23 +1665,94 @@ var EditorElement = class {
     const range = sel.getRangeAt(0);
     range.deleteContents();
     const lines = text.split("\n");
-    for (let i = 0; i < lines.length; i++) {
-      if (i > 0) {
-        const br = document.createElement("br");
-        range.insertNode(br);
-        range.setStartAfter(br);
-        range.collapse(true);
-      }
-      if (lines[i]) {
-        const textNode = document.createTextNode(lines[i]);
-        range.insertNode(textNode);
-        range.setStartAfter(textNode);
+    if (lines.length === 1) {
+      this.insertParsedInline(range, lines[0]);
+    } else {
+      this.insertParsedParagraphs(range, lines);
+    }
+    this.inlineEditor.onBeforeInput();
+  }
+  // Inserts parsed Aozora inline elements at the range position (single-line paste).
+  insertParsedInline(range, line) {
+    const sel = window.getSelection();
+    if (line) {
+      const frag = (0, import_obsidian3.sanitizeHTMLToDom)(parseInlineToHtml(line));
+      for (const node of Array.from(frag.childNodes)) {
+        range.insertNode(node);
+        range.setStartAfter(node);
         range.collapse(true);
       }
     }
     sel.removeAllRanges();
     sel.addRange(range);
-    this.inlineEditor.onBeforeInput();
+  }
+  // Inserts parsed lines as separate paragraph <div>s (multi-line paste).
+  // Splits the current paragraph at the cursor: first line appends to it,
+  // each remaining line becomes a new <div>, and after-cursor content moves to the last.
+  insertParsedParagraphs(range, lines) {
+    const sel = window.getSelection();
+    const paragraphDiv = this.findParagraphDiv(range.startContainer);
+    if (!paragraphDiv || this.inlineEditor.isExpanded()) {
+      for (let i = 0; i < lines.length; i++) {
+        if (i > 0) {
+          const br = document.createElement("br");
+          range.insertNode(br);
+          range.setStartAfter(br);
+          range.collapse(true);
+        }
+        if (lines[i]) {
+          const frag = (0, import_obsidian3.sanitizeHTMLToDom)(parseInlineToHtml(lines[i]));
+          for (const node of Array.from(frag.childNodes)) {
+            range.insertNode(node);
+            range.setStartAfter(node);
+            range.collapse(true);
+          }
+        }
+      }
+      sel.removeAllRanges();
+      sel.addRange(range);
+      return;
+    }
+    const afterRange = document.createRange();
+    afterRange.selectNodeContents(paragraphDiv);
+    afterRange.setStart(range.startContainer, range.startOffset);
+    const afterFragment = afterRange.extractContents();
+    const firstFrag = (0, import_obsidian3.sanitizeHTMLToDom)(parseInlineToHtml(lines[0]));
+    paragraphDiv.append(...Array.from(firstFrag.childNodes));
+    let insertAfter = paragraphDiv;
+    let lastPastedNode = null;
+    for (let i = 1; i < lines.length; i++) {
+      const div = document.createElement("div");
+      const lineFrag = (0, import_obsidian3.sanitizeHTMLToDom)(parseInlineToHtml(lines[i]));
+      const lineNodes = Array.from(lineFrag.childNodes);
+      div.append(...lineNodes);
+      lastPastedNode = lineNodes.length > 0 ? lineNodes[lineNodes.length - 1] : null;
+      if (i === lines.length - 1) {
+        div.append(...Array.from(afterFragment.childNodes));
+      }
+      insertAfter.after(div);
+      insertAfter = div;
+    }
+    const newRange = document.createRange();
+    if (lastPastedNode) {
+      newRange.setStartAfter(lastPastedNode);
+    } else {
+      newRange.setStart(insertAfter, 0);
+    }
+    newRange.collapse(true);
+    sel.removeAllRanges();
+    sel.addRange(newRange);
+  }
+  // Returns the direct <div> child of this.el that contains node, or null.
+  findParagraphDiv(node) {
+    let current = node;
+    while (current && current !== this.el) {
+      if (current.parentElement === this.el && current instanceof HTMLElement && current.tagName === "DIV") {
+        return current;
+      }
+      current = current.parentElement;
+    }
+    return null;
   }
   applySettings(settings) {
     this.el.style.fontFamily = settings.fontFamily;

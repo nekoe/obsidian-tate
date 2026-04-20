@@ -1,7 +1,7 @@
 import { sanitizeHTMLToDom } from 'obsidian';
 import { DEFAULT_SETTINGS, TatePluginSettings } from '../settings';
 import { buildSegmentMap, srcToView } from './SegmentMap';
-import { parseToHtml, serializeNode } from './AozoraParser';
+import { parseInlineToHtml, parseToHtml, serializeNode } from './AozoraParser';
 import { InlineEditor } from './InlineEditor';
 import { InputTransformer } from './InputTransformer';
 
@@ -74,7 +74,8 @@ export class EditorElement {
         return this.inlineEditor.wrapSelectionWithBouten();
     }
 
-    // Paste handler: strips rich text and inserts plain text only
+    // Paste handler: parses Aozora notation in the pasted text and inserts rendered inline elements.
+    // Multi-line paste creates one <div> per line (matching Enter-key paragraph behavior).
     handlePaste(e: ClipboardEvent): void {
         e.preventDefault();
         const text = e.clipboardData?.getData('text/plain') ?? '';
@@ -86,28 +87,116 @@ export class EditorElement {
         const range = sel.getRangeAt(0);
         range.deleteContents();
 
-        // Split multi-line text into text nodes and <br> elements and insert them at the cursor
         const lines = text.split('\n');
-        for (let i = 0; i < lines.length; i++) {
-            if (i > 0) {
-                const br = document.createElement('br');
-                range.insertNode(br);
-                range.setStartAfter(br);
-                range.collapse(true);
-            }
-            if (lines[i]) {
-                const textNode = document.createTextNode(lines[i]);
-                range.insertNode(textNode);
-                range.setStartAfter(textNode);
+        if (lines.length === 1) {
+            this.insertParsedInline(range, lines[0]);
+        } else {
+            this.insertParsedParagraphs(range, lines);
+        }
+
+        // beforeinput does not fire for paste, so set inBurst manually
+        this.inlineEditor.onBeforeInput();
+        // view.ts calls commitToCm6() after paste
+    }
+
+    // Inserts parsed Aozora inline elements at the range position (single-line paste).
+    private insertParsedInline(range: Range, line: string): void {
+        const sel = window.getSelection()!;
+        if (line) {
+            const frag = sanitizeHTMLToDom(parseInlineToHtml(line));
+            for (const node of Array.from(frag.childNodes)) {
+                range.insertNode(node);
+                range.setStartAfter(node);
                 range.collapse(true);
             }
         }
         sel.removeAllRanges();
         sel.addRange(range);
+    }
 
-        // beforeinput does not fire for paste, so set inBurst manually
-        this.inlineEditor.onBeforeInput();
-        // view.ts calls commitToCm6() after paste
+    // Inserts parsed lines as separate paragraph <div>s (multi-line paste).
+    // Splits the current paragraph at the cursor: first line appends to it,
+    // each remaining line becomes a new <div>, and after-cursor content moves to the last.
+    private insertParsedParagraphs(range: Range, lines: string[]): void {
+        const sel = window.getSelection()!;
+        const paragraphDiv = this.findParagraphDiv(range.startContainer);
+
+        if (!paragraphDiv || this.inlineEditor.isExpanded()) {
+            // Fallback: insert as <br>-separated inline content.
+            // Also used when an inline element is expanded (splitting the div would corrupt the tate-editing span).
+            for (let i = 0; i < lines.length; i++) {
+                if (i > 0) {
+                    const br = document.createElement('br');
+                    range.insertNode(br);
+                    range.setStartAfter(br);
+                    range.collapse(true);
+                }
+                if (lines[i]) {
+                    const frag = sanitizeHTMLToDom(parseInlineToHtml(lines[i]));
+                    for (const node of Array.from(frag.childNodes)) {
+                        range.insertNode(node);
+                        range.setStartAfter(node);
+                        range.collapse(true);
+                    }
+                }
+            }
+            sel.removeAllRanges();
+            sel.addRange(range);
+            return;
+        }
+
+        // Extract content from cursor to end of paragraph
+        const afterRange = document.createRange();
+        afterRange.selectNodeContents(paragraphDiv);
+        afterRange.setStart(range.startContainer, range.startOffset);
+        const afterFragment = afterRange.extractContents();
+
+        // Append first line to the current (now truncated) paragraph
+        const firstFrag = sanitizeHTMLToDom(parseInlineToHtml(lines[0]));
+        paragraphDiv.append(...Array.from(firstFrag.childNodes));
+
+        // Create a new <div> for each remaining line
+        let insertAfter: Element = paragraphDiv;
+        let lastPastedNode: Node | null = null;
+
+        for (let i = 1; i < lines.length; i++) {
+            const div = document.createElement('div');
+            const lineFrag = sanitizeHTMLToDom(parseInlineToHtml(lines[i]));
+            const lineNodes = Array.from(lineFrag.childNodes);
+            div.append(...lineNodes);
+            lastPastedNode = lineNodes.length > 0 ? lineNodes[lineNodes.length - 1] : null;
+
+            if (i === lines.length - 1) {
+                // Last paragraph: attach the original after-cursor content
+                div.append(...Array.from(afterFragment.childNodes));
+            }
+
+            insertAfter.after(div);
+            insertAfter = div;
+        }
+
+        // Position cursor at end of pasted content (before the after-cursor content)
+        const newRange = document.createRange();
+        if (lastPastedNode) {
+            newRange.setStartAfter(lastPastedNode);
+        } else {
+            newRange.setStart(insertAfter, 0);
+        }
+        newRange.collapse(true);
+        sel.removeAllRanges();
+        sel.addRange(newRange);
+    }
+
+    // Returns the direct <div> child of this.el that contains node, or null.
+    private findParagraphDiv(node: Node): HTMLElement | null {
+        let current: Node | null = node;
+        while (current && current !== this.el) {
+            if (current.parentElement === this.el && current instanceof HTMLElement && current.tagName === 'DIV') {
+                return current;
+            }
+            current = current.parentElement;
+        }
+        return null;
     }
 
     applySettings(settings: TatePluginSettings): void {
