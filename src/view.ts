@@ -46,6 +46,14 @@ export class VerticalWritingView extends ItemView {
 
         // Registered via registerDomEvent so listeners are automatically removed on onClose
 
+        this.registerDomEvent(editorEl.el, 'copy', (e: ClipboardEvent) => {
+            editorEl.handleCopy(e); // No guardCm6: copy is read-only
+        });
+        this.registerDomEvent(editorEl.el, 'cut', (e: ClipboardEvent) => {
+            if (!this.guardCm6(e)) return; // Block cut if CM6 is unavailable
+            editorEl.handleCut(e);
+            this.commitToCm6(); // Cut is an immediate commit point
+        });
         this.registerDomEvent(editorEl.el, 'paste', (e: ClipboardEvent) => {
             if (!this.guardCm6(e)) return; // Block if CM6 is unavailable
             editorEl.handlePaste(e);

@@ -74,6 +74,36 @@ export class EditorElement {
         return this.inlineEditor.wrapSelectionWithBouten();
     }
 
+    // Copy handler: serializes the selected DOM to Aozora notation and writes it to text/plain.
+    // This ensures ruby/tcy/bouten are preserved when copying within the editor.
+    handleCopy(e: ClipboardEvent): void {
+        this.serializeSelectionToClipboard(e);
+    }
+
+    // Cut handler: same as copy, then deletes the selected content.
+    handleCut(e: ClipboardEvent): void {
+        const range = this.serializeSelectionToClipboard(e);
+        if (!range) return;
+        range.deleteContents();
+        // view.ts calls commitToCm6() after cut
+    }
+
+    // Serializes the current selection to Aozora notation and writes it to text/plain.
+    // Returns the range on success (for cut to delete), or null if nothing to serialize.
+    private serializeSelectionToClipboard(e: ClipboardEvent): Range | null {
+        const sel = window.getSelection();
+        if (!sel || sel.rangeCount === 0) return null;
+        const range = sel.getRangeAt(0);
+        if (range.collapsed || !this.el.contains(range.commonAncestorContainer)) return null;
+        e.preventDefault();
+        const fragment = range.cloneContents();
+        const text = Array.from(fragment.childNodes)
+            .map(n => serializeNode(n, this.el))
+            .join('');
+        e.clipboardData?.setData('text/plain', text);
+        return range;
+    }
+
     // Paste handler: parses Aozora notation in the pasted text and inserts rendered inline elements.
     // Multi-line paste creates one <div> per line (matching Enter-key paragraph behavior).
     handlePaste(e: ClipboardEvent): void {
