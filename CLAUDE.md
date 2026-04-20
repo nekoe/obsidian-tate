@@ -8,6 +8,8 @@ Vertical writing mode plugin for Obsidian.
 npm install       # First time only
 npm run dev       # Development mode (watch and rebuild on file changes)
 npm run build     # Production build (TypeScript type check + esbuild)
+npm test          # Run all unit tests (vitest)
+npm run test:watch  # Run tests in watch mode
 ```
 
 Build output: `main.js` (project root).
@@ -66,6 +68,7 @@ npm version major   # 1.x.y → (x+1).0.0
 
 ## Development Guide
 
+- Always run `npm test` before committing. All tests must pass.
 - All source code comments (TypeScript and CSS) must be written in English.
 - Important design decisions and research findings must be saved as design documents under `docs/design/YYYYMMDD_{topic}.md`. Dates are embedded in filenames to preserve a history of decision-making over time.
 - When multiple design documents conflict, the document with the more recent date takes precedence.
