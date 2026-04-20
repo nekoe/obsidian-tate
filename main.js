@@ -940,6 +940,94 @@ var CursorAnchorManager = class {
   }
 };
 
+// src/ui/LiveConverter.ts
+var LiveConverter = class {
+  constructor(el) {
+    this.el = el;
+  }
+  // Converts a ruby notation just before the cursor to a <ruby> element when 》 is typed.
+  // If rt is empty, creates a tate-editing span and returns it via result.newExpanded.
+  // Caller must check expandedEl and isModifyingDom before calling, and apply result.newExpanded.
+  handleRubyCompletion() {
+    var _a, _b;
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return { converted: false };
+    const range = sel.getRangeAt(0);
+    if (range.startContainer.nodeType !== Node.TEXT_NODE) return { converted: false };
+    if (isInsideRuby(range.startContainer, this.el)) return { converted: false };
+    const textNode = range.startContainer;
+    const textBefore = (_b = (_a = textNode.textContent) == null ? void 0 : _a.slice(0, range.startOffset)) != null ? _b : "";
+    if (!textBefore.endsWith("\u300B")) return { converted: false };
+    let match = textBefore.match(/[|｜]([^|｜《》\n]+)《([^《》\n]*)》$/);
+    let explicit = true;
+    if (!match) {
+      match = textBefore.match(new RegExp(`(${KANJI_RE_STR2})\u300A([^\u300A\u300B\\n]*)\u300B$`, "u"));
+      explicit = false;
+    }
+    if (!match) return { converted: false };
+    const base = match[1];
+    const rt = match[2];
+    const matchStart = range.startOffset - match[0].length;
+    if (rt === "") {
+      const rawText = explicit ? `\uFF5C${base}\u300A\u300B` : `${base}\u300A\u300B`;
+      const span = document.createElement("span");
+      span.className = "tate-editing";
+      span.textContent = rawText;
+      insertAnnotationElement(textNode, matchStart, range.startOffset, span);
+      const spanText = span.firstChild;
+      if (spanText) {
+        const r = document.createRange();
+        r.setStart(spanText, rawText.length - 1);
+        r.collapse(true);
+        const s = window.getSelection();
+        s.removeAllRanges();
+        s.addRange(r);
+      }
+      return { converted: true, newExpanded: { el: span, originalText: rawText } };
+    }
+    const rubyEl = createRubyEl(base, rt, explicit);
+    const inserted = insertAnnotationElement(textNode, matchStart, range.startOffset, rubyEl);
+    setCursorAfter(inserted);
+    return { converted: true };
+  }
+  // Converts a tate-chu-yoko notation just before the cursor to a <span class="tcy"> when ］ is typed.
+  // Returns true if a conversion occurred.
+  handleTcyCompletion() {
+    return this.handleAnnotationCompletion("\uFF3D", /［＃「([^「」\n]+)」は縦中横］$/, createTcyEl);
+  }
+  // Converts a bouten notation just before the cursor to a <span class="bouten"> when ］ is typed.
+  // Returns true if a conversion occurred.
+  handleBoutenCompletion() {
+    return this.handleAnnotationCompletion("\uFF3D", /［＃「([^「」\n]+)」に傍点］$/, createBoutenEl);
+  }
+  // Shared implementation for live conversions that complete on a terminal character (tcy, bouten).
+  handleAnnotationCompletion(endChar, re, createElement) {
+    var _a, _b;
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return false;
+    const range = sel.getRangeAt(0);
+    if (range.startContainer.nodeType !== Node.TEXT_NODE) return false;
+    if (isInsideRuby(range.startContainer, this.el)) return false;
+    const textNode = range.startContainer;
+    const textBefore = (_b = (_a = textNode.textContent) == null ? void 0 : _a.slice(0, range.startOffset)) != null ? _b : "";
+    if (!textBefore.endsWith(endChar)) return false;
+    const annotationMatch = textBefore.match(re);
+    if (!annotationMatch) return false;
+    const content = annotationMatch[1];
+    const annotationStart = range.startOffset - annotationMatch[0].length;
+    if (!textBefore.slice(0, annotationStart).endsWith(content)) return false;
+    const newEl = createElement(content);
+    const inserted = insertAnnotationElement(
+      textNode,
+      annotationStart - content.length,
+      range.startOffset,
+      newEl
+    );
+    setCursorAfter(inserted);
+    return true;
+  }
+};
+
 // src/ui/InlineEditor.ts
 var InlineEditor = class {
   constructor(el) {
@@ -961,6 +1049,7 @@ var InlineEditor = class {
     this.expandBouten = true;
     this.boutenGuard = new BoutenGuard(el);
     this.anchorManager = new CursorAnchorManager(el);
+    this.liveConverter = new LiveConverter(el);
   }
   setExpandSettings(ruby, tcy, bouten) {
     this.expandRuby = ruby;
@@ -1067,62 +1156,15 @@ var InlineEditor = class {
   // Converts a ruby notation just before the cursor to a <ruby> element when 》 is typed.
   // Returns true if a conversion occurred (signal for view.ts to call commitToCm6).
   handleRubyCompletion() {
-    var _a, _b;
-    if (this.expandedEl) return false;
-    if (this.isModifyingDom) return false;
-    const sel = window.getSelection();
-    if (!sel || sel.rangeCount === 0) return false;
-    const range = sel.getRangeAt(0);
-    if (range.startContainer.nodeType !== Node.TEXT_NODE) return false;
-    if (isInsideRuby(range.startContainer, this.el)) return false;
-    const textNode = range.startContainer;
-    const textBefore = (_b = (_a = textNode.textContent) == null ? void 0 : _a.slice(0, range.startOffset)) != null ? _b : "";
-    if (!textBefore.endsWith("\u300B")) return false;
-    let match = textBefore.match(/[|｜]([^|｜《》\n]+)《([^《》\n]*)》$/);
-    let explicit = true;
-    if (!match) {
-      match = textBefore.match(new RegExp(`(${KANJI_RE_STR2})\u300A([^\u300A\u300B\\n]*)\u300B$`, "u"));
-      explicit = false;
-    }
-    if (!match) return false;
-    const base = match[1];
-    const rt = match[2];
-    const matchStart = range.startOffset - match[0].length;
-    if (rt === "") {
-      const rawText = explicit ? `\uFF5C${base}\u300A\u300B` : `${base}\u300A\u300B`;
-      const span = document.createElement("span");
-      span.className = "tate-editing";
-      span.textContent = rawText;
-      this.isModifyingDom = true;
-      try {
-        insertAnnotationElement(textNode, matchStart, range.startOffset, span);
-        this.expandedEl = span;
-        this.expandedElOriginalText = rawText;
-        const spanText = span.firstChild;
-        if (spanText) {
-          const r = document.createRange();
-          r.setStart(spanText, rawText.length - 1);
-          r.collapse(true);
-          const s = window.getSelection();
-          s.removeAllRanges();
-          s.addRange(r);
-        }
-      } finally {
-        this.isModifyingDom = false;
-      }
-      return true;
-    }
+    if (this.expandedEl || this.isModifyingDom) return false;
     this.isModifyingDom = true;
     try {
-      const rubyEl = createRubyEl(base, rt, explicit);
-      const inserted = insertAnnotationElement(
-        textNode,
-        matchStart,
-        range.startOffset,
-        rubyEl
-      );
-      setCursorAfter(inserted);
-      return true;
+      const r = this.liveConverter.handleRubyCompletion();
+      if (r.converted && r.newExpanded) {
+        this.expandedEl = r.newExpanded.el;
+        this.expandedElOriginalText = r.newExpanded.originalText;
+      }
+      return r.converted;
     } finally {
       this.isModifyingDom = false;
     }
@@ -1130,12 +1172,24 @@ var InlineEditor = class {
   // Converts a tate-chu-yoko notation just before the cursor to a <span class="tcy"> when ］ is typed.
   // Returns true if a conversion occurred.
   handleTcyCompletion() {
-    return this.handleAnnotationCompletion("\uFF3D", /［＃「([^「」\n]+)」は縦中横］$/, createTcyEl);
+    if (this.expandedEl || this.isModifyingDom) return false;
+    this.isModifyingDom = true;
+    try {
+      return this.liveConverter.handleTcyCompletion();
+    } finally {
+      this.isModifyingDom = false;
+    }
   }
   // Converts a bouten notation just before the cursor to a <span class="bouten"> when ］ is typed.
   // Returns true if a conversion occurred.
   handleBoutenCompletion() {
-    return this.handleAnnotationCompletion("\uFF3D", /［＃「([^「」\n]+)」に傍点］$/, createBoutenEl);
+    if (this.expandedEl || this.isModifyingDom) return false;
+    this.isModifyingDom = true;
+    try {
+      return this.liveConverter.handleBoutenCompletion();
+    } finally {
+      this.isModifyingDom = false;
+    }
   }
   // ---- Selection wrap methods called from the command palette ----
   // Wraps the selected text in a tate-editing span and places the cursor between 《 and 》
@@ -1253,7 +1307,7 @@ var InlineEditor = class {
     this.inBurst = false;
     this.boutenGuard.clear();
   }
-  // ---- Shared logic for selection wrap and annotation completion ----
+  // ---- Shared logic for selection wrap ----
   // Shared implementation for element-replacement wraps (tcy, bouten, etc.)
   wrapSelectionWith(createElement) {
     if (this.expandedEl) return false;
@@ -1277,40 +1331,6 @@ var InlineEditor = class {
     }
     this.savedRange = null;
     return true;
-  }
-  // Shared implementation for live conversions that complete on a terminal character (tcy, bouten, etc.).
-  // Returns true if a conversion occurred.
-  handleAnnotationCompletion(endChar, re, createElement) {
-    var _a, _b;
-    if (this.expandedEl) return false;
-    if (this.isModifyingDom) return false;
-    const sel = window.getSelection();
-    if (!sel || sel.rangeCount === 0) return false;
-    const range = sel.getRangeAt(0);
-    if (range.startContainer.nodeType !== Node.TEXT_NODE) return false;
-    if (isInsideRuby(range.startContainer, this.el)) return false;
-    const textNode = range.startContainer;
-    const textBefore = (_b = (_a = textNode.textContent) == null ? void 0 : _a.slice(0, range.startOffset)) != null ? _b : "";
-    if (!textBefore.endsWith(endChar)) return false;
-    const annotationMatch = textBefore.match(re);
-    if (!annotationMatch) return false;
-    const content = annotationMatch[1];
-    const annotationStart = range.startOffset - annotationMatch[0].length;
-    if (!textBefore.slice(0, annotationStart).endsWith(content)) return false;
-    this.isModifyingDom = true;
-    try {
-      const newEl = createElement(content);
-      const inserted = insertAnnotationElement(
-        textNode,
-        annotationStart - content.length,
-        range.startOffset,
-        newEl
-      );
-      setCursorAfter(inserted);
-      return true;
-    } finally {
-      this.isModifyingDom = false;
-    }
   }
   // ---- Private helpers for inline expand/collapse ----
   // Walks up ancestors from node and returns the first expandable element (ruby or explicit tcy)

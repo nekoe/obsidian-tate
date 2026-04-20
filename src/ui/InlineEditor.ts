@@ -1,13 +1,14 @@
 import { sanitizeHTMLToDom } from 'obsidian';
-import { KANJI_RE_STR, parseInlineToHtml, serializeNode } from './AozoraParser';
+import { parseInlineToHtml, serializeNode } from './AozoraParser';
 import {
-    createRubyEl, createTcyEl, createBoutenEl,
+    createTcyEl, createBoutenEl,
     insertAnnotationElement, setCursorAfter,
-    findTcyAncestor, isInsideRuby,
+    findTcyAncestor,
     rawOffsetForExpand, getExtraCharsFromAnnotation,
 } from './domHelpers';
 import { BoutenGuard } from './BoutenGuard';
 import { CursorAnchorManager } from './CursorAnchorManager';
+import { LiveConverter } from './LiveConverter';
 
 export class InlineEditor {
     // The editing span currently expanded inline. null if not expanded.
@@ -30,10 +31,12 @@ export class InlineEditor {
     private expandBouten = true;
     private readonly boutenGuard: BoutenGuard;
     private readonly anchorManager: CursorAnchorManager;
+    private readonly liveConverter: LiveConverter;
 
     constructor(private readonly el: HTMLDivElement) {
         this.boutenGuard = new BoutenGuard(el);
         this.anchorManager = new CursorAnchorManager(el);
+        this.liveConverter = new LiveConverter(el);
     }
 
     setExpandSettings(ruby: boolean, tcy: boolean, bouten: boolean): void {
@@ -181,75 +184,15 @@ export class InlineEditor {
     // Converts a ruby notation just before the cursor to a <ruby> element when 》 is typed.
     // Returns true if a conversion occurred (signal for view.ts to call commitToCm6).
     handleRubyCompletion(): boolean {
-        // Skip if a span is already expanded or if a DOM modification is in progress
-        if (this.expandedEl) return false;
-        if (this.isModifyingDom) return false;
-
-        const sel = window.getSelection();
-        if (!sel || sel.rangeCount === 0) return false;
-        const range = sel.getRangeAt(0);
-        if (range.startContainer.nodeType !== Node.TEXT_NODE) return false;
-        if (isInsideRuby(range.startContainer, this.el)) return false;
-
-        const textNode = range.startContainer as Text;
-        const textBefore = textNode.textContent?.slice(0, range.startOffset) ?? '';
-        if (!textBefore.endsWith('》')) return false;
-
-        // Explicit form takes priority: ｜base《rt》 or |base《rt》
-        let match = textBefore.match(/[|｜]([^|｜《》\n]+)《([^《》\n]*)》$/);
-        let explicit = true;
-        if (!match) {
-            // Implicit form: preceding run of kanji followed by 《rt》
-            match = textBefore.match(new RegExp(`(${KANJI_RE_STR})《([^《》\\n]*)》$`, 'u'));
-            explicit = false;
-        }
-        if (!match) return false;
-
-        const base = match[1];
-        const rt = match[2];
-        const matchStart = range.startOffset - match[0].length;
-
-        // If rt is empty (user typed 《》): expand to a tate-editing span and place cursor between 《 and 》.
-        // When the user types the ruby text and moves the cursor away, collapseEditing() collapses it to a <ruby>.
-        if (rt === '') {
-            const rawText = explicit ? `｜${base}《》` : `${base}《》`;
-            const span = document.createElement('span');
-            span.className = 'tate-editing';
-            span.textContent = rawText;
-
-            this.isModifyingDom = true;
-            try {
-                insertAnnotationElement(textNode, matchStart, range.startOffset, span);
-                this.expandedEl = span;
-                this.expandedElOriginalText = rawText;
-
-                // Place cursor between 《 and 》 (rawText.length - 1 = just before 》)
-                const spanText = span.firstChild as Text | null;
-                if (spanText) {
-                    const r = document.createRange();
-                    r.setStart(spanText, rawText.length - 1);
-                    r.collapse(true);
-                    const s = window.getSelection()!;
-                    s.removeAllRanges();
-                    s.addRange(r);
-                }
-            } finally {
-                this.isModifyingDom = false;
-            }
-            return true;
-        }
-
+        if (this.expandedEl || this.isModifyingDom) return false;
         this.isModifyingDom = true;
         try {
-            const rubyEl = createRubyEl(base, rt, explicit);
-            const inserted = insertAnnotationElement(
-                textNode, matchStart, range.startOffset, rubyEl,
-            );
-
-            // Place cursor just after the element
-            // If the cursor is inside the ruby, selectionchange fires expandForEditing() immediately
-            setCursorAfter(inserted);
-            return true;
+            const r = this.liveConverter.handleRubyCompletion();
+            if (r.converted && r.newExpanded) {
+                this.expandedEl = r.newExpanded.el;
+                this.expandedElOriginalText = r.newExpanded.originalText;
+            }
+            return r.converted;
         } finally {
             this.isModifyingDom = false;
         }
@@ -258,13 +201,25 @@ export class InlineEditor {
     // Converts a tate-chu-yoko notation just before the cursor to a <span class="tcy"> when ］ is typed.
     // Returns true if a conversion occurred.
     handleTcyCompletion(): boolean {
-        return this.handleAnnotationCompletion('］', /［＃「([^「」\n]+)」は縦中横］$/, createTcyEl);
+        if (this.expandedEl || this.isModifyingDom) return false;
+        this.isModifyingDom = true;
+        try {
+            return this.liveConverter.handleTcyCompletion();
+        } finally {
+            this.isModifyingDom = false;
+        }
     }
 
     // Converts a bouten notation just before the cursor to a <span class="bouten"> when ］ is typed.
     // Returns true if a conversion occurred.
     handleBoutenCompletion(): boolean {
-        return this.handleAnnotationCompletion('］', /［＃「([^「」\n]+)」に傍点］$/, createBoutenEl);
+        if (this.expandedEl || this.isModifyingDom) return false;
+        this.isModifyingDom = true;
+        try {
+            return this.liveConverter.handleBoutenCompletion();
+        } finally {
+            this.isModifyingDom = false;
+        }
     }
 
     // ---- Selection wrap methods called from the command palette ----
@@ -406,7 +361,7 @@ export class InlineEditor {
         this.boutenGuard.clear();
     }
 
-    // ---- Shared logic for selection wrap and annotation completion ----
+    // ---- Shared logic for selection wrap ----
 
     // Shared implementation for element-replacement wraps (tcy, bouten, etc.)
     private wrapSelectionWith(createElement: (content: string) => HTMLElement): boolean {
@@ -433,49 +388,6 @@ export class InlineEditor {
         }
         this.savedRange = null;
         return true;
-    }
-
-    // Shared implementation for live conversions that complete on a terminal character (tcy, bouten, etc.).
-    // Returns true if a conversion occurred.
-    private handleAnnotationCompletion(
-        endChar: string,
-        re: RegExp,
-        createElement: (content: string) => HTMLElement,
-    ): boolean {
-        // Skip if a span is already expanded or if a DOM modification is in progress
-        if (this.expandedEl) return false;
-        if (this.isModifyingDom) return false;
-        const sel = window.getSelection();
-        if (!sel || sel.rangeCount === 0) return false;
-        const range = sel.getRangeAt(0);
-        if (range.startContainer.nodeType !== Node.TEXT_NODE) return false;
-        if (isInsideRuby(range.startContainer, this.el)) return false;
-
-        const textNode = range.startContainer as Text;
-        const textBefore = textNode.textContent?.slice(0, range.startOffset) ?? '';
-        if (!textBefore.endsWith(endChar)) return false;
-
-        const annotationMatch = textBefore.match(re);
-        if (!annotationMatch) return false;
-
-        const content = annotationMatch[1];
-        const annotationStart = range.startOffset - annotationMatch[0].length;
-        if (!textBefore.slice(0, annotationStart).endsWith(content)) return false;
-
-        this.isModifyingDom = true;
-        try {
-            const newEl = createElement(content);
-            const inserted = insertAnnotationElement(
-                textNode, annotationStart - content.length, range.startOffset, newEl,
-            );
-
-            // Place cursor just after the element
-            // If the cursor is inside the element, selectionchange fires expandForEditing() immediately
-            setCursorAfter(inserted);
-            return true;
-        } finally {
-            this.isModifyingDom = false;
-        }
     }
 
     // ---- Private helpers for inline expand/collapse ----
