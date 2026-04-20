@@ -30,7 +30,15 @@ src/
 └── ui/
     ├── EditorElement.ts       # contenteditable div DOM management (facade over AozoraParser, InlineEditor, and InputTransformer)
     ├── AozoraParser.ts        # Aozora notation ↔ DOM bidirectional conversion (parse + serialize)
-    ├── InlineEditor.ts        # Inline expand/collapse of ruby/tcy/bouten elements while editing
+    ├── AozoraParser.test.ts   # AozoraParser unit tests (vitest)
+    ├── InlineEditor.ts        # Orchestrator: inline expand/collapse, delegates to sub-modules below
+    ├── InlineExpander.ts      # Expand/collapse core: expandForEditing, collapseEditing, findExpandableAncestor
+    ├── LiveConverter.ts       # Live notation conversion: ruby/tcy/bouten completion as user types
+    ├── BoutenGuard.ts         # Bouten post-collapse guard: prevents cursor re-entry into collapsed bouten spans
+    ├── BoutenGuard.test.ts    # BoutenGuard unit tests (vitest)
+    ├── CursorAnchorManager.ts # Cursor anchor span lifecycle and navigation skip logic
+    ├── domHelpers.ts          # Pure DOM helpers: element factories, ancestor traversal, pure computation
+    ├── domHelpers.test.ts     # domHelpers unit tests (vitest)
     ├── InputTransformer.ts    # Space conversion, auto-indent, and bracket de-indent on beforeinput
     ├── SegmentMap.ts          # Source offset ↔ view offset bidirectional mapping
     └── SegmentMap.test.ts     # SegmentMap unit tests (vitest)
@@ -71,6 +79,7 @@ See the design documents in `docs/design/` for details:
 - [Input Transformer: Space Conversion, Auto-Indent, and Bracket De-indent](docs/design/20260417_input_transformer.md)
 - [Inline Editing: Cursor Anchor, TCY Navigation, and Bouten Post-Collapse Input](docs/design/20260419_inline_editing_cursor_anchor.md)
 - [Copy / Cut / Paste with Aozora Notation](docs/design/20260420_paste_aozora_parsing.md)
+- [InlineEditor Module Split (BoutenGuard, CursorAnchorManager, LiveConverter, InlineExpander, domHelpers)](docs/design/20260420_inlineeditor_module_split.md)
 
 ## Settings
 
