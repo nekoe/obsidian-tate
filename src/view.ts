@@ -103,7 +103,7 @@ export class VerticalWritingView extends ItemView {
         });
         this.registerDomEvent(editorEl.el, 'mousedown', () => {
             this.commitToCm6(); // Click ends a burst = commit point
-            editorEl.resetBurst();
+            editorEl.afterNavigation();
         });
         this.registerDomEvent(editorEl.el, 'keydown', (e: KeyboardEvent) => {
             // Ctrl+Z / Cmd+Z: Undo,  Ctrl+Shift+Z / Cmd+Shift+Z: Redo
@@ -117,7 +117,7 @@ export class VerticalWritingView extends ItemView {
                 if (editorEl.handleTcyNavigation(e.key)) {
                     e.preventDefault();
                     this.commitToCm6();
-                    editorEl.resetBurst();
+                    editorEl.afterNavigation();
                     return;
                 }
             }
@@ -127,7 +127,7 @@ export class VerticalWritingView extends ItemView {
                  'Home', 'End', 'PageUp', 'PageDown'].includes(e.key)) {
                 editorEl.notifyNavigationKey(e.key);
                 this.commitToCm6();
-                editorEl.resetBurst();
+                editorEl.afterNavigation();
             }
         });
 
@@ -269,7 +269,7 @@ export class VerticalWritingView extends ItemView {
             const srcOffset = viewToSrc(segs, el.getViewCursorOffset());
             cm6.setCursor(cm6.offsetToPos(srcOffset));
         }
-        el.resetBurst();
+        el.afterCommit();
     }
 
     /** Delegates Undo (isRedo=false) or Redo (isRedo=true) to CM6 and restores

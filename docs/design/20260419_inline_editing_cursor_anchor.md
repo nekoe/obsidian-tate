@@ -174,12 +174,15 @@ so `boutenJustCollapsed` is still set (it would be cleared by `resetBurst` insid
 
 #### `boutenJustCollapsed` guard
 
-`boutenJustCollapsed` is set in the `atSpanEnd` branch of `handleSelectionChange`
-after a bouten collapse. It is cleared by:
+`boutenJustCollapsed` is set in two places:
+- `placeCursorAfterCollapse()` — after a bouten span collapses (via the `atSpanEnd` branch of `handleSelectionChange`)
+- `wrapSelectionWith()` — after wrapping selected text with a bouten span via the command palette (see section 5)
+
+It is cleared by:
 
 - `insertAfterBouten()` — after first non-IME character inserted
 - `handleBoutenPostCollapseInput()` — after IME fixup
-- `resetBurst()` — on mouse click or navigation key
+- `afterNavigation()` — on mouse click or navigation key (see section 5 for why `afterCommit()` must NOT clear it)
 - `notifyNavigationKey()` — on any arrow/navigation key
 - `reset()` — on `setValue` / `applyFromCm6`
 - Entry into a different expandable element (selectionchange clears it)
@@ -212,7 +215,56 @@ container or line boundary, but not when a sibling inline element follows. This
 difference is what makes end-of-line (1-b) require the `insertAfterBouten`
 intervention while the above variant self-corrects.
 
-### Known limitation: IME composition visual
+---
+
+## 5. Bouten Wrap Command: Cursor Placement and Guard
+
+### Problem
+
+`wrapSelectionWithBouten()` (via the command palette) inserts a bouten span into the
+DOM and then places the cursor. The original implementation called `setCursorAfter(inserted)`,
+which produced an element-level cursor position that Chrome synchronously normalized
+into the bouten span — just like the post-collapse case. However, `boutenJustCollapsed`
+was not set (no collapse had occurred), so `handleSelectionChange` found the cursor
+inside bouten and fired `expandForEditing`. Characters typed immediately after the
+wrap command landed inside the expanded editing span.
+
+### Fix: reuse `placeCursorAfterCollapse`
+
+`wrapSelectionWith` now follows the same cursor-placement logic used after collapse:
+
+1. `anchorManager.ensureCursorAnchorAfter(inserted)` — inserts anchor at end-of-line
+   (same as before expansion; prevents Chrome normalization into annotation span).
+2. `nextSib = inserted.nextSibling` — now points to the anchor if at end-of-line.
+3. `placeCursorAfterCollapse(nextSib, parentEl, sel)` — places cursor in anchor text
+   AND, for bouten, calls `boutenGuard.set(inserted, ...)` via the
+   `nextSib.previousSibling` check already present in `InlineEditor.placeCursorAfterCollapse`.
+
+This reuses the identical proven logic for both the collapse case and the wrap-command
+case. TCY wraps also benefit: an anchor is inserted so Chrome cannot normalize the
+cursor into the tcy span.
+
+### `afterCommit()` vs `afterNavigation()`
+
+A second root cause was that `commitToCm6()` called `resetBurst()`, which cleared
+`boutenGuard`. After `applyBouten()` set the guard and immediately called
+`commitToCm6()`, the guard was destroyed before any input event could use it.
+
+The fix splits the method into two:
+
+| Method | Clears `inBurst` | Clears `boutenGuard` | Called from |
+|---|---|---|---|
+| `afterCommit()` | yes | **no** | `commitToCm6()` |
+| `afterNavigation()` | yes | yes | mousedown, navigation keydown |
+
+The guard must survive until the user takes an intentional navigation action (click or
+arrow key). It is safe to leave it set after a commit because `getCursorBoutenSpan()`
+only returns the span when the cursor is at the immediate next sibling of that specific
+bouten span — any cursor that has moved to a different position returns `null`.
+
+---
+
+## 6. Known limitation: IME composition visual
 
 During IME composition (while candidates are being selected), the composition text
 temporarily appears inside the bouten span and therefore displays with sesame
@@ -223,13 +275,13 @@ the Web Input Method API exposes.
 
 ---
 
-## 5. Event Flow Summary
+## 7. Event Flow Summary
 
 ```
 keydown
   → notifyNavigationKey (records pendingAnchorSkip direction, clears boutenJustCollapsed)
   → handleTcyNavigation (ArrowUp/ArrowDown inside tcy)
-  → commitToCm6 + resetBurst (navigation keys)
+  → commitToCm6 + afterNavigation (navigation keys)
 
 beforeinput
   → InlineEditor.onBeforeInput (sets inBurst)

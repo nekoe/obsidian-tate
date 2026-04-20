@@ -82,8 +82,11 @@ Public API:
 | `handleBoutenPostCollapseInput()` | Move IME text that landed inside bouten to after it |
 | `redirectCursorOutOfCollapsedBouten(bouten, sel)` | Redirect cursor away from bouten without triggering re-expansion |
 
-`InlineEditor` calls `boutenGuard.set(...)` from `placeCursorAfterCollapse`,
-and `boutenGuard.clear()` from `reset`, `resetBurst`, and `notifyNavigationKey`.
+`InlineEditor` calls `boutenGuard.set(...)` from `placeCursorAfterCollapse`
+(invoked both after collapse and after `wrapSelectionWith` for bouten).
+`boutenGuard.clear()` is called from `reset`, `afterNavigation`, and `notifyNavigationKey`.
+`afterCommit()` (called from `commitToCm6`) deliberately does NOT clear the guard
+so it survives the commit that immediately follows `wrapSelectionWithBouten`.
 
 ### `CursorAnchorManager.ts` — Cursor anchor span management
 

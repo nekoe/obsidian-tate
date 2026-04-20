@@ -291,9 +291,14 @@ export class EditorElement {
         this.inputTransformer.handleCompositionEnd();
     }
 
-    // Resets the burst flag (call after commitToCm6() completes or on navigation in view.ts).
-    resetBurst(): void {
-        this.inlineEditor.resetBurst();
+    // Resets the burst flag after a commit. Does NOT clear boutenGuard.
+    afterCommit(): void {
+        this.inlineEditor.afterCommit();
+    }
+
+    // Resets the burst flag and clears boutenGuard on mouse click or navigation key.
+    afterNavigation(): void {
+        this.inlineEditor.afterNavigation();
     }
 
     // Called after CM6 Undo/Redo. Applies content to the vertical writing view and

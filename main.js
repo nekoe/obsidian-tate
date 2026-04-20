@@ -1381,8 +1381,12 @@ var InlineEditor = class {
   handleBoutenPostCollapseInput() {
     return this.boutenGuard.handleBoutenPostCollapseInput();
   }
-  // Resets the burst flag (call after commitToCm6() completes or on navigation in view.ts).
-  resetBurst() {
+  // Resets the burst flag after a commit. Does NOT clear boutenGuard.
+  afterCommit() {
+    this.inBurst = false;
+  }
+  // Resets the burst flag and clears boutenGuard on mouse click or navigation key.
+  afterNavigation() {
     this.inBurst = false;
     this.boutenGuard.clear();
   }
@@ -1398,13 +1402,12 @@ var InlineEditor = class {
     const newEl = createElement(selectedText);
     this.isModifyingDom = true;
     try {
-      const inserted = insertAnnotationElement(
-        textNode,
-        startOffset,
-        endOffset,
-        newEl
-      );
-      setCursorAfter(inserted);
+      const inserted = insertAnnotationElement(textNode, startOffset, endOffset, newEl);
+      this.anchorManager.ensureCursorAnchorAfter(inserted);
+      const nextSib = inserted.nextSibling;
+      const parentEl = inserted.parentElement;
+      const sel = window.getSelection();
+      if (parentEl && sel) this.placeCursorAfterCollapse(nextSib, parentEl, sel);
     } finally {
       this.isModifyingDom = false;
     }
@@ -1940,9 +1943,13 @@ var EditorElement = class {
   onCompositionEnd() {
     this.inputTransformer.handleCompositionEnd();
   }
-  // Resets the burst flag (call after commitToCm6() completes or on navigation in view.ts).
-  resetBurst() {
-    this.inlineEditor.resetBurst();
+  // Resets the burst flag after a commit. Does NOT clear boutenGuard.
+  afterCommit() {
+    this.inlineEditor.afterCommit();
+  }
+  // Resets the burst flag and clears boutenGuard on mouse click or navigation key.
+  afterNavigation() {
+    this.inlineEditor.afterNavigation();
   }
   // Called after CM6 Undo/Redo. Applies content to the vertical writing view and
   // restores the cursor by converting srcOffset (CM6 cursor position) via srcToView.
@@ -2156,7 +2163,7 @@ var VerticalWritingView = class extends import_obsidian4.ItemView {
     });
     this.registerDomEvent(editorEl.el, "mousedown", () => {
       this.commitToCm6();
-      editorEl.resetBurst();
+      editorEl.afterNavigation();
     });
     this.registerDomEvent(editorEl.el, "keydown", (e) => {
       if ((e.metaKey || e.ctrlKey) && !e.altKey && e.key === "z") {
@@ -2168,7 +2175,7 @@ var VerticalWritingView = class extends import_obsidian4.ItemView {
         if (editorEl.handleTcyNavigation(e.key)) {
           e.preventDefault();
           this.commitToCm6();
-          editorEl.resetBurst();
+          editorEl.afterNavigation();
           return;
         }
       }
@@ -2184,7 +2191,7 @@ var VerticalWritingView = class extends import_obsidian4.ItemView {
       ].includes(e.key)) {
         editorEl.notifyNavigationKey(e.key);
         this.commitToCm6();
-        editorEl.resetBurst();
+        editorEl.afterNavigation();
       }
     });
     this.registerEvent(
@@ -2309,7 +2316,7 @@ var VerticalWritingView = class extends import_obsidian4.ItemView {
       const srcOffset = viewToSrc(segs, el.getViewCursorOffset());
       cm6.setCursor(cm6.offsetToPos(srcOffset));
     }
-    el.resetBurst();
+    el.afterCommit();
   }
   /** Delegates Undo (isRedo=false) or Redo (isRedo=true) to CM6 and restores
    *  the cursor position derived from the content diff.

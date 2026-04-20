@@ -1,6 +1,6 @@
 import {
     createTcyEl, createBoutenEl,
-    insertAnnotationElement, setCursorAfter,
+    insertAnnotationElement,
     findTcyAncestor,
 } from './domHelpers';
 import { BoutenGuard } from './BoutenGuard';
@@ -354,10 +354,14 @@ export class InlineEditor {
         return this.boutenGuard.handleBoutenPostCollapseInput();
     }
 
-    // Resets the burst flag (call after commitToCm6() completes or on navigation in view.ts).
-    resetBurst(): void {
+    // Resets the burst flag after a commit. Does NOT clear boutenGuard.
+    afterCommit(): void {
         this.inBurst = false;
-        // Mouse click or navigation commits the current position; allow future bouten expansion.
+    }
+
+    // Resets the burst flag and clears boutenGuard on mouse click or navigation key.
+    afterNavigation(): void {
+        this.inBurst = false;
         this.boutenGuard.clear();
     }
 
@@ -376,13 +380,14 @@ export class InlineEditor {
 
         this.isModifyingDom = true;
         try {
-            const inserted = insertAnnotationElement(
-                textNode, startOffset, endOffset, newEl,
-            );
-
-            // Place cursor just after the inserted element
-            // If the cursor is inside the element, selectionchange would trigger expandForEditing()
-            setCursorAfter(inserted);
+            const inserted = insertAnnotationElement(textNode, startOffset, endOffset, newEl);
+            // Insert anchor first so Chrome cannot normalize cursor into the annotation span.
+            // placeCursorAfterCollapse also sets boutenGuard when wrapping a bouten span.
+            this.anchorManager.ensureCursorAnchorAfter(inserted);
+            const nextSib = inserted.nextSibling;
+            const parentEl = inserted.parentElement;
+            const sel = window.getSelection();
+            if (parentEl && sel) this.placeCursorAfterCollapse(nextSib, parentEl, sel);
         } finally {
             this.isModifyingDom = false;
         }
