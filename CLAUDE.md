@@ -35,6 +35,7 @@ src/
     ├── InlineExpander.ts             # Expand/collapse core: expandForEditing, collapseEditing, findExpandableAncestor
     ├── InlineExpander.test.ts        # InlineExpander unit tests (vitest)
     ├── LiveConverter.ts              # Live notation conversion: ruby/tcy/bouten completion as user types
+    ├── LiveConverter.test.ts         # LiveConverter unit tests (vitest)
     ├── BoutenGuard.ts                # Bouten post-collapse guard: prevents cursor re-entry into collapsed bouten spans
     ├── BoutenGuard.test.ts           # BoutenGuard unit tests (vitest)
     ├── CursorAnchorManager.ts        # Cursor anchor span lifecycle and navigation skip logic
