@@ -50,6 +50,12 @@
     outline-offset: 2px;
 }
 
+/* Status bar icon alignment */
+.tate-status-icon {
+    position: relative;
+    top: 1px;
+}
+
 /* Scrollbar styling */
 .tate-container::-webkit-scrollbar {
     height: 8px;

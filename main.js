@@ -2072,7 +2072,7 @@ var EditorElement = class {
 
 // src/view.ts
 var TATE_VIEW_TYPE = "tate-vertical-writing";
-var VerticalWritingView = class extends import_obsidian4.ItemView {
+var VerticalWritingView = class _VerticalWritingView extends import_obsidian4.ItemView {
   constructor(leaf, plugin) {
     super(leaf);
     this.plugin = plugin;
@@ -2105,6 +2105,7 @@ var VerticalWritingView = class extends import_obsidian4.ItemView {
       (content, preserveCursor) => {
         this.lastCommittedContent = content;
         editorEl.setValue(content, preserveCursor);
+        this.plugin.updateCharCount(countChars(content));
       }
     );
     this.syncCoordinator = syncCoordinator;
@@ -2215,6 +2216,16 @@ var VerticalWritingView = class extends import_obsidian4.ItemView {
         void syncCoordinator.loadFile(file);
       })
     );
+    this.registerEvent(
+      this.app.workspace.on("active-leaf-change", (leaf) => {
+        if (leaf === null) return;
+        if (leaf === this.leaf) {
+          this.plugin.updateCharCount(countChars(this.lastCommittedContent));
+        } else if (!this.app.workspace.getLeavesOfType(TATE_VIEW_TYPE).includes(leaf)) {
+          this.plugin.updateCharCount(null);
+        }
+      })
+    );
     await this.loadInitialFile(syncCoordinator);
   }
   async loadInitialFile(syncCoordinator) {
@@ -2234,6 +2245,9 @@ var VerticalWritingView = class extends import_obsidian4.ItemView {
     var _a;
     this.commitToCm6();
     (_a = this.syncCoordinator) == null ? void 0 : _a.dispose();
+    if (!this.app.workspace.getActiveViewOfType(_VerticalWritingView)) {
+      this.plugin.updateCharCount(null);
+    }
     return Promise.resolve();
   }
   applySettings(settings) {
@@ -2311,8 +2325,9 @@ var VerticalWritingView = class extends import_obsidian4.ItemView {
       cm6.offsetToPos(fromEndOld)
     );
     this.lastCommittedContent = content;
+    const segs = buildSegmentMap(content);
+    this.plugin.updateCharCount(segs.reduce((sum, seg) => sum + seg.viewLen, 0));
     if (!el.isInlineExpanded()) {
-      const segs = buildSegmentMap(content);
       const srcOffset = viewToSrc(segs, el.getViewCursorOffset());
       cm6.setCursor(cm6.offsetToPos(srcOffset));
     }
@@ -2334,6 +2349,7 @@ var VerticalWritingView = class extends import_obsidian4.ItemView {
     const srcOffset = this.deriveUndoRedoCursor(prevContent, newContent);
     editorEl.applyFromCm6(newContent, srcOffset);
     this.lastCommittedContent = newContent;
+    this.plugin.updateCharCount(countChars(newContent));
   }
   /** Derives the appropriate cursor position from the content diff before and after undo/redo.
    *  Returns the end of the changed region in next (offset in next).
@@ -2353,6 +2369,9 @@ var VerticalWritingView = class extends import_obsidian4.ItemView {
     return fromEndNext;
   }
 };
+function countChars(source) {
+  return buildSegmentMap(source).reduce((sum, seg) => sum + seg.viewLen, 0);
+}
 
 // src/main.ts
 var TatePlugin = class extends import_obsidian5.Plugin {
@@ -2362,6 +2381,11 @@ var TatePlugin = class extends import_obsidian5.Plugin {
   }
   async onload() {
     await this.loadSettings();
+    this.statusBarItem = this.addStatusBarItem();
+    this.statusBarItem.hide();
+    const iconEl = this.statusBarItem.createEl("span", { cls: "tate-status-icon" });
+    (0, import_obsidian5.setIcon)(iconEl, "tally-3");
+    this.charCountEl = this.statusBarItem.createEl("span");
     this.registerView(
       TATE_VIEW_TYPE,
       (leaf) => new VerticalWritingView(leaf, this)
@@ -2393,6 +2417,14 @@ var TatePlugin = class extends import_obsidian5.Plugin {
   }
   async saveSettings() {
     await this.saveData(this.settings);
+  }
+  updateCharCount(count) {
+    if (count === null) {
+      this.statusBarItem.hide();
+      return;
+    }
+    this.charCountEl.setText(count.toLocaleString() + "\u6587\u5B57");
+    this.statusBarItem.show();
   }
   applySettingsToAllViews() {
     this.app.workspace.getLeavesOfType(TATE_VIEW_TYPE).forEach((leaf) => {

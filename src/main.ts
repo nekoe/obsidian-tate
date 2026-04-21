@@ -1,12 +1,20 @@
-import { Notice, Plugin, WorkspaceLeaf } from 'obsidian';
+import { Notice, Plugin, WorkspaceLeaf, setIcon } from 'obsidian';
 import { TATE_VIEW_TYPE, VerticalWritingView } from './view';
 import { DEFAULT_SETTINGS, TatePluginSettings, TateSettingTab } from './settings';
 
 export default class TatePlugin extends Plugin {
     settings: TatePluginSettings = DEFAULT_SETTINGS;
+    private statusBarItem!: HTMLElement;
+    private charCountEl!: HTMLElement;
 
     async onload(): Promise<void> {
         await this.loadSettings();
+
+        this.statusBarItem = this.addStatusBarItem();
+        this.statusBarItem.hide();
+        const iconEl = this.statusBarItem.createEl('span', { cls: 'tate-status-icon' });
+        setIcon(iconEl, 'tally-3');
+        this.charCountEl = this.statusBarItem.createEl('span');
 
         this.registerView(
             TATE_VIEW_TYPE,
@@ -46,6 +54,15 @@ export default class TatePlugin extends Plugin {
 
     async saveSettings(): Promise<void> {
         await this.saveData(this.settings);
+    }
+
+    updateCharCount(count: number | null): void {
+        if (count === null) {
+            this.statusBarItem.hide();
+            return;
+        }
+        this.charCountEl.setText(count.toLocaleString() + '文字');
+        this.statusBarItem.show();
     }
 
     applySettingsToAllViews(): void {

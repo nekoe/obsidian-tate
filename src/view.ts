@@ -40,6 +40,7 @@ export class VerticalWritingView extends ItemView {
                 // Update committed content on file load and external change application
                 this.lastCommittedContent = content;
                 editorEl.setValue(content, preserveCursor);
+                this.plugin.updateCharCount(countChars(content));
             },
         );
         this.syncCoordinator = syncCoordinator;
@@ -155,6 +156,18 @@ export class VerticalWritingView extends ItemView {
             })
         );
 
+        this.registerEvent(
+            this.app.workspace.on('active-leaf-change', (leaf) => {
+                if (leaf === null) return; // transient null during Obsidian internal navigation
+                if (leaf === this.leaf) {
+                    this.plugin.updateCharCount(countChars(this.lastCommittedContent));
+                } else if (!this.app.workspace.getLeavesOfType(TATE_VIEW_TYPE).includes(leaf)) {
+                    // Hide only when the newly active leaf is not any tate view
+                    this.plugin.updateCharCount(null);
+                }
+            })
+        );
+
         await this.loadInitialFile(syncCoordinator);
     }
 
@@ -178,6 +191,9 @@ export class VerticalWritingView extends ItemView {
         // Flush any uncommitted changes to CM6 before closing
         this.commitToCm6();
         this.syncCoordinator?.dispose();
+        if (!this.app.workspace.getActiveViewOfType(VerticalWritingView)) {
+            this.plugin.updateCharCount(null);
+        }
         return Promise.resolve();
     }
 
@@ -262,10 +278,11 @@ export class VerticalWritingView extends ItemView {
         );
         // Commit complete — update last committed content (prevents false positives in onExternalModify)
         this.lastCommittedContent = content;
+        const segs = buildSegmentMap(content);
+        this.plugin.updateCharCount(segs.reduce((sum, seg) => sum + seg.viewLen, 0));
         // Skip cursor sync while tate-editing is expanded (the cursor is inside raw text,
         // which is not in the same space as viewToSrc input). Sync happens in the next commitToCm6 after collapse.
         if (!el.isInlineExpanded()) {
-            const segs = buildSegmentMap(content);
             const srcOffset = viewToSrc(segs, el.getViewCursorOffset());
             cm6.setCursor(cm6.offsetToPos(srcOffset));
         }
@@ -295,6 +312,7 @@ export class VerticalWritingView extends ItemView {
         // Without this, onExternalModify() would misfire on the CM6 autosave modify event,
         // causing the tate view DOM to reset and the cursor to jump during input right after undo.
         this.lastCommittedContent = newContent;
+        this.plugin.updateCharCount(countChars(newContent));
     }
 
     /** Derives the appropriate cursor position from the content diff before and after undo/redo.
@@ -319,4 +337,8 @@ export class VerticalWritingView extends ItemView {
         // Return the end of the changed region in next
         return fromEndNext;
     }
+}
+
+function countChars(source: string): number {
+    return buildSegmentMap(source).reduce((sum, seg) => sum + seg.viewLen, 0);
 }
