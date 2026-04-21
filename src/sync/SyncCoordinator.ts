@@ -40,6 +40,10 @@ export class SyncCoordinator {
 
     clearCurrentFile(): void {
         this.currentFile = null;
+        // Increment sequence numbers to discard any in-flight loadFile/onExternalModify results,
+        // preventing a stale async read from overwriting the cleared editor after this call.
+        this.loadSeq++;
+        this.externalModifySeq++;
     }
 
     onFileRename(file: TFile, oldPath: string): void {

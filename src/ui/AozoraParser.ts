@@ -9,6 +9,10 @@ type ParseSegment = { type: 'text'; text: string } | { type: 'html'; html: strin
 
 // For full document: wraps each paragraph in a <div> (so text-indent applies per paragraph)
 export function parseToHtml(text: string): string {
+    // Return a minimal paragraph even for empty content: returning '' would leave the
+    // contenteditable :empty (showing the placeholder on empty files) and cause
+    // InputTransformer.getContainingParagraphDiv() to always return null, misfiring
+    // auto-indent on every keystroke until a paragraph div exists.
     if (!text) return '<div><br></div>';
     return text
         .split('\n')

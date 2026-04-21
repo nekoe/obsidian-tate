@@ -29,6 +29,9 @@ export class EditorElement {
     setValue(content: string, preserveCursor: boolean): void {
         // Reset expansion state and selection cache on external update (must run before the early return)
         this.inlineEditor.reset();
+        // Also require childNodes.length > 0: parseToHtml('') returns '<div><br></div>', so
+        // getValue() and content are both '' for an empty file, but the DOM is still empty
+        // on initial load and must be populated with the paragraph div.
         if (this.getValue() === content && this.el.childNodes.length > 0) return;
 
         if (preserveCursor && document.activeElement === this.el) {

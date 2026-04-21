@@ -71,8 +71,10 @@ export class VerticalWritingView extends ItemView {
             editorEl.onBeforeInput(e);
         });
         this.registerDomEvent(editorEl.el, 'input', (e: Event) => {
-            editorEl.normalizeEmptyDom();
             const inputEvent = e as InputEvent;
+            // Skip during IME composition: normalizeEmptyDom resets the cursor, which would
+            // interrupt the ongoing composition and misplace the candidate text.
+            if (!inputEvent.isComposing) editorEl.normalizeEmptyDom();
             if (!inputEvent.isComposing) {
                 if (inputEvent.inputType === 'insertParagraph') {
                     editorEl.handleParagraphInsert();
@@ -154,6 +156,8 @@ export class VerticalWritingView extends ItemView {
             this.app.workspace.on('file-open', (file) => {
                 if (file === syncCoordinator.currentFile) return;
                 if (!file) {
+                    // file-open fires with null when the active file is cleared (e.g., the active
+                    // Markdown view is closed while the tate view is not the active leaf).
                     syncCoordinator.clearCurrentFile();
                     editorEl.clearContent();
                     this.lastCommittedContent = '';

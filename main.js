@@ -66,6 +66,8 @@ var SyncCoordinator = class {
   }
   clearCurrentFile() {
     this.currentFile = null;
+    this.loadSeq++;
+    this.externalModifySeq++;
   }
   onFileRename(file, oldPath) {
     if (this.currentFile && this.currentFile.path === oldPath) {
@@ -2156,8 +2158,8 @@ var VerticalWritingView = class _VerticalWritingView extends import_obsidian4.It
       editorEl.onBeforeInput(e);
     });
     this.registerDomEvent(editorEl.el, "input", (e) => {
-      editorEl.normalizeEmptyDom();
       const inputEvent = e;
+      if (!inputEvent.isComposing) editorEl.normalizeEmptyDom();
       if (!inputEvent.isComposing) {
         if (inputEvent.inputType === "insertParagraph") {
           editorEl.handleParagraphInsert();
