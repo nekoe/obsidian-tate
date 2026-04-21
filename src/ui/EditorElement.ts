@@ -29,7 +29,7 @@ export class EditorElement {
     setValue(content: string, preserveCursor: boolean): void {
         // Reset expansion state and selection cache on external update (must run before the early return)
         this.inlineEditor.reset();
-        if (this.getValue() === content) return;
+        if (this.getValue() === content && this.el.childNodes.length > 0) return;
 
         if (preserveCursor && document.activeElement === this.el) {
             const pos = this.getVisibleOffset();
@@ -231,6 +231,25 @@ export class EditorElement {
             current = current.parentElement;
         }
         return null;
+    }
+
+    // Restores a minimal <div><br></div> if Chrome deleted all paragraph divs (e.g., Backspace on last char).
+    normalizeEmptyDom(): void {
+        if (this.el.childNodes.length > 0) return;
+        const div = document.createElement('div');
+        div.appendChild(document.createElement('br'));
+        this.el.appendChild(div);
+        const range = document.createRange();
+        range.setStart(div, 0);
+        range.collapse(true);
+        const sel = window.getSelection();
+        if (sel) { sel.removeAllRanges(); sel.addRange(range); }
+    }
+
+    // Clears all content and shows the placeholder (used when no file is active).
+    clearContent(): void {
+        this.inlineEditor.reset();
+        this.el.replaceChildren();
     }
 
     applySettings(settings: TatePluginSettings): void {

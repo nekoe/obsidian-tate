@@ -71,6 +71,7 @@ export class VerticalWritingView extends ItemView {
             editorEl.onBeforeInput(e);
         });
         this.registerDomEvent(editorEl.el, 'input', (e: Event) => {
+            editorEl.normalizeEmptyDom();
             const inputEvent = e as InputEvent;
             if (!inputEvent.isComposing) {
                 if (inputEvent.inputType === 'insertParagraph') {
@@ -151,7 +152,14 @@ export class VerticalWritingView extends ItemView {
         // file-open detects file switches more reliably than active-leaf-change
         this.registerEvent(
             this.app.workspace.on('file-open', (file) => {
-                if (!file || file === syncCoordinator.currentFile) return;
+                if (file === syncCoordinator.currentFile) return;
+                if (!file) {
+                    syncCoordinator.clearCurrentFile();
+                    editorEl.clearContent();
+                    this.lastCommittedContent = '';
+                    this.plugin.updateCharCount(null);
+                    return;
+                }
                 void syncCoordinator.loadFile(file);
             })
         );

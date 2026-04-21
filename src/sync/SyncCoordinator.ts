@@ -38,6 +38,10 @@ export class SyncCoordinator {
         this.setEditorValue('', false);
     }
 
+    clearCurrentFile(): void {
+        this.currentFile = null;
+    }
+
     onFileRename(file: TFile, oldPath: string): void {
         if (this.currentFile && this.currentFile.path === oldPath) {
             this.currentFile = file;

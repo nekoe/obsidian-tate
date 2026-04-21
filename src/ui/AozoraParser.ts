@@ -9,7 +9,7 @@ type ParseSegment = { type: 'text'; text: string } | { type: 'html'; html: strin
 
 // For full document: wraps each paragraph in a <div> (so text-indent applies per paragraph)
 export function parseToHtml(text: string): string {
-    if (!text) return '';
+    if (!text) return '<div><br></div>';
     return text
         .split('\n')
         .map(line => `<div>${parseInlineToHtml(line) || '<br>'}</div>`)

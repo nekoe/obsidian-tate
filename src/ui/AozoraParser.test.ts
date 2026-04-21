@@ -143,8 +143,8 @@ describe('parseInlineToHtml', () => {
 // ================================================================
 
 describe('parseToHtml', () => {
-    it('empty string returns empty string', () => {
-        expect(parseToHtml('')).toBe('');
+    it('empty string returns a single empty paragraph', () => {
+        expect(parseToHtml('')).toBe('<div><br></div>');
     });
 
     it('single line wrapped in div', () => {

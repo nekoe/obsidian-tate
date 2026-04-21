@@ -64,6 +64,9 @@ var SyncCoordinator = class {
     this.currentFile = null;
     this.setEditorValue("", false);
   }
+  clearCurrentFile() {
+    this.currentFile = null;
+  }
   onFileRename(file, oldPath) {
     if (this.currentFile && this.currentFile.path === oldPath) {
       this.currentFile = file;
@@ -357,7 +360,7 @@ function scanNewlines(raw) {
 // src/ui/AozoraParser.ts
 var KANJI_RE_STR2 = "[\u4E00-\u9FFF\u3400-\u4DBF\u{20000}-\u{2A6DF}\u3005\u3006\u3024]+";
 function parseToHtml(text) {
-  if (!text) return "";
+  if (!text) return "<div><br></div>";
   return text.split("\n").map((line) => `<div>${parseInlineToHtml(line) || "<br>"}</div>`).join("");
 }
 function parseInlineToHtml(text) {
@@ -1730,7 +1733,7 @@ var EditorElement = class {
   }
   setValue(content, preserveCursor) {
     this.inlineEditor.reset();
-    if (this.getValue() === content) return;
+    if (this.getValue() === content && this.el.childNodes.length > 0) return;
     if (preserveCursor && document.activeElement === this.el) {
       const pos = this.getVisibleOffset();
       this.el.replaceChildren((0, import_obsidian3.sanitizeHTMLToDom)(parseToHtml(content)));
@@ -1891,6 +1894,26 @@ var EditorElement = class {
       current = current.parentElement;
     }
     return null;
+  }
+  // Restores a minimal <div><br></div> if Chrome deleted all paragraph divs (e.g., Backspace on last char).
+  normalizeEmptyDom() {
+    if (this.el.childNodes.length > 0) return;
+    const div = document.createElement("div");
+    div.appendChild(document.createElement("br"));
+    this.el.appendChild(div);
+    const range = document.createRange();
+    range.setStart(div, 0);
+    range.collapse(true);
+    const sel = window.getSelection();
+    if (sel) {
+      sel.removeAllRanges();
+      sel.addRange(range);
+    }
+  }
+  // Clears all content and shows the placeholder (used when no file is active).
+  clearContent() {
+    this.inlineEditor.reset();
+    this.el.replaceChildren();
   }
   applySettings(settings) {
     this.el.style.fontFamily = settings.fontFamily;
@@ -2133,6 +2156,7 @@ var VerticalWritingView = class _VerticalWritingView extends import_obsidian4.It
       editorEl.onBeforeInput(e);
     });
     this.registerDomEvent(editorEl.el, "input", (e) => {
+      editorEl.normalizeEmptyDom();
       const inputEvent = e;
       if (!inputEvent.isComposing) {
         if (inputEvent.inputType === "insertParagraph") {
@@ -2212,7 +2236,14 @@ var VerticalWritingView = class _VerticalWritingView extends import_obsidian4.It
     );
     this.registerEvent(
       this.app.workspace.on("file-open", (file) => {
-        if (!file || file === syncCoordinator.currentFile) return;
+        if (file === syncCoordinator.currentFile) return;
+        if (!file) {
+          syncCoordinator.clearCurrentFile();
+          editorEl.clearContent();
+          this.lastCommittedContent = "";
+          this.plugin.updateCharCount(null);
+          return;
+        }
         void syncCoordinator.loadFile(file);
       })
     );
