@@ -2248,6 +2248,21 @@ var VerticalWritingView = class _VerticalWritingView extends import_obsidian4.It
       })
     );
     this.registerEvent(
+      this.app.workspace.on("layout-change", () => {
+        if (!syncCoordinator.currentFile) return;
+        const stillOpen = this.app.workspace.getLeavesOfType("markdown").some((leaf) => {
+          const mv = leaf.view;
+          return mv instanceof import_obsidian4.MarkdownView && mv.file === syncCoordinator.currentFile;
+        });
+        if (!stillOpen) {
+          syncCoordinator.clearCurrentFile();
+          editorEl.clearContent();
+          this.lastCommittedContent = "";
+          this.plugin.updateCharCount(null);
+        }
+      })
+    );
+    this.registerEvent(
       this.app.workspace.on("active-leaf-change", (leaf) => {
         if (leaf === null) return;
         if (leaf === this.leaf) {

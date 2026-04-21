@@ -164,6 +164,24 @@ export class VerticalWritingView extends ItemView {
             })
         );
 
+        // layout-change fires when a tab is closed. Clears the view if the Markdown view
+        // for currentFile is gone and the tate view is active (file-open does not fire in that case).
+        this.registerEvent(
+            this.app.workspace.on('layout-change', () => {
+                if (!syncCoordinator.currentFile) return;
+                const stillOpen = this.app.workspace.getLeavesOfType('markdown').some(leaf => {
+                    const mv = leaf.view;
+                    return mv instanceof MarkdownView && mv.file === syncCoordinator.currentFile;
+                });
+                if (!stillOpen) {
+                    syncCoordinator.clearCurrentFile();
+                    editorEl.clearContent();
+                    this.lastCommittedContent = '';
+                    this.plugin.updateCharCount(null);
+                }
+            })
+        );
+
         this.registerEvent(
             this.app.workspace.on('active-leaf-change', (leaf) => {
                 if (leaf === null) return; // transient null during Obsidian internal navigation
