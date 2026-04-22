@@ -237,7 +237,13 @@ export class InputTransformer {
         } else {
             const textNode = document.createTextNode(text);
             range.insertNode(textNode);
-            range.setStartAfter(textNode);
+            // Place cursor inside the text node rather than at the element-level position
+            // {<div>, 1} that setStartAfter would produce.  An element-level cursor adjacent
+            // to a trailing <br> (left behind after inserting into an empty paragraph div)
+            // can prevent Chrome from correctly advancing the selection into the new paragraph
+            // after Enter, causing handleParagraphInsert to see a stale cursor still inside
+            // the preceding paragraph and return 0 indent instead of copying its indent count.
+            range.setStart(textNode, textNode.length);
             range.collapse(true);
             const sel = window.getSelection();
             if (sel) { sel.removeAllRanges(); sel.addRange(range); }

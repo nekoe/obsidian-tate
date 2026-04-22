@@ -1708,7 +1708,7 @@ var InputTransformer = class {
     } else {
       const textNode = document.createTextNode(text);
       range.insertNode(textNode);
-      range.setStartAfter(textNode);
+      range.setStart(textNode, textNode.length);
       range.collapse(true);
       const sel = window.getSelection();
       if (sel) {
