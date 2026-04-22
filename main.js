@@ -2097,7 +2097,7 @@ var EditorElement = class {
 
 // src/view.ts
 var TATE_VIEW_TYPE = "tate-vertical-writing";
-var VerticalWritingView = class _VerticalWritingView extends import_obsidian4.ItemView {
+var _VerticalWritingView = class _VerticalWritingView extends import_obsidian4.ItemView {
   constructor(leaf, plugin) {
     super(leaf);
     this.plugin = plugin;
@@ -2106,6 +2106,7 @@ var VerticalWritingView = class _VerticalWritingView extends import_obsidian4.It
     // Last committed text written to CM6.
     // Used for comparison in onExternalModify to avoid confusion with getValue() which may contain uncommitted IME text.
     this.lastCommittedContent = "";
+    this.commitTimer = null;
   }
   getViewType() {
     return TATE_VIEW_TYPE;
@@ -2167,7 +2168,11 @@ var VerticalWritingView = class _VerticalWritingView extends import_obsidian4.It
           return;
         }
         const annotated = editorEl.handleRubyCompletion() || editorEl.handleTcyCompletion() || editorEl.handleBoutenCompletion();
-        if (annotated) this.commitToCm6();
+        if (annotated) {
+          this.commitToCm6();
+        } else if (inputEvent.inputType === "insertText" || inputEvent.inputType.startsWith("deleteContent")) {
+          this.scheduleCommit();
+        }
         editorEl.handleCursorAnchorInput();
       }
     });
@@ -2344,12 +2349,26 @@ var VerticalWritingView = class _VerticalWritingView extends import_obsidian4.It
     new import_obsidian4.Notice("\u7E26\u66F8\u304D\u30A8\u30C7\u30A3\u30BF\u3092\u4F7F\u7528\u3059\u308B\u306B\u306F\u3001\u5BFE\u5FDC\u3059\u308B Markdown \u30D3\u30E5\u30FC\u3092\u958B\u3044\u3066\u304F\u3060\u3055\u3044");
     return false;
   }
+  /** Schedules a debounced commit. Resets the timer on each call so the commit fires
+   *  COMMIT_DEBOUNCE_MS after the last qualifying input event. */
+  scheduleCommit() {
+    if (this.commitTimer !== null) clearTimeout(this.commitTimer);
+    this.commitTimer = setTimeout(() => {
+      this.commitTimer = null;
+      this.commitToCm6();
+    }, _VerticalWritingView.COMMIT_DEBOUNCE_MS);
+  }
   /** Commits the current content of the vertical writing editor to CM6 using differential replaceRange.
    *  Only the changed region (excluding identical leading/trailing characters) is replaced.
    *  This lets CM6 record the exact edit position so the cursor lands at the edit site after Undo.
    *  When content changes, the CM6 cursor is also synced to the vertical writing view cursor.
-   *  Cursor sync is skipped while tate-editing is expanded (synced via selectionchange on collapse). */
+   *  Cursor sync is skipped while tate-editing is expanded (synced via selectionchange on collapse).
+   *  Also cancels any pending debounce timer so immediate commit points preempt the timer. */
   commitToCm6() {
+    if (this.commitTimer !== null) {
+      clearTimeout(this.commitTimer);
+      this.commitTimer = null;
+    }
     const el = this.editorEl;
     if (!el) return;
     const cm6 = this.getCm6Editor();
@@ -2417,6 +2436,8 @@ var VerticalWritingView = class _VerticalWritingView extends import_obsidian4.It
     return fromEndNext;
   }
 };
+_VerticalWritingView.COMMIT_DEBOUNCE_MS = 500;
+var VerticalWritingView = _VerticalWritingView;
 function countChars(source) {
   return buildSegmentMap(source).reduce((sum, seg) => sum + seg.viewLen, 0);
 }

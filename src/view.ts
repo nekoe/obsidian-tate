@@ -13,6 +13,8 @@ export class VerticalWritingView extends ItemView {
     // Last committed text written to CM6.
     // Used for comparison in onExternalModify to avoid confusion with getValue() which may contain uncommitted IME text.
     private lastCommittedContent = '';
+    private commitTimer: ReturnType<typeof setTimeout> | null = null;
+    private static readonly COMMIT_DEBOUNCE_MS = 500;
 
     constructor(leaf: WorkspaceLeaf, private readonly plugin: TatePlugin) {
         super(leaf);
@@ -84,7 +86,12 @@ export class VerticalWritingView extends ItemView {
                 const annotated = editorEl.handleRubyCompletion()
                                || editorEl.handleTcyCompletion()
                                || editorEl.handleBoutenCompletion();
-                if (annotated) this.commitToCm6(); // Notation conversion is an immediate commit point
+                if (annotated) {
+                    this.commitToCm6(); // Notation conversion is an immediate commit point
+                } else if (inputEvent.inputType === 'insertText'
+                        || inputEvent.inputType.startsWith('deleteContent')) {
+                    this.scheduleCommit(); // Debounced commit for plain typing and deletion
+                }
                 editorEl.handleCursorAnchorInput(); // Manage U+200B placeholder in cursor anchor span
             }
         });
@@ -274,12 +281,27 @@ export class VerticalWritingView extends ItemView {
         return false;
     }
 
+    /** Schedules a debounced commit. Resets the timer on each call so the commit fires
+     *  COMMIT_DEBOUNCE_MS after the last qualifying input event. */
+    private scheduleCommit(): void {
+        if (this.commitTimer !== null) clearTimeout(this.commitTimer);
+        this.commitTimer = setTimeout(() => {
+            this.commitTimer = null;
+            this.commitToCm6();
+        }, VerticalWritingView.COMMIT_DEBOUNCE_MS);
+    }
+
     /** Commits the current content of the vertical writing editor to CM6 using differential replaceRange.
      *  Only the changed region (excluding identical leading/trailing characters) is replaced.
      *  This lets CM6 record the exact edit position so the cursor lands at the edit site after Undo.
      *  When content changes, the CM6 cursor is also synced to the vertical writing view cursor.
-     *  Cursor sync is skipped while tate-editing is expanded (synced via selectionchange on collapse). */
+     *  Cursor sync is skipped while tate-editing is expanded (synced via selectionchange on collapse).
+     *  Also cancels any pending debounce timer so immediate commit points preempt the timer. */
     private commitToCm6(): void {
+        if (this.commitTimer !== null) {
+            clearTimeout(this.commitTimer);
+            this.commitTimer = null;
+        }
         const el = this.editorEl;
         if (!el) return;
         const cm6 = this.getCm6Editor();
