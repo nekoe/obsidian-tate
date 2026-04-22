@@ -2482,10 +2482,13 @@ var TatePlugin = class extends import_obsidian5.Plugin {
     this.addSettingTab(new TateSettingTab(this.app, this));
   }
   async loadSettings() {
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+    const data = await this.loadData();
+    this.settings = Object.assign({}, DEFAULT_SETTINGS, data == null ? void 0 : data.settings);
   }
   async saveSettings() {
-    await this.saveData(this.settings);
+    var _a;
+    const existing = (_a = await this.loadData()) != null ? _a : {};
+    await this.saveData({ ...existing, settings: this.settings });
   }
   updateCharCount(count) {
     if (count === null) {

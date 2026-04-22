@@ -49,11 +49,13 @@ export default class TatePlugin extends Plugin {
     }
 
     async loadSettings(): Promise<void> {
-        this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+        const data = (await this.loadData()) as { settings?: Partial<TatePluginSettings> } | null;
+        this.settings = Object.assign({}, DEFAULT_SETTINGS, data?.settings);
     }
 
     async saveSettings(): Promise<void> {
-        await this.saveData(this.settings);
+        const existing = ((await this.loadData()) as Record<string, unknown> | null) ?? {};
+        await this.saveData({ ...existing, settings: this.settings });
     }
 
     updateCharCount(count: number | null): void {
