@@ -86,7 +86,7 @@ var import_obsidian3 = require("obsidian");
 var import_obsidian = require("obsidian");
 var DEFAULT_SETTINGS = {
   fontFamily: '"Hiragino Mincho ProN", "Yu Mincho", "YuMincho", "MS Mincho", serif',
-  fontSize: 18,
+  fontSize: 22,
   lineBreak: "normal",
   convertHalfWidthSpace: true,
   autoIndentOnInput: true,

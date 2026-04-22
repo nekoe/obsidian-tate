@@ -95,7 +95,7 @@ See the design documents in `docs/design/` for details:
 
 `TatePluginSettings` (`src/settings.ts`):
 - `fontFamily`: CSS font-family string (default: Hiragino Mincho ProN family)
-- `fontSize`: numeric value in px (default: 18)
+- `fontSize`: numeric value in px (default: 22)
 - `lineBreak`: line-break rule `'normal' | 'strict' | 'loose' | 'anywhere'` (default: `'normal'`). Passed directly to the CSS `line-break` property.
 - `convertHalfWidthSpace`: convert typed half-width space to full-width space (U+3000) (default: `true`)
 - `autoIndentOnInput`: insert leading full-width spaces at line start when a character is typed (default: `true`)

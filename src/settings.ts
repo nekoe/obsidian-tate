@@ -16,7 +16,7 @@ export interface TatePluginSettings {
 
 export const DEFAULT_SETTINGS: TatePluginSettings = {
     fontFamily: '"Hiragino Mincho ProN", "Yu Mincho", "YuMincho", "MS Mincho", serif',
-    fontSize: 18,
+    fontSize: 22,
     lineBreak: 'normal',
     convertHalfWidthSpace: true,
     autoIndentOnInput: true,

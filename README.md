@@ -88,7 +88,7 @@ Configure under **Settings → TATE**:
 | Setting | Description | Default |
 |---------|-------------|---------|
 | Font family | Font used in the vertical view (CSS `font-family` syntax) | Hiragino Mincho ProN |
-| Font size | Font size in the vertical view (px) | 18 |
+| Font size | Font size in the vertical view (px) | 22 |
 | Convert half-width space to full-width | Replace typed space with full-width space `　` | On |
 | Auto-indent on input | Insert one `　` at line start when a character is typed | On |
 | Match preceding paragraph indent | On Enter, copy the indent of the paragraph above | On |
