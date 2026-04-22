@@ -79,7 +79,7 @@ cp main.js manifest.json styles.css {YOUR_VAULT_PATH}/.obsidian/plugins/tate/
 
 ## Known Limitations
 
-- **IME composition after emphasis marks:** When typing with an IME immediately after an inline-expanded emphasis mark (bouten) collapses, the composition text temporarily appears with sesame marks applied. The marks are removed when the IME input is confirmed. This is a browser limitation — Chrome's cursor normalization forces composition text into the span during composition, and it cannot be intercepted before the candidate is committed.
+- **IME input after emphasis marks:** When the cursor is placed immediately after an emphasis mark (bouten) and text is entered via IME, the composition text temporarily appears with sesame marks applied. The marks disappear once the IME input is confirmed.
 
 ## Settings
 
