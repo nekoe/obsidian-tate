@@ -90,6 +90,32 @@ el.setViewCursorOffset(savedOffset);   // must follow focus() immediately
 By the time it fires, `setViewCursorOffset()` has already moved the caret to `savedOffset`, so
 `getViewCursorOffset()` returns the correct value and `lastKnownViewOffset` is updated correctly.
 
+## Known Issue: Rare Cursor Loss on Cmd-W Close
+
+Closing the tate view with Cmd-W occasionally fails to save the cursor position. The
+× (close) button does not reproduce the problem. Reproduction conditions are unknown and
+the frequency is low.
+
+**Hypothesis:** When Cmd-W closes a tab, Obsidian switches the active leaf (firing
+`active-leaf-change`) before calling `onClose`. By the time `onClose` runs,
+`document.activeElement` has already moved away from the editor, so `saveCursorForQuit`
+falls back to `lastKnownViewOffset`. If `lastKnownViewOffset` is still `null` at that
+point, the save is skipped.
+
+`lastKnownViewOffset` is set to `null` when a new file is loaded and is only updated
+when `selectionchange` fires — which is a queued (asynchronous) task. This creates a
+short time window after `setViewCursorOffset()` returns but before `selectionchange`
+fires during which `lastKnownViewOffset` remains `null`. Pressing Cmd-W within this
+window causes the loss.
+
+The × button is unaffected because `document.activeElement` has not yet moved when
+`onClose` runs, so `getViewCursorOffset()` is used directly.
+
+**Potential fix (not yet applied):** Set `lastKnownViewOffset` synchronously at every
+`setViewCursorOffset()` call site (`restoreViewOffset` and the `pendingCursorOffset`
+apply path in `active-leaf-change`), eliminating the dependency on the asynchronous
+`selectionchange`.
+
 ## File Lifecycle
 
 | Event | Action |
