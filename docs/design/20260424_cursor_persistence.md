@@ -39,9 +39,10 @@ the chain.
 | View closed | `onClose()` via `saveCursorForQuit()` | |
 | App quit | `workspace.on('quit')` via `saveCursorForQuit()` | Best-effort; Obsidian does not guarantee completion |
 
-`commitToCm6()` では保存しない。debounce（500ms）の間にフォーカスが外れた場合、
-`getViewCursorOffset()` が 0 を返して正しい位置を上書きしてしまうため。
-上記 4 箇所はすべて `lastKnownViewOffset` を使うのでフォーカス状態に依存しない。
+`commitToCm6()` intentionally does not save the cursor. If the debounce timer (500 ms) fires
+after focus has moved away from the editor, `getViewCursorOffset()` returns 0 and would
+overwrite the correct position. All four triggers above use `lastKnownViewOffset`, which is
+focus-independent.
 
 ## Restore Triggers
 
