@@ -2127,6 +2127,10 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian4.I
     // Fallback for save paths that run while the editor is unfocused: getViewCursorOffset()
     // returns 0 when the editor lacks focus, so this field preserves the last valid offset.
     this.lastKnownViewOffset = null;
+    // Keymap scope pushed while this view is the active leaf. Intercepts Escape before
+    // Obsidian's global handler, which would otherwise switch the active leaf to a
+    // navigation=true view (e.g. MarkdownView). See docs/design/20260424_esc_key_scope.md.
+    this.escScope = new import_obsidian4.Scope();
   }
   getViewType() {
     return TATE_VIEW_TYPE;
@@ -2155,6 +2159,10 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian4.I
       }
     );
     this.syncCoordinator = syncCoordinator;
+    this.escScope.register([], "Escape", (evt) => {
+      if (evt.isComposing) return;
+      return false;
+    });
     this.registerDomEvent(editorEl.el, "copy", (e) => {
       editorEl.handleCopy(e);
     });
@@ -2322,6 +2330,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian4.I
       this.app.workspace.on("active-leaf-change", (leaf) => {
         if (leaf === null) return;
         if (leaf === this.leaf) {
+          this.app.keymap.pushScope(this.escScope);
           this.plugin.updateCharCount(countChars(this.lastCommittedContent));
           const el = this.editorEl;
           if (el) {
@@ -2334,12 +2343,18 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian4.I
               el.setViewCursorOffset(this.lastKnownViewOffset);
             }
           }
-        } else if (!this.app.workspace.getLeavesOfType(TATE_VIEW_TYPE).includes(leaf)) {
-          this.plugin.updateCharCount(null);
+        } else {
+          this.app.keymap.popScope(this.escScope);
+          if (!this.app.workspace.getLeavesOfType(TATE_VIEW_TYPE).includes(leaf)) {
+            this.plugin.updateCharCount(null);
+          }
         }
       })
     );
     await this.loadInitialFile(syncCoordinator);
+    if (this.app.workspace.getActiveViewOfType(_VerticalWritingView) === this) {
+      this.app.keymap.pushScope(this.escScope);
+    }
   }
   async loadInitialFile(syncCoordinator) {
     const activeFile = this.app.workspace.getActiveFile();
@@ -2392,6 +2407,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian4.I
   }
   async onClose() {
     var _a;
+    this.app.keymap.popScope(this.escScope);
     this.commitToCm6();
     const p = this.saveCursorForQuit();
     if (p) await p;
