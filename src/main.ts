@@ -4,8 +4,11 @@ import { DEFAULT_SETTINGS, TatePluginSettings, TateSettingTab } from './settings
 
 export default class TatePlugin extends Plugin {
     settings: TatePluginSettings = DEFAULT_SETTINGS;
+    private cursorPositions: Record<string, number> = {};
     private statusBarItem!: HTMLElement;
     private charCountEl!: HTMLElement;
+    // Serializes concurrent saveData() calls so writes are ordered and no update is lost.
+    private saveDataPromise: Promise<void> = Promise.resolve();
 
     async onload(): Promise<void> {
         await this.loadSettings();
@@ -46,16 +49,59 @@ export default class TatePlugin extends Plugin {
         });
 
         this.addSettingTab(new TateSettingTab(this.app, this));
+
+        // Best-effort cursor save on app quit. Not guaranteed to run (Obsidian limitation).
+        this.registerEvent(
+            this.app.workspace.on('quit', (tasks) => {
+                for (const leaf of this.app.workspace.getLeavesOfType(TATE_VIEW_TYPE)) {
+                    if (leaf.view instanceof VerticalWritingView) {
+                        const p = leaf.view.saveCursorForQuit();
+                        if (p) tasks.add(() => p);
+                    }
+                }
+            })
+        );
     }
 
     async loadSettings(): Promise<void> {
-        const data = (await this.loadData()) as { settings?: Partial<TatePluginSettings> } | null;
+        const data = (await this.loadData()) as {
+            settings?: Partial<TatePluginSettings>;
+            cursorPositions?: Record<string, number>;
+        } | null;
         this.settings = Object.assign({}, DEFAULT_SETTINGS, data?.settings);
+        this.cursorPositions = data?.cursorPositions ?? {};
     }
 
     async saveSettings(): Promise<void> {
-        const existing = ((await this.loadData()) as Record<string, unknown> | null) ?? {};
-        await this.saveData({ ...existing, settings: this.settings });
+        await this.saveAllData();
+    }
+
+    async saveCursorPosition(filePath: string, offset: number): Promise<void> {
+        this.cursorPositions[filePath] = offset;
+        await this.saveAllData();
+    }
+
+    getCursorPosition(filePath: string): number | undefined {
+        return this.cursorPositions[filePath];
+    }
+
+    async deleteCursorPosition(filePath: string): Promise<void> {
+        delete this.cursorPositions[filePath];
+        await this.saveAllData();
+    }
+
+    renameCursorPosition(oldPath: string, newPath: string): void {
+        if (!(oldPath in this.cursorPositions)) return;
+        this.cursorPositions[newPath] = this.cursorPositions[oldPath];
+        delete this.cursorPositions[oldPath];
+        void this.saveAllData();
+    }
+
+    private saveAllData(): Promise<void> {
+        this.saveDataPromise = this.saveDataPromise
+            .then(() => this.saveData({ settings: this.settings, cursorPositions: this.cursorPositions }))
+            .catch(() => {});
+        return this.saveDataPromise;
     }
 
     updateCharCount(count: number | null): void {

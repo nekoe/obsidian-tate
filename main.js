@@ -1995,6 +1995,19 @@ var EditorElement = class {
   getViewCursorOffset() {
     return this.getVisibleOffset();
   }
+  /** Sets the cursor position in the vertical writing view from a visible offset (used for cursor restore after file load). */
+  setViewCursorOffset(offset) {
+    this.setVisibleOffset(offset);
+  }
+  /** Scrolls the current cursor position into the center of the view. */
+  scrollCursorIntoView() {
+    var _a;
+    const sel = window.getSelection();
+    if (sel && sel.rangeCount > 0) {
+      const node = sel.getRangeAt(0).startContainer;
+      (_a = node instanceof Element ? node : node.parentElement) == null ? void 0 : _a.scrollIntoView({ block: "center", inline: "center" });
+    }
+  }
   // Called after input/compositionend to manage U+200B in the cursor anchor span.
   handleCursorAnchorInput() {
     this.inlineEditor.handleCursorAnchorInput();
@@ -2107,6 +2120,13 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian4.I
     // Used for comparison in onExternalModify to avoid confusion with getValue() which may contain uncommitted IME text.
     this.lastCommittedContent = "";
     this.commitTimer = null;
+    // Deferred cursor offset: set when a file is loaded while the view is not active.
+    // Applied (with scroll) on the next active-leaf-change for this view.
+    this.pendingCursorOffset = null;
+    // Last cursor offset observed while the editor had focus (updated on every selectionchange).
+    // Fallback for save paths that run while the editor is unfocused: getViewCursorOffset()
+    // returns 0 when the editor lacks focus, so this field preserves the last valid offset.
+    this.lastKnownViewOffset = null;
   }
   getViewType() {
     return TATE_VIEW_TYPE;
@@ -2192,6 +2212,9 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian4.I
     this.registerDomEvent(document, "selectionchange", () => {
       const contentChanged = editorEl.handleSelectionChange();
       if (contentChanged) this.commitToCm6();
+      if (document.activeElement === editorEl.el && !editorEl.isInlineExpanded()) {
+        this.lastKnownViewOffset = editorEl.getViewCursorOffset();
+      }
     });
     this.registerDomEvent(editorEl.el, "mousedown", () => {
       this.commitToCm6();
@@ -2233,12 +2256,18 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian4.I
     );
     this.registerEvent(
       this.app.vault.on("delete", (file) => {
-        if (file instanceof import_obsidian4.TFile) syncCoordinator.onFileDelete(file);
+        if (file instanceof import_obsidian4.TFile) {
+          void this.plugin.deleteCursorPosition(file.path);
+          syncCoordinator.onFileDelete(file);
+        }
       })
     );
     this.registerEvent(
       this.app.vault.on("rename", (file, oldPath) => {
-        if (file instanceof import_obsidian4.TFile) syncCoordinator.onFileRename(file, oldPath);
+        if (file instanceof import_obsidian4.TFile) {
+          this.plugin.renameCursorPosition(oldPath, file.path);
+          syncCoordinator.onFileRename(file, oldPath);
+        }
       })
     );
     this.registerEvent(
@@ -2248,10 +2277,22 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian4.I
           syncCoordinator.clearCurrentFile();
           editorEl.clearContent();
           this.lastCommittedContent = "";
+          this.pendingCursorOffset = null;
+          this.lastKnownViewOffset = null;
           this.plugin.updateCharCount(null);
           return;
         }
-        void syncCoordinator.loadFile(file);
+        const prevFile = syncCoordinator.currentFile;
+        if (prevFile && this.lastKnownViewOffset !== null) {
+          void this.plugin.saveCursorPosition(prevFile.path, this.lastKnownViewOffset);
+        }
+        void (async () => {
+          await syncCoordinator.loadFile(file);
+          if (syncCoordinator.currentFile !== file) return;
+          this.lastKnownViewOffset = null;
+          const savedOffset = this.plugin.getCursorPosition(file.path);
+          if (savedOffset !== void 0) this.restoreViewOffset(savedOffset);
+        })();
       })
     );
     this.registerEvent(
@@ -2262,9 +2303,17 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian4.I
           return mv instanceof import_obsidian4.MarkdownView && mv.file === syncCoordinator.currentFile;
         });
         if (!stillOpen) {
+          if (this.lastKnownViewOffset !== null) {
+            void this.plugin.saveCursorPosition(
+              syncCoordinator.currentFile.path,
+              this.lastKnownViewOffset
+            );
+          }
           syncCoordinator.clearCurrentFile();
           editorEl.clearContent();
           this.lastCommittedContent = "";
+          this.pendingCursorOffset = null;
+          this.lastKnownViewOffset = null;
           this.plugin.updateCharCount(null);
         }
       })
@@ -2274,6 +2323,17 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian4.I
         if (leaf === null) return;
         if (leaf === this.leaf) {
           this.plugin.updateCharCount(countChars(this.lastCommittedContent));
+          const el = this.editorEl;
+          if (el) {
+            el.el.focus({ preventScroll: true });
+            if (this.pendingCursorOffset !== null) {
+              el.setViewCursorOffset(this.pendingCursorOffset);
+              el.scrollCursorIntoView();
+              this.pendingCursorOffset = null;
+            } else if (this.lastKnownViewOffset !== null) {
+              el.setViewCursorOffset(this.lastKnownViewOffset);
+            }
+          }
         } else if (!this.app.workspace.getLeavesOfType(TATE_VIEW_TYPE).includes(leaf)) {
           this.plugin.updateCharCount(null);
         }
@@ -2285,23 +2345,60 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian4.I
     const activeFile = this.app.workspace.getActiveFile();
     if (activeFile) {
       await syncCoordinator.loadFile(activeFile);
+      if (syncCoordinator.currentFile === activeFile) {
+        this.lastKnownViewOffset = null;
+        const savedOffset = this.plugin.getCursorPosition(activeFile.path);
+        if (savedOffset !== void 0) this.restoreViewOffset(savedOffset);
+      }
       return;
     }
     for (const leaf of this.app.workspace.getLeavesOfType("markdown")) {
       if (leaf.view instanceof import_obsidian4.MarkdownView && leaf.view.file) {
-        await syncCoordinator.loadFile(leaf.view.file);
+        const file = leaf.view.file;
+        await syncCoordinator.loadFile(file);
+        if (syncCoordinator.currentFile === file) {
+          this.lastKnownViewOffset = null;
+          const savedOffset = this.plugin.getCursorPosition(file.path);
+          if (savedOffset !== void 0) this.restoreViewOffset(savedOffset);
+        }
         return;
       }
     }
   }
-  onClose() {
+  /** Saves the current cursor position. Returns null if there is nothing to save.
+   *  Used by both onClose() and the workspace quit handler. */
+  saveCursorForQuit() {
+    var _a;
+    const file = (_a = this.syncCoordinator) == null ? void 0 : _a.currentFile;
+    const el = this.editorEl;
+    if (!file || (el == null ? void 0 : el.isInlineExpanded())) return null;
+    const offset = el && document.activeElement === el.el ? el.getViewCursorOffset() : this.lastKnownViewOffset;
+    if (offset === null) return null;
+    return this.plugin.saveCursorPosition(file.path, offset);
+  }
+  /** Restores a saved view offset. If the view is currently active, focuses the editor,
+   *  sets the cursor, and scrolls into view immediately. Otherwise defers to the next
+   *  active-leaf-change event via pendingCursorOffset. */
+  restoreViewOffset(savedOffset) {
+    const el = this.editorEl;
+    if (!el) return;
+    if (this.app.workspace.getActiveViewOfType(_VerticalWritingView) === this) {
+      el.el.focus({ preventScroll: true });
+      el.setViewCursorOffset(savedOffset);
+      el.scrollCursorIntoView();
+    } else {
+      this.pendingCursorOffset = savedOffset;
+    }
+  }
+  async onClose() {
     var _a;
     this.commitToCm6();
+    const p = this.saveCursorForQuit();
+    if (p) await p;
     (_a = this.syncCoordinator) == null ? void 0 : _a.dispose();
     if (!this.app.workspace.getActiveViewOfType(_VerticalWritingView)) {
       this.plugin.updateCharCount(null);
     }
-    return Promise.resolve();
   }
   applySettings(settings) {
     var _a;
@@ -2365,6 +2462,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian4.I
    *  Cursor sync is skipped while tate-editing is expanded (synced via selectionchange on collapse).
    *  Also cancels any pending debounce timer so immediate commit points preempt the timer. */
   commitToCm6() {
+    var _a;
     if (this.commitTimer !== null) {
       clearTimeout(this.commitTimer);
       this.commitTimer = null;
@@ -2395,8 +2493,10 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian4.I
     const segs = buildSegmentMap(content);
     this.plugin.updateCharCount(segs.reduce((sum, seg) => sum + seg.viewLen, 0));
     if (!el.isInlineExpanded()) {
-      const srcOffset = viewToSrc(segs, el.getViewCursorOffset());
-      cm6.setCursor(cm6.offsetToPos(srcOffset));
+      const viewOffset = el.getViewCursorOffset();
+      cm6.setCursor(cm6.offsetToPos(viewToSrc(segs, viewOffset)));
+      const currentFile = (_a = this.syncCoordinator) == null ? void 0 : _a.currentFile;
+      if (currentFile) void this.plugin.saveCursorPosition(currentFile.path, viewOffset);
     }
     el.afterCommit();
   }
@@ -2447,6 +2547,9 @@ var TatePlugin = class extends import_obsidian5.Plugin {
   constructor() {
     super(...arguments);
     this.settings = DEFAULT_SETTINGS;
+    this.cursorPositions = {};
+    // Serializes concurrent saveData() calls so writes are ordered and no update is lost.
+    this.saveDataPromise = Promise.resolve();
   }
   async onload() {
     await this.loadSettings();
@@ -2480,15 +2583,47 @@ var TatePlugin = class extends import_obsidian5.Plugin {
       callback: () => this.dispatchToView((v) => v.applyBouten())
     });
     this.addSettingTab(new TateSettingTab(this.app, this));
+    this.registerEvent(
+      this.app.workspace.on("quit", (tasks) => {
+        for (const leaf of this.app.workspace.getLeavesOfType(TATE_VIEW_TYPE)) {
+          if (leaf.view instanceof VerticalWritingView) {
+            const p = leaf.view.saveCursorForQuit();
+            if (p) tasks.add(() => p);
+          }
+        }
+      })
+    );
   }
   async loadSettings() {
+    var _a;
     const data = await this.loadData();
     this.settings = Object.assign({}, DEFAULT_SETTINGS, data == null ? void 0 : data.settings);
+    this.cursorPositions = (_a = data == null ? void 0 : data.cursorPositions) != null ? _a : {};
   }
   async saveSettings() {
-    var _a;
-    const existing = (_a = await this.loadData()) != null ? _a : {};
-    await this.saveData({ ...existing, settings: this.settings });
+    await this.saveAllData();
+  }
+  async saveCursorPosition(filePath, offset) {
+    this.cursorPositions[filePath] = offset;
+    await this.saveAllData();
+  }
+  getCursorPosition(filePath) {
+    return this.cursorPositions[filePath];
+  }
+  async deleteCursorPosition(filePath) {
+    delete this.cursorPositions[filePath];
+    await this.saveAllData();
+  }
+  renameCursorPosition(oldPath, newPath) {
+    if (!(oldPath in this.cursorPositions)) return;
+    this.cursorPositions[newPath] = this.cursorPositions[oldPath];
+    delete this.cursorPositions[oldPath];
+    void this.saveAllData();
+  }
+  saveAllData() {
+    this.saveDataPromise = this.saveDataPromise.then(() => this.saveData({ settings: this.settings, cursorPositions: this.cursorPositions })).catch(() => {
+    });
+    return this.saveDataPromise;
   }
   updateCharCount(count) {
     if (count === null) {

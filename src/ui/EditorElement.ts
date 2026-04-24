@@ -348,6 +348,20 @@ export class EditorElement {
         return this.getVisibleOffset();
     }
 
+    /** Sets the cursor position in the vertical writing view from a visible offset (used for cursor restore after file load). */
+    setViewCursorOffset(offset: number): void {
+        this.setVisibleOffset(offset);
+    }
+
+    /** Scrolls the current cursor position into the center of the view. */
+    scrollCursorIntoView(): void {
+        const sel = window.getSelection();
+        if (sel && sel.rangeCount > 0) {
+            const node = sel.getRangeAt(0).startContainer;
+            (node instanceof Element ? node : node.parentElement)?.scrollIntoView({ block: 'center', inline: 'center' });
+        }
+    }
+
     // Called after input/compositionend to manage U+200B in the cursor anchor span.
     handleCursorAnchorInput(): void {
         this.inlineEditor.handleCursorAnchorInput();

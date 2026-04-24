@@ -15,6 +15,13 @@ export class VerticalWritingView extends ItemView {
     private lastCommittedContent = '';
     private commitTimer: ReturnType<typeof setTimeout> | null = null;
     private static readonly COMMIT_DEBOUNCE_MS = 500;
+    // Deferred cursor offset: set when a file is loaded while the view is not active.
+    // Applied (with scroll) on the next active-leaf-change for this view.
+    private pendingCursorOffset: number | null = null;
+    // Last cursor offset observed while the editor had focus (updated on every selectionchange).
+    // Fallback for save paths that run while the editor is unfocused: getViewCursorOffset()
+    // returns 0 when the editor lacks focus, so this field preserves the last valid offset.
+    private lastKnownViewOffset: number | null = null;
 
     constructor(leaf: WorkspaceLeaf, private readonly plugin: TatePlugin) {
         super(leaf);
@@ -111,6 +118,11 @@ export class VerticalWritingView extends ItemView {
         this.registerDomEvent(document, 'selectionchange', () => {
             const contentChanged = editorEl.handleSelectionChange();
             if (contentChanged) this.commitToCm6(); // Commit only if collapse changed content
+            // Track the cursor offset while the editor has focus so it can be restored after
+            // focus() resets the caret on view re-activation.
+            if (document.activeElement === editorEl.el && !editorEl.isInlineExpanded()) {
+                this.lastKnownViewOffset = editorEl.getViewCursorOffset();
+            }
         });
         this.registerDomEvent(editorEl.el, 'mousedown', () => {
             this.commitToCm6(); // Click ends a burst = commit point
@@ -149,12 +161,18 @@ export class VerticalWritingView extends ItemView {
         );
         this.registerEvent(
             this.app.vault.on('delete', (file) => {
-                if (file instanceof TFile) syncCoordinator.onFileDelete(file);
+                if (file instanceof TFile) {
+                    void this.plugin.deleteCursorPosition(file.path);
+                    syncCoordinator.onFileDelete(file);
+                }
             })
         );
         this.registerEvent(
             this.app.vault.on('rename', (file, oldPath) => {
-                if (file instanceof TFile) syncCoordinator.onFileRename(file, oldPath);
+                if (file instanceof TFile) {
+                    this.plugin.renameCursorPosition(oldPath, file.path);
+                    syncCoordinator.onFileRename(file, oldPath);
+                }
             })
         );
 
@@ -168,10 +186,24 @@ export class VerticalWritingView extends ItemView {
                     syncCoordinator.clearCurrentFile();
                     editorEl.clearContent();
                     this.lastCommittedContent = '';
+                    this.pendingCursorOffset = null;
+                    this.lastKnownViewOffset = null;
                     this.plugin.updateCharCount(null);
                     return;
                 }
-                void syncCoordinator.loadFile(file);
+                // Save cursor for the file being switched away from before loading the new one.
+                // currentFile is captured before loadFile() changes it.
+                const prevFile = syncCoordinator.currentFile;
+                if (prevFile && this.lastKnownViewOffset !== null) {
+                    void this.plugin.saveCursorPosition(prevFile.path, this.lastKnownViewOffset);
+                }
+                void (async () => {
+                    await syncCoordinator.loadFile(file);
+                    if (syncCoordinator.currentFile !== file) return;
+                    this.lastKnownViewOffset = null; // Clear stale offset from previous file
+                    const savedOffset = this.plugin.getCursorPosition(file.path);
+                    if (savedOffset !== undefined) this.restoreViewOffset(savedOffset);
+                })();
             })
         );
 
@@ -185,9 +217,18 @@ export class VerticalWritingView extends ItemView {
                     return mv instanceof MarkdownView && mv.file === syncCoordinator.currentFile;
                 });
                 if (!stillOpen) {
+                    // Save cursor before clearing (layout-change is the last chance for this file).
+                    if (this.lastKnownViewOffset !== null) {
+                        void this.plugin.saveCursorPosition(
+                            syncCoordinator.currentFile.path,
+                            this.lastKnownViewOffset,
+                        );
+                    }
                     syncCoordinator.clearCurrentFile();
                     editorEl.clearContent();
                     this.lastCommittedContent = '';
+                    this.pendingCursorOffset = null;
+                    this.lastKnownViewOffset = null;
                     this.plugin.updateCharCount(null);
                 }
             })
@@ -198,6 +239,20 @@ export class VerticalWritingView extends ItemView {
                 if (leaf === null) return; // transient null during Obsidian internal navigation
                 if (leaf === this.leaf) {
                     this.plugin.updateCharCount(countChars(this.lastCommittedContent));
+                    const el = this.editorEl;
+                    if (el) {
+                        // focus() resets the caret to the start; restore it immediately after.
+                        el.el.focus({ preventScroll: true });
+                        if (this.pendingCursorOffset !== null) {
+                            // New file was loaded in the background: restore the saved offset and scroll.
+                            el.setViewCursorOffset(this.pendingCursorOffset);
+                            el.scrollCursorIntoView();
+                            this.pendingCursorOffset = null;
+                        } else if (this.lastKnownViewOffset !== null) {
+                            // Normal tab switch: restore the cursor to where the user left off.
+                            el.setViewCursorOffset(this.lastKnownViewOffset);
+                        }
+                    }
                 } else if (!this.app.workspace.getLeavesOfType(TATE_VIEW_TYPE).includes(leaf)) {
                     // Hide only when the newly active leaf is not any tate view
                     this.plugin.updateCharCount(null);
@@ -213,25 +268,65 @@ export class VerticalWritingView extends ItemView {
         const activeFile = this.app.workspace.getActiveFile();
         if (activeFile) {
             await syncCoordinator.loadFile(activeFile);
+            if (syncCoordinator.currentFile === activeFile) {
+                this.lastKnownViewOffset = null;
+                const savedOffset = this.plugin.getCursorPosition(activeFile.path);
+                if (savedOffset !== undefined) this.restoreViewOffset(savedOffset);
+            }
             return;
         }
         // If no active file, fall back to the first file in an open Markdown view
         for (const leaf of this.app.workspace.getLeavesOfType('markdown')) {
             if (leaf.view instanceof MarkdownView && leaf.view.file) {
-                await syncCoordinator.loadFile(leaf.view.file);
+                const file = leaf.view.file;
+                await syncCoordinator.loadFile(file);
+                if (syncCoordinator.currentFile === file) {
+                    this.lastKnownViewOffset = null;
+                    const savedOffset = this.plugin.getCursorPosition(file.path);
+                    if (savedOffset !== undefined) this.restoreViewOffset(savedOffset);
+                }
                 return;
             }
         }
     }
 
-    onClose(): Promise<void> {
+    /** Saves the current cursor position. Returns null if there is nothing to save.
+     *  Used by both onClose() and the workspace quit handler. */
+    saveCursorForQuit(): Promise<void> | null {
+        const file = this.syncCoordinator?.currentFile;
+        const el = this.editorEl;
+        if (!file || el?.isInlineExpanded()) return null;
+        const offset = (el && document.activeElement === el.el)
+            ? el.getViewCursorOffset()
+            : this.lastKnownViewOffset;
+        if (offset === null) return null;
+        return this.plugin.saveCursorPosition(file.path, offset);
+    }
+
+    /** Restores a saved view offset. If the view is currently active, focuses the editor,
+     *  sets the cursor, and scrolls into view immediately. Otherwise defers to the next
+     *  active-leaf-change event via pendingCursorOffset. */
+    private restoreViewOffset(savedOffset: number): void {
+        const el = this.editorEl;
+        if (!el) return;
+        if (this.app.workspace.getActiveViewOfType(VerticalWritingView) === this) {
+            el.el.focus({ preventScroll: true });
+            el.setViewCursorOffset(savedOffset);
+            el.scrollCursorIntoView();
+        } else {
+            this.pendingCursorOffset = savedOffset;
+        }
+    }
+
+    async onClose(): Promise<void> {
         // Flush any uncommitted changes to CM6 before closing
         this.commitToCm6();
+        const p = this.saveCursorForQuit();
+        if (p) await p;
         this.syncCoordinator?.dispose();
         if (!this.app.workspace.getActiveViewOfType(VerticalWritingView)) {
             this.plugin.updateCharCount(null);
         }
-        return Promise.resolve();
     }
 
     applySettings(settings: TatePluginSettings): void {
@@ -335,8 +430,10 @@ export class VerticalWritingView extends ItemView {
         // Skip cursor sync while tate-editing is expanded (the cursor is inside raw text,
         // which is not in the same space as viewToSrc input). Sync happens in the next commitToCm6 after collapse.
         if (!el.isInlineExpanded()) {
-            const srcOffset = viewToSrc(segs, el.getViewCursorOffset());
-            cm6.setCursor(cm6.offsetToPos(srcOffset));
+            const viewOffset = el.getViewCursorOffset();
+            cm6.setCursor(cm6.offsetToPos(viewToSrc(segs, viewOffset)));
+            const currentFile = this.syncCoordinator?.currentFile;
+            if (currentFile) void this.plugin.saveCursorPosition(currentFile.path, viewOffset);
         }
         el.afterCommit();
     }

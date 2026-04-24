@@ -90,6 +90,7 @@ See the design documents in `docs/design/` for details:
 - [Copy / Cut / Paste with Aozora Notation](docs/design/20260420_paste_aozora_parsing.md)
 - [InlineEditor Module Split (BoutenGuard, CursorAnchorManager, LiveConverter, InlineExpander, domHelpers)](docs/design/20260420_inlineeditor_module_split.md)
 - [Debounced CM6 Commit for Non-IME Input (updated commit points table)](docs/design/20260422_debounce_commit.md)
+- [Cursor Position Persistence (save/restore per file, two-track tracking, focus() caret reset)](docs/design/20260424_cursor_persistence.md)
 
 ## Settings
 
