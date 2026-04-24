@@ -25,10 +25,13 @@ export class VerticalWritingView extends ItemView {
     // Keymap scope pushed while this view is the active leaf. Intercepts Escape before
     // Obsidian's global handler, which would otherwise switch the active leaf to a
     // navigation=true view (e.g. MarkdownView). See docs/design/20260424_esc_key_scope.md.
-    private readonly escScope = new Scope();
+    private readonly escScope: Scope;
 
     constructor(leaf: WorkspaceLeaf, private readonly plugin: TatePlugin) {
         super(leaf);
+        // Parent must be app.scope (the root scope) so that keys not handled by this scope
+        // (e.g. Cmd-P for the command palette) fall through to the root scope's handlers.
+        this.escScope = new Scope(this.app.scope);
     }
 
     getViewType(): string { return TATE_VIEW_TYPE; }

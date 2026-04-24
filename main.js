@@ -2127,10 +2127,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian4.I
     // Fallback for save paths that run while the editor is unfocused: getViewCursorOffset()
     // returns 0 when the editor lacks focus, so this field preserves the last valid offset.
     this.lastKnownViewOffset = null;
-    // Keymap scope pushed while this view is the active leaf. Intercepts Escape before
-    // Obsidian's global handler, which would otherwise switch the active leaf to a
-    // navigation=true view (e.g. MarkdownView). See docs/design/20260424_esc_key_scope.md.
-    this.escScope = new import_obsidian4.Scope();
+    this.escScope = new import_obsidian4.Scope(this.app.scope);
   }
   getViewType() {
     return TATE_VIEW_TYPE;

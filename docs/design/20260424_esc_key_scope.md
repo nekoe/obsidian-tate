@@ -79,6 +79,19 @@ this.escScope.register([], 'Escape', (evt) => {
 });
 ```
 
+## Parent Scope
+
+The `Scope` must be constructed with `app.scope` (the root scope) as its parent:
+
+```typescript
+this.escScope = new Scope(this.app.scope);
+```
+
+`handleKey` only delegates to `this.parent` when no registered key matches. Without a
+parent, any key not explicitly handled by this scope — such as Cmd-P for the command
+palette — would silently fall through to nothing instead of reaching the root scope's
+handlers, breaking all global shortcuts while the tate view is active.
+
 ## Scope Lifecycle
 
 The scope is pushed onto the keymap stack while the tate view is the active leaf, and
