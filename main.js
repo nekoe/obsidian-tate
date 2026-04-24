@@ -2462,7 +2462,6 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian4.I
    *  Cursor sync is skipped while tate-editing is expanded (synced via selectionchange on collapse).
    *  Also cancels any pending debounce timer so immediate commit points preempt the timer. */
   commitToCm6() {
-    var _a;
     if (this.commitTimer !== null) {
       clearTimeout(this.commitTimer);
       this.commitTimer = null;
@@ -2495,8 +2494,6 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian4.I
     if (!el.isInlineExpanded()) {
       const viewOffset = el.getViewCursorOffset();
       cm6.setCursor(cm6.offsetToPos(viewToSrc(segs, viewOffset)));
-      const currentFile = (_a = this.syncCoordinator) == null ? void 0 : _a.currentFile;
-      if (currentFile) void this.plugin.saveCursorPosition(currentFile.path, viewOffset);
     }
     el.afterCommit();
   }

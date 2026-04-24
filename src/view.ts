@@ -432,8 +432,6 @@ export class VerticalWritingView extends ItemView {
         if (!el.isInlineExpanded()) {
             const viewOffset = el.getViewCursorOffset();
             cm6.setCursor(cm6.offsetToPos(viewToSrc(segs, viewOffset)));
-            const currentFile = this.syncCoordinator?.currentFile;
-            if (currentFile) void this.plugin.saveCursorPosition(currentFile.path, viewOffset);
         }
         el.afterCommit();
     }

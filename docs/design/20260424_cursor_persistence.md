@@ -34,11 +34,14 @@ the chain.
 
 | Trigger | Location | Notes |
 |---------|----------|-------|
-| Content commit | `commitToCm6()` | After every CM6 commit; skipped while inline element is expanded |
 | File switch | `file-open` handler | Saves prevFile cursor before loading the new file |
 | Markdown view closed | `layout-change` handler | Last save opportunity when the source file tab closes |
 | View closed | `onClose()` via `saveCursorForQuit()` | |
 | App quit | `workspace.on('quit')` via `saveCursorForQuit()` | Best-effort; Obsidian does not guarantee completion |
+
+`commitToCm6()` では保存しない。debounce（500ms）の間にフォーカスが外れた場合、
+`getViewCursorOffset()` が 0 を返して正しい位置を上書きしてしまうため。
+上記 4 箇所はすべて `lastKnownViewOffset` を使うのでフォーカス状態に依存しない。
 
 ## Restore Triggers
 
