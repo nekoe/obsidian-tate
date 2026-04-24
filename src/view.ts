@@ -1,4 +1,4 @@
-import { Editor, ItemView, MarkdownView, Notice, TFile, WorkspaceLeaf } from 'obsidian';
+import { Editor, ItemView, MarkdownView, Notice, Scope, TFile, WorkspaceLeaf } from 'obsidian';
 import type TatePlugin from './main';
 import { SyncCoordinator } from './sync/SyncCoordinator';
 import { EditorElement } from './ui/EditorElement';
@@ -22,6 +22,10 @@ export class VerticalWritingView extends ItemView {
     // Fallback for save paths that run while the editor is unfocused: getViewCursorOffset()
     // returns 0 when the editor lacks focus, so this field preserves the last valid offset.
     private lastKnownViewOffset: number | null = null;
+    // Keymap scope pushed while this view is the active leaf. Intercepts Escape before
+    // Obsidian's global handler, which would otherwise switch the active leaf to a
+    // navigation=true view (e.g. MarkdownView). See docs/design/20260424_esc_key_scope.md.
+    private readonly escScope = new Scope();
 
     constructor(leaf: WorkspaceLeaf, private readonly plugin: TatePlugin) {
         super(leaf);
@@ -53,6 +57,19 @@ export class VerticalWritingView extends ItemView {
             },
         );
         this.syncCoordinator = syncCoordinator;
+
+        // Intercept Escape at the Obsidian keymap scope level. Obsidian's global Escape
+        // handler (registered on the window in capture phase) fires before any DOM keydown
+        // listener and switches the active leaf to a navigation=true view when the current
+        // view has navigation=false. Pushing this scope while the tate view is active makes
+        // our handler run first; returning false causes Obsidian to call preventDefault() +
+        // stopPropagation(), preventing the global handler from running.
+        // IME-cancel Escape (isComposing=true) is passed through so the IME candidate window
+        // can still be dismissed normally.
+        this.escScope.register([], 'Escape', (evt) => {
+            if (evt.isComposing) return;
+            return false;
+        });
 
         // Registered via registerDomEvent so listeners are automatically removed on onClose
 
@@ -238,6 +255,7 @@ export class VerticalWritingView extends ItemView {
             this.app.workspace.on('active-leaf-change', (leaf) => {
                 if (leaf === null) return; // transient null during Obsidian internal navigation
                 if (leaf === this.leaf) {
+                    this.app.keymap.pushScope(this.escScope);
                     this.plugin.updateCharCount(countChars(this.lastCommittedContent));
                     const el = this.editorEl;
                     if (el) {
@@ -253,14 +271,23 @@ export class VerticalWritingView extends ItemView {
                             el.setViewCursorOffset(this.lastKnownViewOffset);
                         }
                     }
-                } else if (!this.app.workspace.getLeavesOfType(TATE_VIEW_TYPE).includes(leaf)) {
-                    // Hide only when the newly active leaf is not any tate view
-                    this.plugin.updateCharCount(null);
+                } else {
+                    this.app.keymap.popScope(this.escScope);
+                    if (!this.app.workspace.getLeavesOfType(TATE_VIEW_TYPE).includes(leaf)) {
+                        // Hide only when the newly active leaf is not any tate view
+                        this.plugin.updateCharCount(null);
+                    }
                 }
             })
         );
 
         await this.loadInitialFile(syncCoordinator);
+
+        // If the view is already active when it opens (the common case), push the scope now.
+        // Otherwise the first active-leaf-change for this leaf will push it.
+        if (this.app.workspace.getActiveViewOfType(VerticalWritingView) === this) {
+            this.app.keymap.pushScope(this.escScope);
+        }
     }
 
     private async loadInitialFile(syncCoordinator: SyncCoordinator): Promise<void> {
@@ -319,6 +346,7 @@ export class VerticalWritingView extends ItemView {
     }
 
     async onClose(): Promise<void> {
+        this.app.keymap.popScope(this.escScope);
         // Flush any uncommitted changes to CM6 before closing
         this.commitToCm6();
         const p = this.saveCursorForQuit();

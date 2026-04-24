@@ -91,6 +91,7 @@ See the design documents in `docs/design/` for details:
 - [InlineEditor Module Split (BoutenGuard, CursorAnchorManager, LiveConverter, InlineExpander, domHelpers)](docs/design/20260420_inlineeditor_module_split.md)
 - [Debounced CM6 Commit for Non-IME Input (updated commit points table)](docs/design/20260422_debounce_commit.md)
 - [Cursor Position Persistence (save/restore per file, two-track tracking, focus() caret reset)](docs/design/20260424_cursor_persistence.md)
+- [ESC Key Handling via Obsidian Scope API (why navigation=true fails, Scope push/pop lifecycle)](docs/design/20260424_esc_key_scope.md)
 
 ## Settings
 
