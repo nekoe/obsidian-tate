@@ -55,6 +55,11 @@ private patchParagraphs(prevContent: string, nextContent: string): void {
     const nextLines = nextContent ? nextContent.split('\n') : [''];
     const el = this.el;
 
+    if (!this.hasCleanDivStructure(prevLines.length)) {
+        el.replaceChildren(sanitizeHTMLToDom(parseToHtml(nextContent)));
+        return;
+    }
+
     while (el.children.length < nextLines.length)
         el.appendChild(document.createElement('div'));
     while (el.children.length > nextLines.length)
@@ -66,7 +71,56 @@ private patchParagraphs(prevContent: string, nextContent: string): void {
         div.replaceChildren(sanitizeHTMLToDom(parseInlineToHtml(nextLines[i]) || '<br>'));
     }
 }
+
+// Returns true iff el.childNodes consists of exactly expectedCount <div> elements.
+private hasCleanDivStructure(expectedCount: number): boolean {
+    if (this.el.childNodes.length !== expectedCount) return false;
+    for (const node of Array.from(this.el.childNodes)) {
+        if (!(node instanceof HTMLElement) || node.tagName !== 'DIV') return false;
+    }
+    return true;
+}
 ```
+
+### `hasCleanDivStructure` guard
+
+`patchParagraphs` assumes that `el.childNodes[i]` is a `<div>` whose content matches
+`prevLines[i]`. This invariant breaks when the **paste fallback path** is triggered.
+
+The fallback fires in `insertParsedParagraphs` when `findParagraphDiv(range.startContainer)`
+returns `null` — which happens when the cursor lands directly on the `.tate-editor`
+element itself rather than inside a child `<div>`. This occurs after cutting whole
+paragraph divs: `range.deleteContents()` collapses the range to a position between
+sibling divs (e.g., `.tate-editor, offset 1`), outside any `<div>` child.
+
+The fallback inserts pasted lines as bare text nodes and `<br>` elements directly
+inside `.tate-editor`:
+
+```
+<div class="tate-editor">
+  <div>paragraph before</div>
+  "pasted line 1"          ← bare text node
+  <br>                     ← not a <div>
+  "pasted line 2"          ← bare text node
+  <div>paragraph after</div>
+</div>
+```
+
+`getValue()` serializes `<br>` nodes (whose parent is the root element, not a `<div>`)
+as `'\n'`, so `lastCommittedContent` ends up with the correct line count. However,
+`el.children.length` (which counts only element children, including `<br>`) does not
+equal `el.childNodes.length` (which also counts text nodes). Simply comparing
+`el.children.length` to `prevLines.length` is insufficient — `<br>` is an element
+child and would inflate the count to match.
+
+`hasCleanDivStructure` checks `el.childNodes` (not `el.children`) and verifies that
+every node is an `HTMLElement` with `tagName === 'DIV'`. This correctly rejects:
+
+- Structures with bare text nodes (`childNodes.length > children.length`)
+- Structures where element children are `<br>` instead of `<div>`
+
+When the guard fires, the method falls back to `replaceChildren(parseToHtml(nextContent))`,
+which rebuilds the DOM correctly from the post-Undo source text.
 
 ### Why it solves both problems
 
@@ -141,3 +195,4 @@ to O(cursor_paragraph_index) in the common case.
 | Large paste or multi-line Undo | Multiple lines differ; each changed `<div>` is updated individually. Still faster than `replaceChildren` unless all lines change. |
 | Empty content | `nextContent.split('\n')` → `['']`; produces one `<div>` containing `<br>`, matching `parseToHtml('')`. |
 | No actual change (undo stack empty) | `doUndoRedo` returns early before calling `applyFromCm6`; `patchParagraphs` is never reached. |
+| Paste fallback left dirty DOM | `hasCleanDivStructure` returns false; falls back to full `replaceChildren`. |
