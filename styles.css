@@ -31,6 +31,14 @@
     pointer-events: none;
 }
 
+/* Skip layout/paint for off-screen paragraphs. The auto keyword caches the rendered
+   block-size so scroll dimensions stay accurate after each paragraph is rendered once.
+   contain-intrinsic-block-size estimates one column width (line-height * font-size). */
+.tate-editor > div {
+    content-visibility: auto;
+    contain-intrinsic-block-size: auto 44px;
+}
+
 /* Tate-chu-yoko (horizontal-in-vertical) */
 .tate-editor .tcy {
     text-combine-upright: all;
