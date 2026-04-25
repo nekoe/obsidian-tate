@@ -2123,6 +2123,10 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian4.I
     // Deferred cursor offset: set when a file is loaded while the view is not active.
     // Applied (with scroll) on the next active-leaf-change for this view.
     this.pendingCursorOffset = null;
+    // Monotonic counter incremented each time tate-scroll-restoring is added.
+    // Guards classList.remove rAFs: a stale rAF from a superseded load will not remove
+    // the class that belongs to a newer load (prevents fast-switching race condition).
+    this.scrollRestoringGeneration = 0;
     // Last cursor offset observed while the editor had focus (updated on every selectionchange).
     // Fallback for save paths that run while the editor is unfocused: getViewCursorOffset()
     // returns 0 when the editor lacks focus, so this field preserves the last valid offset.
@@ -2292,10 +2296,14 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian4.I
           void this.plugin.saveCursorPosition(prevFile.path, this.lastKnownViewOffset);
         }
         void (async () => {
+          const gen = ++this.scrollRestoringGeneration;
           editorEl.el.classList.add("tate-scroll-restoring");
           await syncCoordinator.loadFile(file);
           if (syncCoordinator.currentFile !== file) {
-            requestAnimationFrame(() => editorEl.el.classList.remove("tate-scroll-restoring"));
+            requestAnimationFrame(() => {
+              if (this.scrollRestoringGeneration === gen)
+                editorEl.el.classList.remove("tate-scroll-restoring");
+            });
             return;
           }
           this.lastKnownViewOffset = null;
@@ -2303,7 +2311,10 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian4.I
           if (savedOffset !== void 0) {
             this.restoreViewOffset(savedOffset);
           } else {
-            requestAnimationFrame(() => editorEl.el.classList.remove("tate-scroll-restoring"));
+            requestAnimationFrame(() => {
+              if (this.scrollRestoringGeneration === gen)
+                editorEl.el.classList.remove("tate-scroll-restoring");
+            });
           }
         })();
       })
@@ -2341,12 +2352,16 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian4.I
           if (el) {
             el.el.focus({ preventScroll: true });
             if (this.pendingCursorOffset !== null) {
+              const gen = this.scrollRestoringGeneration;
               const offset = this.pendingCursorOffset;
               this.pendingCursorOffset = null;
               el.setViewCursorOffset(offset);
               this.lastKnownViewOffset = offset;
               el.scrollCursorIntoView();
-              requestAnimationFrame(() => el.el.classList.remove("tate-scroll-restoring"));
+              requestAnimationFrame(() => {
+                if (this.scrollRestoringGeneration === gen)
+                  el.el.classList.remove("tate-scroll-restoring");
+              });
             } else if (this.lastKnownViewOffset !== null) {
               el.setViewCursorOffset(this.lastKnownViewOffset);
             }
@@ -2368,6 +2383,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian4.I
     var _a, _b;
     const activeFile = this.app.workspace.getActiveFile();
     if (activeFile) {
+      const gen = ++this.scrollRestoringGeneration;
       (_a = this.editorEl) == null ? void 0 : _a.el.classList.add("tate-scroll-restoring");
       await syncCoordinator.loadFile(activeFile);
       if (syncCoordinator.currentFile === activeFile) {
@@ -2378,13 +2394,15 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian4.I
         } else {
           requestAnimationFrame(() => {
             var _a2;
-            return (_a2 = this.editorEl) == null ? void 0 : _a2.el.classList.remove("tate-scroll-restoring");
+            if (this.scrollRestoringGeneration === gen)
+              (_a2 = this.editorEl) == null ? void 0 : _a2.el.classList.remove("tate-scroll-restoring");
           });
         }
       } else {
         requestAnimationFrame(() => {
           var _a2;
-          return (_a2 = this.editorEl) == null ? void 0 : _a2.el.classList.remove("tate-scroll-restoring");
+          if (this.scrollRestoringGeneration === gen)
+            (_a2 = this.editorEl) == null ? void 0 : _a2.el.classList.remove("tate-scroll-restoring");
         });
       }
       return;
@@ -2392,6 +2410,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian4.I
     for (const leaf of this.app.workspace.getLeavesOfType("markdown")) {
       if (leaf.view instanceof import_obsidian4.MarkdownView && leaf.view.file) {
         const file = leaf.view.file;
+        const gen = ++this.scrollRestoringGeneration;
         (_b = this.editorEl) == null ? void 0 : _b.el.classList.add("tate-scroll-restoring");
         await syncCoordinator.loadFile(file);
         if (syncCoordinator.currentFile === file) {
@@ -2402,13 +2421,15 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian4.I
           } else {
             requestAnimationFrame(() => {
               var _a2;
-              return (_a2 = this.editorEl) == null ? void 0 : _a2.el.classList.remove("tate-scroll-restoring");
+              if (this.scrollRestoringGeneration === gen)
+                (_a2 = this.editorEl) == null ? void 0 : _a2.el.classList.remove("tate-scroll-restoring");
             });
           }
         } else {
           requestAnimationFrame(() => {
             var _a2;
-            return (_a2 = this.editorEl) == null ? void 0 : _a2.el.classList.remove("tate-scroll-restoring");
+            if (this.scrollRestoringGeneration === gen)
+              (_a2 = this.editorEl) == null ? void 0 : _a2.el.classList.remove("tate-scroll-restoring");
           });
         }
         return;
@@ -2441,10 +2462,15 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian4.I
       el.el.focus({ preventScroll: true });
       el.setViewCursorOffset(savedOffset);
       this.lastKnownViewOffset = savedOffset;
+      const gen = this.scrollRestoringGeneration;
       requestAnimationFrame(() => {
+        if (this.scrollRestoringGeneration !== gen) return;
         el.setViewCursorOffset(savedOffset);
         el.scrollCursorIntoView();
-        requestAnimationFrame(() => el.el.classList.remove("tate-scroll-restoring"));
+        requestAnimationFrame(() => {
+          if (this.scrollRestoringGeneration === gen)
+            el.el.classList.remove("tate-scroll-restoring");
+        });
       });
     } else {
       this.pendingCursorOffset = savedOffset;

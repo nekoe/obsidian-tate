@@ -18,6 +18,10 @@ export class VerticalWritingView extends ItemView {
     // Deferred cursor offset: set when a file is loaded while the view is not active.
     // Applied (with scroll) on the next active-leaf-change for this view.
     private pendingCursorOffset: number | null = null;
+    // Monotonic counter incremented each time tate-scroll-restoring is added.
+    // Guards classList.remove rAFs: a stale rAF from a superseded load will not remove
+    // the class that belongs to a newer load (prevents fast-switching race condition).
+    private scrollRestoringGeneration = 0;
     // Last cursor offset observed while the editor had focus (updated on every selectionchange).
     // Fallback for save paths that run while the editor is unfocused: getViewCursorOffset()
     // returns 0 when the editor lacks focus, so this field preserves the last valid offset.
@@ -220,10 +224,16 @@ export class VerticalWritingView extends ItemView {
                 void (async () => {
                     // Set tate-scroll-restoring before replaceChildren so new paragraph divs
                     // are created with content-visibility:visible (real sizes) from the start.
+                    // The generation counter ensures that cleanup rAFs from superseded loads
+                    // do not remove the class that belongs to a newer load.
+                    const gen = ++this.scrollRestoringGeneration;
                     editorEl.el.classList.add('tate-scroll-restoring');
                     await syncCoordinator.loadFile(file);
                     if (syncCoordinator.currentFile !== file) {
-                        requestAnimationFrame(() => editorEl.el.classList.remove('tate-scroll-restoring'));
+                        requestAnimationFrame(() => {
+                            if (this.scrollRestoringGeneration === gen)
+                                editorEl.el.classList.remove('tate-scroll-restoring');
+                        });
                         return;
                     }
                     this.lastKnownViewOffset = null;
@@ -231,7 +241,10 @@ export class VerticalWritingView extends ItemView {
                     if (savedOffset !== undefined) {
                         this.restoreViewOffset(savedOffset); // rAF chain removes the class
                     } else {
-                        requestAnimationFrame(() => editorEl.el.classList.remove('tate-scroll-restoring'));
+                        requestAnimationFrame(() => {
+                            if (this.scrollRestoringGeneration === gen)
+                                editorEl.el.classList.remove('tate-scroll-restoring');
+                        });
                     }
                 })();
             })
@@ -277,12 +290,16 @@ export class VerticalWritingView extends ItemView {
                         if (this.pendingCursorOffset !== null) {
                             // New file was loaded in the background: restore the saved offset and scroll.
                             // tate-scroll-restoring was set before loadFile(); real sizes are in effect.
+                            const gen = this.scrollRestoringGeneration; // snapshot for rAF guard
                             const offset = this.pendingCursorOffset;
                             this.pendingCursorOffset = null;
                             el.setViewCursorOffset(offset);
                             this.lastKnownViewOffset = offset; // sync update
                             el.scrollCursorIntoView();
-                            requestAnimationFrame(() => el.el.classList.remove('tate-scroll-restoring'));
+                            requestAnimationFrame(() => {
+                                if (this.scrollRestoringGeneration === gen)
+                                    el.el.classList.remove('tate-scroll-restoring');
+                            });
                         } else if (this.lastKnownViewOffset !== null) {
                             // Normal tab switch: restore the cursor to where the user left off.
                             el.setViewCursorOffset(this.lastKnownViewOffset);
@@ -311,6 +328,7 @@ export class VerticalWritingView extends ItemView {
         // Use the file that was active just before the vertical writing view was opened
         const activeFile = this.app.workspace.getActiveFile();
         if (activeFile) {
+            const gen = ++this.scrollRestoringGeneration;
             this.editorEl?.el.classList.add('tate-scroll-restoring'); // before DOM build
             await syncCoordinator.loadFile(activeFile);
             if (syncCoordinator.currentFile === activeFile) {
@@ -319,10 +337,16 @@ export class VerticalWritingView extends ItemView {
                 if (savedOffset !== undefined) {
                     this.restoreViewOffset(savedOffset); // rAF chain removes the class
                 } else {
-                    requestAnimationFrame(() => this.editorEl?.el.classList.remove('tate-scroll-restoring'));
+                    requestAnimationFrame(() => {
+                        if (this.scrollRestoringGeneration === gen)
+                            this.editorEl?.el.classList.remove('tate-scroll-restoring');
+                    });
                 }
             } else {
-                requestAnimationFrame(() => this.editorEl?.el.classList.remove('tate-scroll-restoring'));
+                requestAnimationFrame(() => {
+                    if (this.scrollRestoringGeneration === gen)
+                        this.editorEl?.el.classList.remove('tate-scroll-restoring');
+                });
             }
             return;
         }
@@ -330,6 +354,7 @@ export class VerticalWritingView extends ItemView {
         for (const leaf of this.app.workspace.getLeavesOfType('markdown')) {
             if (leaf.view instanceof MarkdownView && leaf.view.file) {
                 const file = leaf.view.file;
+                const gen = ++this.scrollRestoringGeneration;
                 this.editorEl?.el.classList.add('tate-scroll-restoring'); // before DOM build
                 await syncCoordinator.loadFile(file);
                 if (syncCoordinator.currentFile === file) {
@@ -338,10 +363,16 @@ export class VerticalWritingView extends ItemView {
                     if (savedOffset !== undefined) {
                         this.restoreViewOffset(savedOffset); // rAF chain removes the class
                     } else {
-                        requestAnimationFrame(() => this.editorEl?.el.classList.remove('tate-scroll-restoring'));
+                        requestAnimationFrame(() => {
+                            if (this.scrollRestoringGeneration === gen)
+                                this.editorEl?.el.classList.remove('tate-scroll-restoring');
+                        });
                     }
                 } else {
-                    requestAnimationFrame(() => this.editorEl?.el.classList.remove('tate-scroll-restoring'));
+                    requestAnimationFrame(() => {
+                        if (this.scrollRestoringGeneration === gen)
+                            this.editorEl?.el.classList.remove('tate-scroll-restoring');
+                    });
                 }
                 return;
             }
@@ -378,11 +409,16 @@ export class VerticalWritingView extends ItemView {
             // Sync update: if active-leaf-change's focus() fires before the rAF below and
             // resets the caret, the else-if branch will re-set it via lastKnownViewOffset.
             this.lastKnownViewOffset = savedOffset;
+            const gen = this.scrollRestoringGeneration; // snapshot for rAF guard
             requestAnimationFrame(() => {
+                if (this.scrollRestoringGeneration !== gen) return; // newer load superseded this one
                 // Re-assert cursor in case focus() moved it between now and this frame.
                 el.setViewCursorOffset(savedOffset);
                 el.scrollCursorIntoView(); // tate-scroll-restoring still active → real sizes
-                requestAnimationFrame(() => el.el.classList.remove('tate-scroll-restoring'));
+                requestAnimationFrame(() => {
+                    if (this.scrollRestoringGeneration === gen)
+                        el.el.classList.remove('tate-scroll-restoring');
+                });
             });
         } else {
             // View is not yet active; active-leaf-change will apply cursor + scroll.
