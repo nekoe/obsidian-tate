@@ -92,6 +92,9 @@ See the design documents in `docs/design/` for details:
 - [Debounced CM6 Commit for Non-IME Input (updated commit points table)](docs/design/20260422_debounce_commit.md)
 - [Cursor Position Persistence (save/restore per file, two-track tracking, focus() caret reset)](docs/design/20260424_cursor_persistence.md)
 - [ESC Key Handling via Obsidian Scope API (why navigation=true fails, Scope push/pop lifecycle)](docs/design/20260424_esc_key_scope.md)
+- [IME Performance on Large Files (content-visibility: auto, contain-intrinsic-block-size)](docs/design/20260425_content_visibility_ime_performance.md)
+- [Scroll Restore with content-visibility: auto (tate-scroll-restoring class, two-rAF pattern)](docs/design/20260425_scroll_restore_content_visibility.md)
+- [Undo/Redo: Differential Paragraph Update (patchParagraphs, scroll jump fix)](docs/design/20260425_undo_redo_patch_paragraphs.md)
 
 ## Settings
 
