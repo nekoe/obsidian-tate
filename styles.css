@@ -39,6 +39,13 @@
     contain-intrinsic-block-size: auto 44px;
 }
 
+/* During cursor/scroll restore, force full layout so scrollIntoView gets accurate
+   paragraph positions rather than the 44px fallback estimates. The class is added
+   synchronously before the scroll call and removed one rAF later (see view.ts). */
+.tate-editor.tate-scroll-restoring > div {
+    content-visibility: visible;
+}
+
 /* Tate-chu-yoko (horizontal-in-vertical) */
 .tate-editor .tcy {
     text-combine-upright: all;

@@ -2292,11 +2292,19 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian4.I
           void this.plugin.saveCursorPosition(prevFile.path, this.lastKnownViewOffset);
         }
         void (async () => {
+          editorEl.el.classList.add("tate-scroll-restoring");
           await syncCoordinator.loadFile(file);
-          if (syncCoordinator.currentFile !== file) return;
+          if (syncCoordinator.currentFile !== file) {
+            requestAnimationFrame(() => editorEl.el.classList.remove("tate-scroll-restoring"));
+            return;
+          }
           this.lastKnownViewOffset = null;
           const savedOffset = this.plugin.getCursorPosition(file.path);
-          if (savedOffset !== void 0) this.restoreViewOffset(savedOffset);
+          if (savedOffset !== void 0) {
+            this.restoreViewOffset(savedOffset);
+          } else {
+            requestAnimationFrame(() => editorEl.el.classList.remove("tate-scroll-restoring"));
+          }
         })();
       })
     );
@@ -2333,9 +2341,12 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian4.I
           if (el) {
             el.el.focus({ preventScroll: true });
             if (this.pendingCursorOffset !== null) {
-              el.setViewCursorOffset(this.pendingCursorOffset);
-              el.scrollCursorIntoView();
+              const offset = this.pendingCursorOffset;
               this.pendingCursorOffset = null;
+              el.setViewCursorOffset(offset);
+              this.lastKnownViewOffset = offset;
+              el.scrollCursorIntoView();
+              requestAnimationFrame(() => el.el.classList.remove("tate-scroll-restoring"));
             } else if (this.lastKnownViewOffset !== null) {
               el.setViewCursorOffset(this.lastKnownViewOffset);
             }
@@ -2354,24 +2365,51 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian4.I
     }
   }
   async loadInitialFile(syncCoordinator) {
+    var _a, _b;
     const activeFile = this.app.workspace.getActiveFile();
     if (activeFile) {
+      (_a = this.editorEl) == null ? void 0 : _a.el.classList.add("tate-scroll-restoring");
       await syncCoordinator.loadFile(activeFile);
       if (syncCoordinator.currentFile === activeFile) {
         this.lastKnownViewOffset = null;
         const savedOffset = this.plugin.getCursorPosition(activeFile.path);
-        if (savedOffset !== void 0) this.restoreViewOffset(savedOffset);
+        if (savedOffset !== void 0) {
+          this.restoreViewOffset(savedOffset);
+        } else {
+          requestAnimationFrame(() => {
+            var _a2;
+            return (_a2 = this.editorEl) == null ? void 0 : _a2.el.classList.remove("tate-scroll-restoring");
+          });
+        }
+      } else {
+        requestAnimationFrame(() => {
+          var _a2;
+          return (_a2 = this.editorEl) == null ? void 0 : _a2.el.classList.remove("tate-scroll-restoring");
+        });
       }
       return;
     }
     for (const leaf of this.app.workspace.getLeavesOfType("markdown")) {
       if (leaf.view instanceof import_obsidian4.MarkdownView && leaf.view.file) {
         const file = leaf.view.file;
+        (_b = this.editorEl) == null ? void 0 : _b.el.classList.add("tate-scroll-restoring");
         await syncCoordinator.loadFile(file);
         if (syncCoordinator.currentFile === file) {
           this.lastKnownViewOffset = null;
           const savedOffset = this.plugin.getCursorPosition(file.path);
-          if (savedOffset !== void 0) this.restoreViewOffset(savedOffset);
+          if (savedOffset !== void 0) {
+            this.restoreViewOffset(savedOffset);
+          } else {
+            requestAnimationFrame(() => {
+              var _a2;
+              return (_a2 = this.editorEl) == null ? void 0 : _a2.el.classList.remove("tate-scroll-restoring");
+            });
+          }
+        } else {
+          requestAnimationFrame(() => {
+            var _a2;
+            return (_a2 = this.editorEl) == null ? void 0 : _a2.el.classList.remove("tate-scroll-restoring");
+          });
         }
         return;
       }
@@ -2389,15 +2427,25 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian4.I
     return this.plugin.saveCursorPosition(file.path, offset);
   }
   /** Restores a saved view offset. If the view is currently active, focuses the editor,
-   *  sets the cursor, and scrolls into view immediately. Otherwise defers to the next
-   *  active-leaf-change event via pendingCursorOffset. */
+   *  sets the cursor, and scrolls into view. Otherwise defers to the next
+   *  active-leaf-change event via pendingCursorOffset.
+   *
+   *  Callers must set tate-scroll-restoring on el.el BEFORE the loadFile() call that
+   *  precedes this method. The class ensures new paragraph divs are built with real sizes
+   *  (content-visibility:visible). scrollCursorIntoView is deferred one rAF so it runs
+   *  after Obsidian's view-activation logic (focus resets, revealLeaf, etc.) completes. */
   restoreViewOffset(savedOffset) {
     const el = this.editorEl;
     if (!el) return;
     if (this.app.workspace.getActiveViewOfType(_VerticalWritingView) === this) {
       el.el.focus({ preventScroll: true });
       el.setViewCursorOffset(savedOffset);
-      el.scrollCursorIntoView();
+      this.lastKnownViewOffset = savedOffset;
+      requestAnimationFrame(() => {
+        el.setViewCursorOffset(savedOffset);
+        el.scrollCursorIntoView();
+        requestAnimationFrame(() => el.el.classList.remove("tate-scroll-restoring"));
+      });
     } else {
       this.pendingCursorOffset = savedOffset;
     }

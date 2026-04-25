@@ -218,11 +218,21 @@ export class VerticalWritingView extends ItemView {
                     void this.plugin.saveCursorPosition(prevFile.path, this.lastKnownViewOffset);
                 }
                 void (async () => {
+                    // Set tate-scroll-restoring before replaceChildren so new paragraph divs
+                    // are created with content-visibility:visible (real sizes) from the start.
+                    editorEl.el.classList.add('tate-scroll-restoring');
                     await syncCoordinator.loadFile(file);
-                    if (syncCoordinator.currentFile !== file) return;
-                    this.lastKnownViewOffset = null; // Clear stale offset from previous file
+                    if (syncCoordinator.currentFile !== file) {
+                        requestAnimationFrame(() => editorEl.el.classList.remove('tate-scroll-restoring'));
+                        return;
+                    }
+                    this.lastKnownViewOffset = null;
                     const savedOffset = this.plugin.getCursorPosition(file.path);
-                    if (savedOffset !== undefined) this.restoreViewOffset(savedOffset);
+                    if (savedOffset !== undefined) {
+                        this.restoreViewOffset(savedOffset); // rAF chain removes the class
+                    } else {
+                        requestAnimationFrame(() => editorEl.el.classList.remove('tate-scroll-restoring'));
+                    }
                 })();
             })
         );
@@ -266,9 +276,13 @@ export class VerticalWritingView extends ItemView {
                         el.el.focus({ preventScroll: true });
                         if (this.pendingCursorOffset !== null) {
                             // New file was loaded in the background: restore the saved offset and scroll.
-                            el.setViewCursorOffset(this.pendingCursorOffset);
-                            el.scrollCursorIntoView();
+                            // tate-scroll-restoring was set before loadFile(); real sizes are in effect.
+                            const offset = this.pendingCursorOffset;
                             this.pendingCursorOffset = null;
+                            el.setViewCursorOffset(offset);
+                            this.lastKnownViewOffset = offset; // sync update
+                            el.scrollCursorIntoView();
+                            requestAnimationFrame(() => el.el.classList.remove('tate-scroll-restoring'));
                         } else if (this.lastKnownViewOffset !== null) {
                             // Normal tab switch: restore the cursor to where the user left off.
                             el.setViewCursorOffset(this.lastKnownViewOffset);
@@ -297,11 +311,18 @@ export class VerticalWritingView extends ItemView {
         // Use the file that was active just before the vertical writing view was opened
         const activeFile = this.app.workspace.getActiveFile();
         if (activeFile) {
+            this.editorEl?.el.classList.add('tate-scroll-restoring'); // before DOM build
             await syncCoordinator.loadFile(activeFile);
             if (syncCoordinator.currentFile === activeFile) {
                 this.lastKnownViewOffset = null;
                 const savedOffset = this.plugin.getCursorPosition(activeFile.path);
-                if (savedOffset !== undefined) this.restoreViewOffset(savedOffset);
+                if (savedOffset !== undefined) {
+                    this.restoreViewOffset(savedOffset); // rAF chain removes the class
+                } else {
+                    requestAnimationFrame(() => this.editorEl?.el.classList.remove('tate-scroll-restoring'));
+                }
+            } else {
+                requestAnimationFrame(() => this.editorEl?.el.classList.remove('tate-scroll-restoring'));
             }
             return;
         }
@@ -309,11 +330,18 @@ export class VerticalWritingView extends ItemView {
         for (const leaf of this.app.workspace.getLeavesOfType('markdown')) {
             if (leaf.view instanceof MarkdownView && leaf.view.file) {
                 const file = leaf.view.file;
+                this.editorEl?.el.classList.add('tate-scroll-restoring'); // before DOM build
                 await syncCoordinator.loadFile(file);
                 if (syncCoordinator.currentFile === file) {
                     this.lastKnownViewOffset = null;
                     const savedOffset = this.plugin.getCursorPosition(file.path);
-                    if (savedOffset !== undefined) this.restoreViewOffset(savedOffset);
+                    if (savedOffset !== undefined) {
+                        this.restoreViewOffset(savedOffset); // rAF chain removes the class
+                    } else {
+                        requestAnimationFrame(() => this.editorEl?.el.classList.remove('tate-scroll-restoring'));
+                    }
+                } else {
+                    requestAnimationFrame(() => this.editorEl?.el.classList.remove('tate-scroll-restoring'));
                 }
                 return;
             }
@@ -334,16 +362,31 @@ export class VerticalWritingView extends ItemView {
     }
 
     /** Restores a saved view offset. If the view is currently active, focuses the editor,
-     *  sets the cursor, and scrolls into view immediately. Otherwise defers to the next
-     *  active-leaf-change event via pendingCursorOffset. */
+     *  sets the cursor, and scrolls into view. Otherwise defers to the next
+     *  active-leaf-change event via pendingCursorOffset.
+     *
+     *  Callers must set tate-scroll-restoring on el.el BEFORE the loadFile() call that
+     *  precedes this method. The class ensures new paragraph divs are built with real sizes
+     *  (content-visibility:visible). scrollCursorIntoView is deferred one rAF so it runs
+     *  after Obsidian's view-activation logic (focus resets, revealLeaf, etc.) completes. */
     private restoreViewOffset(savedOffset: number): void {
         const el = this.editorEl;
         if (!el) return;
         if (this.app.workspace.getActiveViewOfType(VerticalWritingView) === this) {
             el.el.focus({ preventScroll: true });
             el.setViewCursorOffset(savedOffset);
-            el.scrollCursorIntoView();
+            // Sync update: if active-leaf-change's focus() fires before the rAF below and
+            // resets the caret, the else-if branch will re-set it via lastKnownViewOffset.
+            this.lastKnownViewOffset = savedOffset;
+            requestAnimationFrame(() => {
+                // Re-assert cursor in case focus() moved it between now and this frame.
+                el.setViewCursorOffset(savedOffset);
+                el.scrollCursorIntoView(); // tate-scroll-restoring still active → real sizes
+                requestAnimationFrame(() => el.el.classList.remove('tate-scroll-restoring'));
+            });
         } else {
+            // View is not yet active; active-leaf-change will apply cursor + scroll.
+            // The tate-scroll-restoring class set by the caller remains active until then.
             this.pendingCursorOffset = savedOffset;
         }
     }

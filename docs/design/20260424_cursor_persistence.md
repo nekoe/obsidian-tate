@@ -116,6 +116,29 @@ The × button is unaffected because `document.activeElement` has not yet moved w
 apply path in `active-leaf-change`), eliminating the dependency on the asynchronous
 `selectionchange`.
 
+## `content-visibility: auto` and Scroll Restore
+
+`styles.css` applies `content-visibility: auto` + `contain-intrinsic-block-size: auto 44px` to
+paragraph divs (`.tate-editor > div`) to skip layout/paint for off-screen paragraphs during editing.
+
+**Problem:** On a freshly built DOM (view close + reopen), all paragraph divs start with the 44 px
+fallback intrinsic size because none have been rendered yet. `scrollCursorIntoView()` calls
+`element.scrollIntoView()`, which uses these estimated sizes to compute the element's position.
+For a 200 k-char file with ~2,857 paragraphs averaging 2 lines each, the estimated total width is
+~126 kpx but the real total is ~252 kpx, so the scroll lands at the wrong position.
+
+**Fix:** Before calling `scrollCursorIntoView()`, add the class `tate-scroll-restoring` to the
+editor element. The CSS rule `.tate-editor.tate-scroll-restoring > div { content-visibility: visible }`
+forces the browser to compute real paragraph sizes for the scroll. One `requestAnimationFrame` later,
+the class is removed and `content-visibility: auto` takes over again.
+
+After this one-time full layout, all paragraph sizes are cached (`auto` in `contain-intrinsic-block-size`
+remembers the last rendered size), so subsequent `scrollCursorIntoView()` calls during the same DOM
+session are accurate.
+
+This pattern is applied in both `restoreViewOffset()` (immediate restore path) and the
+`pendingCursorOffset` apply path in `active-leaf-change` (background-load restore path).
+
 ## File Lifecycle
 
 | Event | Action |
