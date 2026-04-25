@@ -346,12 +346,13 @@ export class EditorElement {
         const nextLines = nextContent ? nextContent.split('\n') : [''];
         const el = this.el;
 
-        // If the DOM div count does not match prevContent's line count, the DOM structure has
-        // diverged from prevContent — typically because the paste fallback path inserted
-        // <br>-separated content inside one div (or bare nodes directly in the editor element)
-        // instead of creating one <div> per line. In that case prevLines[i] does not reliably
-        // describe div[i], so fall back to a full rebuild from nextContent.
-        if (el.children.length !== prevLines.length) {
+        // The invariant for differential patching: every direct child of el is a <div>
+        // element and el.childNodes.length equals prevLines.length. This breaks when the
+        // paste fallback path (cursor on the editor element itself rather than inside a
+        // child div) inserts bare text nodes and <br>s directly into the editor. Using
+        // el.children would count <br> as an element child and produce a false positive,
+        // so we walk el.childNodes and verify that every node is a <div>.
+        if (!this.hasCleanDivStructure(prevLines.length)) {
             el.replaceChildren(sanitizeHTMLToDom(parseToHtml(nextContent)));
             return;
         }
@@ -370,6 +371,17 @@ export class EditorElement {
             const html = parseInlineToHtml(nextLines[i]) || '<br>';
             div.replaceChildren(sanitizeHTMLToDom(html));
         }
+    }
+
+    // Returns true iff el.childNodes consists of exactly expectedCount <div> elements.
+    // Used by patchParagraphs to detect DOM structure corruption (e.g. bare text nodes
+    // or <br>s inserted directly into the editor by the paste fallback path).
+    private hasCleanDivStructure(expectedCount: number): boolean {
+        if (this.el.childNodes.length !== expectedCount) return false;
+        for (const node of Array.from(this.el.childNodes)) {
+            if (!(node instanceof HTMLElement) || node.tagName !== 'DIV') return false;
+        }
+        return true;
     }
 
     /** Returns whether a tate-editing span is currently expanded (used by view.ts to decide cursor sync). */
