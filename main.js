@@ -1833,8 +1833,27 @@ var EditorElement = class {
   // Splits the current paragraph at the cursor: first line appends to it,
   // each remaining line becomes a new <div>, and after-cursor content moves to the last.
   insertParsedParagraphs(range, lines) {
+    var _a;
     const sel = window.getSelection();
     const paragraphDiv = this.findParagraphDiv(range.startContainer);
+    if (!this.inlineEditor.isExpanded() && range.startContainer === this.el) {
+      const refNode = (_a = this.el.childNodes[range.startOffset]) != null ? _a : null;
+      let lastDiv = null;
+      for (const line of lines) {
+        const div = document.createElement("div");
+        div.replaceChildren((0, import_obsidian3.sanitizeHTMLToDom)(parseInlineToHtml(line) || "<br>"));
+        this.el.insertBefore(div, refNode);
+        lastDiv = div;
+      }
+      if (lastDiv) {
+        const r = document.createRange();
+        r.selectNodeContents(lastDiv);
+        r.collapse(false);
+        sel.removeAllRanges();
+        sel.addRange(r);
+      }
+      return;
+    }
     if (!paragraphDiv || this.inlineEditor.isExpanded()) {
       for (let i = 0; i < lines.length; i++) {
         if (i > 0) {
@@ -1978,14 +1997,45 @@ var EditorElement = class {
   }
   // Called after CM6 Undo/Redo. Applies content to the vertical writing view and
   // restores the cursor by converting srcOffset (CM6 cursor position) via srcToView.
-  applyFromCm6(content, srcOffset) {
+  // prevContent must equal the current DOM content (caller guarantees prevContent !== content).
+  applyFromCm6(prevContent, content, srcOffset) {
     this.inlineEditor.reset();
-    if (this.getValue() !== content) {
-      this.el.replaceChildren((0, import_obsidian3.sanitizeHTMLToDom)(parseToHtml(content)));
-    }
+    this.patchParagraphs(prevContent, content);
     const segs = buildSegmentMap(content);
     const viewOffset = srcToView(segs, srcOffset);
     this.setVisibleOffset(viewOffset);
+  }
+  // Updates paragraph divs to match nextContent, replacing only divs whose line changed.
+  patchParagraphs(prevContent, nextContent) {
+    const prevLines = prevContent.split("\n");
+    const nextLines = nextContent ? nextContent.split("\n") : [""];
+    const el = this.el;
+    if (!this.hasCleanDivStructure(prevLines.length)) {
+      el.replaceChildren((0, import_obsidian3.sanitizeHTMLToDom)(parseToHtml(nextContent)));
+      return;
+    }
+    while (el.children.length < nextLines.length) {
+      el.appendChild(document.createElement("div"));
+    }
+    while (el.children.length > nextLines.length) {
+      el.removeChild(el.lastChild);
+    }
+    for (let i = 0; i < nextLines.length; i++) {
+      if (prevLines[i] === nextLines[i]) continue;
+      const div = el.children[i];
+      const html = parseInlineToHtml(nextLines[i]) || "<br>";
+      div.replaceChildren((0, import_obsidian3.sanitizeHTMLToDom)(html));
+    }
+  }
+  // Returns true iff el.childNodes consists of exactly expectedCount <div> elements.
+  // Used by patchParagraphs to detect DOM structure corruption (e.g. bare text nodes
+  // or <br>s inserted directly into the editor by the paste fallback path).
+  hasCleanDivStructure(expectedCount) {
+    if (this.el.childNodes.length !== expectedCount) return false;
+    for (const node of Array.from(this.el.childNodes)) {
+      if (!(node instanceof HTMLElement) || node.tagName !== "DIV") return false;
+    }
+    return true;
   }
   /** Returns whether a tate-editing span is currently expanded (used by view.ts to decide cursor sync). */
   isInlineExpanded() {
@@ -2598,7 +2648,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian4.I
     const newContent = cm6.getValue();
     if (newContent === prevContent) return;
     const srcOffset = this.deriveUndoRedoCursor(prevContent, newContent);
-    editorEl.applyFromCm6(newContent, srcOffset);
+    editorEl.applyFromCm6(prevContent, newContent, srcOffset);
     this.lastCommittedContent = newContent;
     this.plugin.updateCharCount(countChars(newContent));
   }
