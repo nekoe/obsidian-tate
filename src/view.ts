@@ -119,6 +119,13 @@ export class VerticalWritingView extends ItemView {
                                || editorEl.handleBoutenCompletion();
                 if (annotated) {
                     this.commitToCm6(); // Notation conversion is an immediate commit point
+                } else if (inputEvent.inputType === 'deleteByCut') {
+                    // Chrome's native cut-line behavior (collapsed cursor + Ctrl+X) fires
+                    // this event AFTER the cut event handler (and its commitToCm6) already
+                    // ran with the unchanged DOM. The div is removed by the browser after
+                    // the cut event, so commitToCm6 must be called again here.
+                    editorEl.cleanupEmptyParagraphDivs();
+                    this.commitToCm6();
                 } else if (inputEvent.inputType === 'insertText'
                         || inputEvent.inputType.startsWith('deleteContent')) {
                     this.scheduleCommit(); // Debounced commit for plain typing and deletion

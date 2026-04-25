@@ -1780,7 +1780,18 @@ var EditorElement = class {
   handleCut(e) {
     const range = this.serializeSelectionToClipboard(e);
     if (!range) return;
+    const emptyLineDivs = Array.from(this.el.children).filter(
+      (n) => {
+        var _a;
+        return n instanceof HTMLElement && n.tagName === "DIV" && n.childNodes.length === 1 && ((_a = n.firstChild) == null ? void 0 : _a.nodeName) === "BR";
+      }
+    );
     range.deleteContents();
+    for (const div of emptyLineDivs) {
+      if (div.isConnected && div.childNodes.length === 0) {
+        div.remove();
+      }
+    }
   }
   // Serializes the current selection to Aozora notation and writes it to text/plain.
   // Returns the range on success (for cut to delete), or null if nothing to serialize.
@@ -1793,7 +1804,8 @@ var EditorElement = class {
     e.preventDefault();
     const fragment = range.cloneContents();
     const text = Array.from(fragment.childNodes).map((n) => serializeNode(n, this.el)).join("");
-    (_a = e.clipboardData) == null ? void 0 : _a.setData("text/plain", text);
+    const clipboardText = !text && fragment.childNodes.length > 0 ? "\n" : text;
+    (_a = e.clipboardData) == null ? void 0 : _a.setData("text/plain", clipboardText);
     return range;
   }
   // Paste handler: parses Aozora notation in the pasted text and inserts rendered inline elements.
@@ -1879,8 +1891,17 @@ var EditorElement = class {
     afterRange.selectNodeContents(paragraphDiv);
     afterRange.setStart(range.startContainer, range.startOffset);
     const afterFragment = afterRange.extractContents();
+    for (const n of Array.from(paragraphDiv.childNodes)) {
+      if (n instanceof Text && n.data === "") n.remove();
+    }
+    for (const n of Array.from(afterFragment.childNodes)) {
+      if (n instanceof Text && n.data === "") n.remove();
+    }
     const firstFrag = (0, import_obsidian3.sanitizeHTMLToDom)(parseInlineToHtml(lines[0]));
     paragraphDiv.append(...Array.from(firstFrag.childNodes));
+    if (paragraphDiv.childNodes.length === 0) {
+      paragraphDiv.appendChild(document.createElement("br"));
+    }
     let insertAfter = paragraphDiv;
     let lastPastedNode = null;
     for (let i = 1; i < lines.length; i++) {
@@ -1891,6 +1912,9 @@ var EditorElement = class {
       lastPastedNode = lineNodes.length > 0 ? lineNodes[lineNodes.length - 1] : null;
       if (i === lines.length - 1) {
         div.append(...Array.from(afterFragment.childNodes));
+      }
+      if (div.childNodes.length === 0) {
+        div.appendChild(document.createElement("br"));
       }
       insertAfter.after(div);
       insertAfter = div;
@@ -1929,6 +1953,15 @@ var EditorElement = class {
     if (sel) {
       sel.removeAllRanges();
       sel.addRange(range);
+    }
+  }
+  // Removes any <div></div> children left by Chrome's native cut-line behavior.
+  // Called from the input handler when inputType === 'deleteByCut'.
+  cleanupEmptyParagraphDivs() {
+    for (const child of Array.from(this.el.childNodes)) {
+      if (child instanceof HTMLElement && child.tagName === "DIV" && child.childNodes.length === 0) {
+        child.remove();
+      }
     }
   }
   // Clears all content and shows the placeholder (used when no file is active).
@@ -2248,6 +2281,9 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian4.I
         }
         const annotated = editorEl.handleRubyCompletion() || editorEl.handleTcyCompletion() || editorEl.handleBoutenCompletion();
         if (annotated) {
+          this.commitToCm6();
+        } else if (inputEvent.inputType === "deleteByCut") {
+          editorEl.cleanupEmptyParagraphDivs();
           this.commitToCm6();
         } else if (inputEvent.inputType === "insertText" || inputEvent.inputType.startsWith("deleteContent")) {
           this.scheduleCommit();

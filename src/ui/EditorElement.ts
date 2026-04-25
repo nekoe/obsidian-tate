@@ -91,7 +91,25 @@ export class EditorElement {
     handleCut(e: ClipboardEvent): void {
         const range = this.serializeSelectionToClipboard(e);
         if (!range) return;
+        // Pre-identify empty paragraph divs (only <br>) that may have their placeholder
+        // removed by deleteContents(). After the cut, any such div with no remaining
+        // children must be removed: <div></div> serializes identically to <div><br></div>
+        // ('\n'), so getValue() sees no change and commitToCm6() skips the CM6 update.
+        // This covers both same-div selections and cross-div selections where the empty
+        // line falls within the range.
+        const emptyLineDivs = Array.from(this.el.children).filter(
+            (n): n is HTMLElement =>
+                n instanceof HTMLElement &&
+                n.tagName === 'DIV' &&
+                n.childNodes.length === 1 &&
+                n.firstChild?.nodeName === 'BR'
+        );
         range.deleteContents();
+        for (const div of emptyLineDivs) {
+            if (div.isConnected && div.childNodes.length === 0) {
+                div.remove();
+            }
+        }
         // view.ts calls commitToCm6() after cut
     }
 
@@ -107,7 +125,11 @@ export class EditorElement {
         const text = Array.from(fragment.childNodes)
             .map(n => serializeNode(n, this.el))
             .join('');
-        e.clipboardData?.setData('text/plain', text);
+        // A single empty paragraph div (<div><br></div>) is the first child of the fragment
+        // and has previousSibling === null, so serializeNode returns '' for it. Map '' to
+        // '\n' so pasting an empty line inserts an empty paragraph rather than doing nothing.
+        const clipboardText = !text && fragment.childNodes.length > 0 ? '\n' : text;
+        e.clipboardData?.setData('text/plain', clipboardText);
         return range;
     }
 
@@ -211,10 +233,26 @@ export class EditorElement {
         afterRange.selectNodeContents(paragraphDiv);
         afterRange.setStart(range.startContainer, range.startOffset);
         const afterFragment = afterRange.extractContents();
+        // extractContents() splits a text node at the cursor offset, leaving '' empty text
+        // nodes in both directions:
+        //   cursor at START of text node → '' stays in paragraphDiv, real text → fragment
+        //   cursor at END of text node   → real text stays in paragraphDiv, '' → fragment
+        // Either empty text node causes childNodes.length > 0, bypassing the <br> placeholder
+        // check and producing an invisible <div></div>. Strip empty text nodes from both.
+        for (const n of Array.from(paragraphDiv.childNodes)) {
+            if (n instanceof Text && n.data === '') n.remove();
+        }
+        for (const n of Array.from(afterFragment.childNodes)) {
+            if (n instanceof Text && n.data === '') n.remove();
+        }
 
         // Append first line to the current (now truncated) paragraph
         const firstFrag = sanitizeHTMLToDom(parseInlineToHtml(lines[0]));
         paragraphDiv.append(...Array.from(firstFrag.childNodes));
+        // Ensure the paragraph div has a <br> placeholder if it ended up empty.
+        if (paragraphDiv.childNodes.length === 0) {
+            paragraphDiv.appendChild(document.createElement('br'));
+        }
 
         // Create a new <div> for each remaining line
         let insertAfter: Element = paragraphDiv;
@@ -230,6 +268,11 @@ export class EditorElement {
             if (i === lines.length - 1) {
                 // Last paragraph: attach the original after-cursor content
                 div.append(...Array.from(afterFragment.childNodes));
+            }
+
+            // Ensure every new div has a <br> placeholder if it ended up empty.
+            if (div.childNodes.length === 0) {
+                div.appendChild(document.createElement('br'));
             }
 
             insertAfter.after(div);
@@ -271,6 +314,16 @@ export class EditorElement {
         range.collapse(true);
         const sel = window.getSelection();
         if (sel) { sel.removeAllRanges(); sel.addRange(range); }
+    }
+
+    // Removes any <div></div> children left by Chrome's native cut-line behavior.
+    // Called from the input handler when inputType === 'deleteByCut'.
+    cleanupEmptyParagraphDivs(): void {
+        for (const child of Array.from(this.el.childNodes)) {
+            if (child instanceof HTMLElement && child.tagName === 'DIV' && child.childNodes.length === 0) {
+                child.remove();
+            }
+        }
     }
 
     // Clears all content and shows the placeholder (used when no file is active).
