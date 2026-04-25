@@ -158,9 +158,33 @@ export class EditorElement {
         const sel = window.getSelection()!;
         const paragraphDiv = this.findParagraphDiv(range.startContainer);
 
+        // Cursor is directly on the editor element (between paragraph divs, not inside one).
+        // This happens after deleteContents() removes whole-paragraph divs and collapses
+        // the range to an inter-div offset on the editor root. Insert new <div>s at that
+        // position instead of falling through to the <br> fallback, which would create
+        // bare text nodes and <br>s directly inside the editor and corrupt patchParagraphs.
+        if (!this.inlineEditor.isExpanded() && range.startContainer === this.el) {
+            const refNode = this.el.childNodes[range.startOffset] ?? null;
+            let lastDiv: HTMLElement | null = null;
+            for (const line of lines) {
+                const div = document.createElement('div');
+                div.replaceChildren(sanitizeHTMLToDom(parseInlineToHtml(line) || '<br>'));
+                this.el.insertBefore(div, refNode);
+                lastDiv = div;
+            }
+            if (lastDiv) {
+                const r = document.createRange();
+                r.selectNodeContents(lastDiv);
+                r.collapse(false);
+                sel.removeAllRanges();
+                sel.addRange(r);
+            }
+            return;
+        }
+
         if (!paragraphDiv || this.inlineEditor.isExpanded()) {
             // Fallback: insert as <br>-separated inline content.
-            // Also used when an inline element is expanded (splitting the div would corrupt the tate-editing span).
+            // Used when an inline element is expanded (splitting the div would corrupt the tate-editing span).
             for (let i = 0; i < lines.length; i++) {
                 if (i > 0) {
                     const br = document.createElement('br');
