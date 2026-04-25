@@ -111,10 +111,11 @@ window causes the loss.
 The × button is unaffected because `document.activeElement` has not yet moved when
 `onClose` runs, so `getViewCursorOffset()` is used directly.
 
-**Potential fix (not yet applied):** Set `lastKnownViewOffset` synchronously at every
+**Fix (applied):** `lastKnownViewOffset` is now set synchronously at every
 `setViewCursorOffset()` call site (`restoreViewOffset` and the `pendingCursorOffset`
 apply path in `active-leaf-change`), eliminating the dependency on the asynchronous
-`selectionchange`.
+`selectionchange`. This was added as part of the scroll restore fix for
+`content-visibility: auto` (see the section below).
 
 ## `content-visibility: auto` and Scroll Restore
 
