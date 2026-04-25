@@ -346,6 +346,16 @@ export class EditorElement {
         const nextLines = nextContent ? nextContent.split('\n') : [''];
         const el = this.el;
 
+        // If the DOM div count does not match prevContent's line count, the DOM structure has
+        // diverged from prevContent — typically because the paste fallback path inserted
+        // <br>-separated content inside one div (or bare nodes directly in the editor element)
+        // instead of creating one <div> per line. In that case prevLines[i] does not reliably
+        // describe div[i], so fall back to a full rebuild from nextContent.
+        if (el.children.length !== prevLines.length) {
+            el.replaceChildren(sanitizeHTMLToDom(parseToHtml(nextContent)));
+            return;
+        }
+
         // Adjust paragraph count without touching unchanged trailing divs
         while (el.children.length < nextLines.length) {
             el.appendChild(document.createElement('div'));
