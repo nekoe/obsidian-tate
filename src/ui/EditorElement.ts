@@ -325,17 +325,41 @@ export class EditorElement {
 
     // Called after CM6 Undo/Redo. Applies content to the vertical writing view and
     // restores the cursor by converting srcOffset (CM6 cursor position) via srcToView.
-    applyFromCm6(content: string, srcOffset: number): void {
+    // prevContent must equal the current DOM content (caller guarantees prevContent !== content).
+    applyFromCm6(prevContent: string, content: string, srcOffset: number): void {
         // Clear any expanded span (CM6 state is the source of truth, so force reset)
         this.inlineEditor.reset();
-        // Update DOM only if content changed
-        if (this.getValue() !== content) {
-            this.el.replaceChildren(sanitizeHTMLToDom(parseToHtml(content)));
-        }
+        // Patch only the paragraph divs whose source line changed, preserving the
+        // content-visibility: auto size cache for unchanged paragraphs. This avoids the
+        // O(N) replaceChildren cost and prevents the scroll-width collapse that causes
+        // scroll position to jump after Undo/Redo on large files.
+        this.patchParagraphs(prevContent, content);
         // Convert CM6 source offset to visible offset and restore cursor
         const segs = buildSegmentMap(content);
         const viewOffset = srcToView(segs, srcOffset);
         this.setVisibleOffset(viewOffset);
+    }
+
+    // Updates paragraph divs to match nextContent, replacing only divs whose line changed.
+    private patchParagraphs(prevContent: string, nextContent: string): void {
+        const prevLines = prevContent.split('\n');
+        const nextLines = nextContent ? nextContent.split('\n') : [''];
+        const el = this.el;
+
+        // Adjust paragraph count without touching unchanged trailing divs
+        while (el.children.length < nextLines.length) {
+            el.appendChild(document.createElement('div'));
+        }
+        while (el.children.length > nextLines.length) {
+            el.removeChild(el.lastChild!);
+        }
+
+        for (let i = 0; i < nextLines.length; i++) {
+            if (prevLines[i] === nextLines[i]) continue;
+            const div = el.children[i] as HTMLElement;
+            const html = parseInlineToHtml(nextLines[i]) || '<br>';
+            div.replaceChildren(sanitizeHTMLToDom(html));
+        }
     }
 
     /** Returns whether a tate-editing span is currently expanded (used by view.ts to decide cursor sync). */
