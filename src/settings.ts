@@ -167,5 +167,18 @@ export class TateSettingTab extends PluginSettingTab {
                     await this.plugin.saveSettings();
                     this.plugin.applySettingsToAllViews();
                 }));
+
+        const kofiEl = containerEl.createDiv({ cls: 'tate-kofi-banner' });
+        const kofiLink = kofiEl.createEl('a', { href: 'https://ko-fi.com/T6T71YGS7B' });
+        kofiLink.setAttr('target', '_blank');
+        kofiLink.createEl('img', {
+            attr: {
+                height: '36',
+                style: 'border:0px;height:36px;',
+                src: 'https://storage.ko-fi.com/cdn/kofi6.png?v=6',
+                border: '0',
+                alt: 'Buy Me a Coffee at ko-fi.com',
+            },
+        });
     }
 }
