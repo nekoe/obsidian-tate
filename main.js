@@ -1788,12 +1788,15 @@ var EditorElement = class {
     );
     range.deleteContents();
     for (const div of emptyLineDivs) {
-      if (div.isConnected && div.childNodes.length === 0) {
-        div.remove();
-      }
+      if (!div.isConnected) continue;
+      const onlyEmptyText = Array.from(div.childNodes).every((c) => c instanceof Text && c.data === "");
+      if (div.childNodes.length === 0 || onlyEmptyText) div.remove();
     }
     for (const child of Array.from(this.el.children)) {
-      if (child instanceof HTMLElement && child.tagName === "DIV" && child.childNodes.length === 0) {
+      if (!(child instanceof HTMLElement) || child.tagName !== "DIV") continue;
+      const effectivelyEmpty = Array.from(child.childNodes).every((c) => c instanceof Text && c.data === "");
+      if (effectivelyEmpty) {
+        for (const c of Array.from(child.childNodes)) c.remove();
         child.appendChild(document.createElement("br"));
       }
     }

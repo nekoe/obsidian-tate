@@ -108,14 +108,21 @@ export class EditorElement {
         // Empty-line divs that had their <br> removed by deleteContents() represent
         // a whole empty paragraph being cut — remove the shell entirely.
         for (const div of emptyLineDivs) {
-            if (div.isConnected && div.childNodes.length === 0) {
-                div.remove();
-            }
+            if (!div.isConnected) continue;
+            const onlyEmptyText = Array.from(div.childNodes)
+                .every(c => c instanceof Text && c.data === '');
+            if (div.childNodes.length === 0 || onlyEmptyText) div.remove();
         }
-        // Any remaining <div> that is now empty (text content fully cut) must have its
-        // <br> placeholder restored so it renders as a visible empty line.
+        // Any remaining <div> whose text was fully cut must have its <br> placeholder
+        // restored. deleteContents() on a full text selection leaves the text node in
+        // place with data === '' rather than removing it, so check for effectively-empty
+        // (no children, or only empty Text nodes) rather than childNodes.length === 0.
         for (const child of Array.from(this.el.children)) {
-            if (child instanceof HTMLElement && child.tagName === 'DIV' && child.childNodes.length === 0) {
+            if (!(child instanceof HTMLElement) || child.tagName !== 'DIV') continue;
+            const effectivelyEmpty = Array.from(child.childNodes)
+                .every(c => c instanceof Text && c.data === '');
+            if (effectivelyEmpty) {
+                for (const c of Array.from(child.childNodes)) c.remove();
                 child.appendChild(document.createElement('br'));
             }
         }
