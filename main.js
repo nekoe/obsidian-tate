@@ -1792,6 +1792,11 @@ var EditorElement = class {
         div.remove();
       }
     }
+    for (const child of Array.from(this.el.children)) {
+      if (child instanceof HTMLElement && child.tagName === "DIV" && child.childNodes.length === 0) {
+        child.appendChild(document.createElement("br"));
+      }
+    }
   }
   // Serializes the current selection to Aozora notation and writes it to text/plain.
   // Returns the range on success (for cut to delete), or null if nothing to serialize.
