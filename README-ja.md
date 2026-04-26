@@ -2,6 +2,8 @@
 
 Obsidian 用の縦書きエディタプラグインです。`writing-mode: vertical-rl` による本格的な縦書き表示と編集に対応しています。
 
+[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/T6T71YGS7B)
+
 ## 機能
 
 ### 青空文庫記法によるルビ・縦中横・傍点

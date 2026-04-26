@@ -2,6 +2,8 @@
 
 An Obsidian plugin that brings authentic vertical writing (縦書き) to your notes. Built on `writing-mode: vertical-rl`, it renders and edits Japanese text in the traditional top-to-bottom, right-to-left layout.
 
+[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/T6T71YGS7B)
+
 [日本語版 README はこちら](README-ja.md)
 
 ## Features
