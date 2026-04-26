@@ -54,6 +54,13 @@ Controls which characters are forbidden at the start or end of a line (punctuati
 | `Loose` | Newspaper style — relaxed rules that favor tighter wrapping |
 | `Anywhere` | No restrictions — break anywhere |
 
+### Other Features
+
+- **Bidirectional real-time sync:** Edits and Undo/Redo operations stay in sync with the Obsidian Markdown view in real time.
+- **Character count in the status bar:** The character count (excluding Aozora notation) is displayed in the Obsidian status bar.
+- **Smooth editing on large files:** Input and Undo/Redo remain responsive even on large files. (On very large files there may be a brief lag before editing becomes available after the file finishes loading.)
+- **Cursor position persistence:** The cursor position is saved when a file is closed and automatically restored the next time it is opened.
+
 ## Installation (from source)
 
 1. Clone the repository and build:
