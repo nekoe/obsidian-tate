@@ -1819,8 +1819,23 @@ var EditorElement = class {
     if (!sel || sel.rangeCount === 0) return;
     const range = sel.getRangeAt(0);
     range.deleteContents();
+    if (range.startContainer === this.el) {
+      const at = this.el.childNodes[range.startOffset];
+      const before = this.el.childNodes[range.startOffset - 1];
+      const isEffectivelyEmpty = (n) => n instanceof HTMLElement && n.tagName === "DIV" && Array.from(n.childNodes).every((c) => c instanceof Text && c.data === "");
+      const adoptDiv = (div) => {
+        for (const c of Array.from(div.childNodes)) c.remove();
+        range.setStart(div, 0);
+        range.collapse(true);
+      };
+      if (isEffectivelyEmpty(at)) {
+        adoptDiv(at);
+      } else if (isEffectivelyEmpty(before)) {
+        adoptDiv(before);
+      }
+    }
     const lines = text.split("\n");
-    if (lines.length === 1) {
+    if (lines.length === 1 && range.startContainer !== this.el) {
       this.insertParsedInline(range, lines[0]);
     } else {
       this.insertParsedParagraphs(range, lines);
@@ -2054,7 +2069,12 @@ var EditorElement = class {
       el.removeChild(el.lastChild);
     }
     for (let i = 0; i < nextLines.length; i++) {
-      if (prevLines[i] === nextLines[i]) continue;
+      if (prevLines[i] === nextLines[i]) {
+        if (nextLines[i] === "" && el.children[i].childNodes.length === 0) {
+          el.children[i].appendChild(document.createElement("br"));
+        }
+        continue;
+      }
       const div = el.children[i];
       const html = parseInlineToHtml(nextLines[i]) || "<br>";
       div.replaceChildren((0, import_obsidian3.sanitizeHTMLToDom)(html));

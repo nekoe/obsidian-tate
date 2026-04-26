@@ -146,8 +146,38 @@ export class EditorElement {
         const range = sel.getRangeAt(0);
         range.deleteContents();
 
+        // In vertical writing mode the selection boundaries often land at the editor root
+        // level (this.el) rather than inside a paragraph div. When that happens,
+        // deleteContents() may delete only the <br> placeholder of an empty paragraph div,
+        // leaving a <div></div> shell adjacent to the collapsed cursor. Move the cursor
+        // into that shell so that subsequent paste logic inserts content at the correct
+        // location instead of creating a bare text node directly inside this.el.
+        if (range.startContainer === this.el) {
+            const at     = this.el.childNodes[range.startOffset] as Node | undefined;
+            const before = this.el.childNodes[range.startOffset - 1] as Node | undefined;
+            // A div is "effectively empty" if it has no children, or if all children are
+            // empty Text nodes left by splitText(0) during deleteContents().
+            const isEffectivelyEmpty = (n: Node | undefined): n is HTMLElement =>
+                n instanceof HTMLElement && n.tagName === 'DIV' &&
+                Array.from(n.childNodes).every(c => c instanceof Text && c.data === '');
+            // Move cursor into the empty shell and strip any empty text node artifacts.
+            const adoptDiv = (div: HTMLElement) => {
+                for (const c of Array.from(div.childNodes)) c.remove();
+                range.setStart(div, 0);
+                range.collapse(true);
+            };
+            if (isEffectivelyEmpty(at)) {
+                adoptDiv(at);
+            } else if (isEffectivelyEmpty(before)) {
+                adoptDiv(before);
+            }
+        }
+
         const lines = text.split('\n');
-        if (lines.length === 1) {
+        // When the cursor is still at the editor root level (no adjacent empty div to adopt),
+        // route single-line paste through insertParsedParagraphs, which has a dedicated
+        // handler for the this.el case and creates a proper <div> instead of a bare text node.
+        if (lines.length === 1 && range.startContainer !== this.el) {
             this.insertParsedInline(range, lines[0]);
         } else {
             this.insertParsedParagraphs(range, lines);
@@ -443,7 +473,15 @@ export class EditorElement {
         }
 
         for (let i = 0; i < nextLines.length; i++) {
-            if (prevLines[i] === nextLines[i]) continue;
+            if (prevLines[i] === nextLines[i]) {
+                // Defensive: a prior paste may have left a <div></div> (empty div without <br>)
+                // for an empty line. The content is identical so the diff skips it, but the
+                // missing <br> makes the column invisible. Restore it here.
+                if (nextLines[i] === '' && (el.children[i] as HTMLElement).childNodes.length === 0) {
+                    (el.children[i] as HTMLElement).appendChild(document.createElement('br'));
+                }
+                continue;
+            }
             const div = el.children[i] as HTMLElement;
             const html = parseInlineToHtml(nextLines[i]) || '<br>';
             div.replaceChildren(sanitizeHTMLToDom(html));
