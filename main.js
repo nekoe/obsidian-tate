@@ -2248,6 +2248,8 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian4.I
     // Guards classList.remove rAFs: a stale rAF from a superseded load will not remove
     // the class that belongs to a newer load (prevents fast-switching race condition).
     this.scrollRestoringGeneration = 0;
+    // Spinner element shown while tate-scroll-restoring is active (file load + scroll restore).
+    this.spinnerEl = null;
     // Last cursor offset observed while the editor had focus (updated on every selectionchange).
     // Fallback for save paths that run while the editor is unfocused: getViewCursorOffset()
     // returns 0 when the editor lacks focus, so this field preserves the last valid offset.
@@ -2270,6 +2272,8 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian4.I
     const editorEl = new EditorElement(container);
     this.editorEl = editorEl;
     editorEl.applySettings(this.plugin.settings);
+    const spinnerEl = container.createEl("div", { cls: "tate-loading-spinner" });
+    this.spinnerEl = spinnerEl;
     const syncCoordinator = new SyncCoordinator(
       this.app.vault,
       // Use committed text for comparison (not getValue() which may contain uncommitted IME text)
@@ -2422,11 +2426,14 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian4.I
         void (async () => {
           const gen = ++this.scrollRestoringGeneration;
           editorEl.el.classList.add("tate-scroll-restoring");
+          this.showLoadingSpinner();
           await syncCoordinator.loadFile(file);
           if (syncCoordinator.currentFile !== file) {
             requestAnimationFrame(() => {
-              if (this.scrollRestoringGeneration === gen)
+              if (this.scrollRestoringGeneration === gen) {
                 editorEl.el.classList.remove("tate-scroll-restoring");
+                this.hideLoadingSpinner();
+              }
             });
             return;
           }
@@ -2436,8 +2443,10 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian4.I
             this.restoreViewOffset(savedOffset);
           } else {
             requestAnimationFrame(() => {
-              if (this.scrollRestoringGeneration === gen)
+              if (this.scrollRestoringGeneration === gen) {
                 editorEl.el.classList.remove("tate-scroll-restoring");
+                this.hideLoadingSpinner();
+              }
             });
           }
         })();
@@ -2481,6 +2490,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian4.I
               this.pendingCursorOffset = null;
               el.setViewCursorOffset(offset);
               this.lastKnownViewOffset = offset;
+              this.hideLoadingSpinner();
               el.scrollCursorIntoView();
               requestAnimationFrame(() => {
                 if (this.scrollRestoringGeneration === gen)
@@ -2509,6 +2519,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian4.I
     if (activeFile) {
       const gen = ++this.scrollRestoringGeneration;
       (_a = this.editorEl) == null ? void 0 : _a.el.classList.add("tate-scroll-restoring");
+      this.showLoadingSpinner();
       await syncCoordinator.loadFile(activeFile);
       if (syncCoordinator.currentFile === activeFile) {
         this.lastKnownViewOffset = null;
@@ -2518,15 +2529,19 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian4.I
         } else {
           requestAnimationFrame(() => {
             var _a2;
-            if (this.scrollRestoringGeneration === gen)
+            if (this.scrollRestoringGeneration === gen) {
               (_a2 = this.editorEl) == null ? void 0 : _a2.el.classList.remove("tate-scroll-restoring");
+              this.hideLoadingSpinner();
+            }
           });
         }
       } else {
         requestAnimationFrame(() => {
           var _a2;
-          if (this.scrollRestoringGeneration === gen)
+          if (this.scrollRestoringGeneration === gen) {
             (_a2 = this.editorEl) == null ? void 0 : _a2.el.classList.remove("tate-scroll-restoring");
+            this.hideLoadingSpinner();
+          }
         });
       }
       return;
@@ -2536,6 +2551,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian4.I
         const file = leaf.view.file;
         const gen = ++this.scrollRestoringGeneration;
         (_b = this.editorEl) == null ? void 0 : _b.el.classList.add("tate-scroll-restoring");
+        this.showLoadingSpinner();
         await syncCoordinator.loadFile(file);
         if (syncCoordinator.currentFile === file) {
           this.lastKnownViewOffset = null;
@@ -2545,15 +2561,19 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian4.I
           } else {
             requestAnimationFrame(() => {
               var _a2;
-              if (this.scrollRestoringGeneration === gen)
+              if (this.scrollRestoringGeneration === gen) {
                 (_a2 = this.editorEl) == null ? void 0 : _a2.el.classList.remove("tate-scroll-restoring");
+                this.hideLoadingSpinner();
+              }
             });
           }
         } else {
           requestAnimationFrame(() => {
             var _a2;
-            if (this.scrollRestoringGeneration === gen)
+            if (this.scrollRestoringGeneration === gen) {
               (_a2 = this.editorEl) == null ? void 0 : _a2.el.classList.remove("tate-scroll-restoring");
+              this.hideLoadingSpinner();
+            }
           });
         }
         return;
@@ -2589,6 +2609,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian4.I
       const gen = this.scrollRestoringGeneration;
       requestAnimationFrame(() => {
         if (this.scrollRestoringGeneration !== gen) return;
+        this.hideLoadingSpinner();
         el.setViewCursorOffset(savedOffset);
         el.scrollCursorIntoView();
         requestAnimationFrame(() => {
@@ -2607,9 +2628,18 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian4.I
     const p = this.saveCursorForQuit();
     if (p) await p;
     (_a = this.syncCoordinator) == null ? void 0 : _a.dispose();
+    this.spinnerEl = null;
     if (!this.app.workspace.getActiveViewOfType(_VerticalWritingView)) {
       this.plugin.updateCharCount(null);
     }
+  }
+  showLoadingSpinner() {
+    var _a;
+    (_a = this.spinnerEl) == null ? void 0 : _a.classList.add("tate-loading-visible");
+  }
+  hideLoadingSpinner() {
+    var _a;
+    (_a = this.spinnerEl) == null ? void 0 : _a.classList.remove("tate-loading-visible");
   }
   applySettings(settings) {
     var _a;

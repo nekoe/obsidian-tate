@@ -1,5 +1,6 @@
 /* Vertical writing view container */
 .tate-container {
+    position: relative;
     width: 100%;
     height: 100%;
     overflow-x: auto;
@@ -44,6 +45,33 @@
    synchronously before the scroll call and removed one rAF later (see view.ts). */
 .tate-editor.tate-scroll-restoring > div {
     content-visibility: visible;
+}
+
+/* Loading spinner shown while tate-scroll-restoring is active. Removed in rAF 1
+   (before scrollIntoView) so it disappears simultaneously with the content reveal. */
+.tate-loading-spinner {
+    display: none;
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    margin-top: -14px;
+    margin-left: -14px;
+    width: 28px;
+    height: 28px;
+    border: 3px solid var(--background-modifier-border);
+    border-top-color: var(--interactive-accent);
+    border-radius: 50%;
+    animation: tate-spin 0.7s linear infinite;
+    z-index: 10;
+    pointer-events: none;
+}
+
+.tate-loading-spinner.tate-loading-visible {
+    display: block;
+}
+
+@keyframes tate-spin {
+    to { transform: rotate(360deg); }
 }
 
 /* Tate-chu-yoko (horizontal-in-vertical) */
