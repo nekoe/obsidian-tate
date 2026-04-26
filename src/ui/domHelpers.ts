@@ -112,6 +112,29 @@ export function findLastBaseTextInElement(
     return { node: lastText, offset: lastText.length };
 }
 
+// ---- Paragraph div utilities ----
+
+// Returns true if el has no children, or all children are empty Text nodes.
+// deleteContents() often leaves empty Text nodes (data === '') instead of removing
+// them outright, so a childNodes.length === 0 check alone is insufficient.
+export function isEffectivelyEmpty(el: HTMLElement): boolean {
+    return Array.from(el.childNodes).every(c => c instanceof Text && c.data === '');
+}
+
+// Removes all child nodes from el.
+export function clearChildren(el: HTMLElement): void {
+    for (const c of Array.from(el.childNodes)) c.remove();
+}
+
+// Ensures el contains exactly a <br> placeholder.
+// If el is effectively empty (no children, or only empty Text nodes), strips any
+// leftover empty Text nodes and appends a fresh <br>. Does nothing otherwise.
+export function ensureBrPlaceholder(el: HTMLElement): void {
+    if (!isEffectivelyEmpty(el)) return;
+    clearChildren(el);
+    el.appendChild(document.createElement('br'));
+}
+
 // ---- Pure computation ----
 
 export function rawOffsetForExpand(el: HTMLElement, node: Node, offset: number): number {

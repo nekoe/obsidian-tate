@@ -590,6 +590,17 @@ function findLastBaseTextInElement(el, rootEl) {
   if (!lastText) return null;
   return { node: lastText, offset: lastText.length };
 }
+function isEffectivelyEmpty(el) {
+  return Array.from(el.childNodes).every((c) => c instanceof Text && c.data === "");
+}
+function clearChildren(el) {
+  for (const c of Array.from(el.childNodes)) c.remove();
+}
+function ensureBrPlaceholder(el) {
+  if (!isEffectivelyEmpty(el)) return;
+  clearChildren(el);
+  el.appendChild(document.createElement("br"));
+}
 function rawOffsetForExpand(el, node, offset) {
   if (el.tagName === "RUBY") {
     const explicit = el.getAttribute("data-ruby-explicit") !== "false";
@@ -1788,17 +1799,11 @@ var EditorElement = class {
     );
     range.deleteContents();
     for (const div of emptyLineDivs) {
-      if (!div.isConnected) continue;
-      const onlyEmptyText = Array.from(div.childNodes).every((c) => c instanceof Text && c.data === "");
-      if (div.childNodes.length === 0 || onlyEmptyText) div.remove();
+      if (div.isConnected && isEffectivelyEmpty(div)) div.remove();
     }
     for (const child of Array.from(this.el.children)) {
-      if (!(child instanceof HTMLElement) || child.tagName !== "DIV") continue;
-      const effectivelyEmpty = Array.from(child.childNodes).every((c) => c instanceof Text && c.data === "");
-      if (effectivelyEmpty) {
-        for (const c of Array.from(child.childNodes)) c.remove();
-        child.appendChild(document.createElement("br"));
-      }
+      if (child instanceof HTMLElement && child.tagName === "DIV")
+        ensureBrPlaceholder(child);
     }
   }
   // Serializes the current selection to Aozora notation and writes it to text/plain.
@@ -1830,15 +1835,15 @@ var EditorElement = class {
     if (range.startContainer === this.el) {
       const at = this.el.childNodes[range.startOffset];
       const before = this.el.childNodes[range.startOffset - 1];
-      const isEffectivelyEmpty = (n) => n instanceof HTMLElement && n.tagName === "DIV" && Array.from(n.childNodes).every((c) => c instanceof Text && c.data === "");
+      const isParagraphEmpty = (n) => n instanceof HTMLElement && n.tagName === "DIV" && isEffectivelyEmpty(n);
       const adoptDiv = (div) => {
-        for (const c of Array.from(div.childNodes)) c.remove();
+        clearChildren(div);
         range.setStart(div, 0);
         range.collapse(true);
       };
-      if (isEffectivelyEmpty(at)) {
+      if (isParagraphEmpty(at)) {
         adoptDiv(at);
-      } else if (isEffectivelyEmpty(before)) {
+      } else if (isParagraphEmpty(before)) {
         adoptDiv(before);
       }
     }
@@ -1922,9 +1927,7 @@ var EditorElement = class {
     }
     const firstFrag = (0, import_obsidian3.sanitizeHTMLToDom)(parseInlineToHtml(lines[0]));
     paragraphDiv.append(...Array.from(firstFrag.childNodes));
-    if (paragraphDiv.childNodes.length === 0) {
-      paragraphDiv.appendChild(document.createElement("br"));
-    }
+    ensureBrPlaceholder(paragraphDiv);
     let insertAfter = paragraphDiv;
     let lastPastedNode = null;
     for (let i = 1; i < lines.length; i++) {
@@ -1936,9 +1939,7 @@ var EditorElement = class {
       if (i === lines.length - 1) {
         div.append(...Array.from(afterFragment.childNodes));
       }
-      if (div.childNodes.length === 0) {
-        div.appendChild(document.createElement("br"));
-      }
+      ensureBrPlaceholder(div);
       insertAfter.after(div);
       insertAfter = div;
     }
@@ -1982,9 +1983,8 @@ var EditorElement = class {
   // Called from the input handler when inputType === 'deleteByCut'.
   cleanupEmptyParagraphDivs() {
     for (const child of Array.from(this.el.childNodes)) {
-      if (child instanceof HTMLElement && child.tagName === "DIV" && child.childNodes.length === 0) {
+      if (child instanceof HTMLElement && child.tagName === "DIV" && isEffectivelyEmpty(child))
         child.remove();
-      }
     }
   }
   // Clears all content and shows the placeholder (used when no file is active).
@@ -2078,9 +2078,7 @@ var EditorElement = class {
     }
     for (let i = 0; i < nextLines.length; i++) {
       if (prevLines[i] === nextLines[i]) {
-        if (nextLines[i] === "" && el.children[i].childNodes.length === 0) {
-          el.children[i].appendChild(document.createElement("br"));
-        }
+        if (nextLines[i] === "") ensureBrPlaceholder(el.children[i]);
         continue;
       }
       const div = el.children[i];

@@ -4,6 +4,7 @@ import { buildSegmentMap, srcToView } from './SegmentMap';
 import { parseInlineToHtml, parseToHtml, serializeNode } from './AozoraParser';
 import { InlineEditor } from './InlineEditor';
 import { InputTransformer } from './InputTransformer';
+import { isEffectivelyEmpty, clearChildren, ensureBrPlaceholder } from './domHelpers';
 
 export class EditorElement {
     readonly el: HTMLDivElement;
@@ -108,23 +109,15 @@ export class EditorElement {
         // Empty-line divs that had their <br> removed by deleteContents() represent
         // a whole empty paragraph being cut — remove the shell entirely.
         for (const div of emptyLineDivs) {
-            if (!div.isConnected) continue;
-            const onlyEmptyText = Array.from(div.childNodes)
-                .every(c => c instanceof Text && c.data === '');
-            if (div.childNodes.length === 0 || onlyEmptyText) div.remove();
+            if (div.isConnected && isEffectivelyEmpty(div)) div.remove();
         }
         // Any remaining <div> whose text was fully cut must have its <br> placeholder
         // restored. deleteContents() on a full text selection leaves the text node in
-        // place with data === '' rather than removing it, so check for effectively-empty
-        // (no children, or only empty Text nodes) rather than childNodes.length === 0.
+        // place with data === '' rather than removing it; ensureBrPlaceholder handles both
+        // the childNodes.length === 0 and the empty-Text-node cases.
         for (const child of Array.from(this.el.children)) {
-            if (!(child instanceof HTMLElement) || child.tagName !== 'DIV') continue;
-            const effectivelyEmpty = Array.from(child.childNodes)
-                .every(c => c instanceof Text && c.data === '');
-            if (effectivelyEmpty) {
-                for (const c of Array.from(child.childNodes)) c.remove();
-                child.appendChild(document.createElement('br'));
-            }
+            if (child instanceof HTMLElement && child.tagName === 'DIV')
+                ensureBrPlaceholder(child);
         }
         // view.ts calls commitToCm6() after cut
     }
@@ -171,20 +164,19 @@ export class EditorElement {
         if (range.startContainer === this.el) {
             const at     = this.el.childNodes[range.startOffset] as Node | undefined;
             const before = this.el.childNodes[range.startOffset - 1] as Node | undefined;
-            // A div is "effectively empty" if it has no children, or if all children are
-            // empty Text nodes left by splitText(0) during deleteContents().
-            const isEffectivelyEmpty = (n: Node | undefined): n is HTMLElement =>
-                n instanceof HTMLElement && n.tagName === 'DIV' &&
-                Array.from(n.childNodes).every(c => c instanceof Text && c.data === '');
+            // A paragraph div is a target for cursor adoption if it has no children, or if
+            // all children are empty Text nodes left by splitText(0) during deleteContents().
+            const isParagraphEmpty = (n: Node | undefined): n is HTMLElement =>
+                n instanceof HTMLElement && n.tagName === 'DIV' && isEffectivelyEmpty(n);
             // Move cursor into the empty shell and strip any empty text node artifacts.
             const adoptDiv = (div: HTMLElement) => {
-                for (const c of Array.from(div.childNodes)) c.remove();
+                clearChildren(div);
                 range.setStart(div, 0);
                 range.collapse(true);
             };
-            if (isEffectivelyEmpty(at)) {
+            if (isParagraphEmpty(at)) {
                 adoptDiv(at);
-            } else if (isEffectivelyEmpty(before)) {
+            } else if (isParagraphEmpty(before)) {
                 adoptDiv(before);
             }
         }
@@ -295,10 +287,7 @@ export class EditorElement {
         // Append first line to the current (now truncated) paragraph
         const firstFrag = sanitizeHTMLToDom(parseInlineToHtml(lines[0]));
         paragraphDiv.append(...Array.from(firstFrag.childNodes));
-        // Ensure the paragraph div has a <br> placeholder if it ended up empty.
-        if (paragraphDiv.childNodes.length === 0) {
-            paragraphDiv.appendChild(document.createElement('br'));
-        }
+        ensureBrPlaceholder(paragraphDiv);
 
         // Create a new <div> for each remaining line
         let insertAfter: Element = paragraphDiv;
@@ -316,10 +305,7 @@ export class EditorElement {
                 div.append(...Array.from(afterFragment.childNodes));
             }
 
-            // Ensure every new div has a <br> placeholder if it ended up empty.
-            if (div.childNodes.length === 0) {
-                div.appendChild(document.createElement('br'));
-            }
+            ensureBrPlaceholder(div);
 
             insertAfter.after(div);
             insertAfter = div;
@@ -366,9 +352,8 @@ export class EditorElement {
     // Called from the input handler when inputType === 'deleteByCut'.
     cleanupEmptyParagraphDivs(): void {
         for (const child of Array.from(this.el.childNodes)) {
-            if (child instanceof HTMLElement && child.tagName === 'DIV' && child.childNodes.length === 0) {
+            if (child instanceof HTMLElement && child.tagName === 'DIV' && isEffectivelyEmpty(child))
                 child.remove();
-            }
         }
     }
 
@@ -493,9 +478,7 @@ export class EditorElement {
                 // Defensive: a prior paste may have left a <div></div> (empty div without <br>)
                 // for an empty line. The content is identical so the diff skips it, but the
                 // missing <br> makes the column invisible. Restore it here.
-                if (nextLines[i] === '' && (el.children[i] as HTMLElement).childNodes.length === 0) {
-                    (el.children[i] as HTMLElement).appendChild(document.createElement('br'));
-                }
+                if (nextLines[i] === '') ensureBrPlaceholder(el.children[i] as HTMLElement);
                 continue;
             }
             const div = el.children[i] as HTMLElement;

@@ -6,6 +6,7 @@ import {
     findAncestor, findBoutenAncestor, findTcyAncestor, isInsideRuby,
     findCursorAnchorAncestor, isInsideRtNode, findLastBaseTextInElement,
     rawOffsetForExpand, getExtraCharsFromAnnotation,
+    isEffectivelyEmpty, clearChildren, ensureBrPlaceholder,
 } from './domHelpers';
 
 // ================================================================
@@ -424,6 +425,115 @@ describe('getExtraCharsFromAnnotation', () => {
 
     it('returns empty string when bouten content matches exactly', () => {
         expect(getExtraCharsFromAnnotation('春夏［＃「春夏」に傍点］')).toBe('');
+    });
+});
+
+// ================================================================
+// Paragraph div utilities
+// ================================================================
+
+describe('isEffectivelyEmpty', () => {
+    it('returns true for a div with no children', () => {
+        const div = document.createElement('div');
+        expect(isEffectivelyEmpty(div)).toBe(true);
+    });
+
+    it('returns true for a div containing only an empty Text node', () => {
+        const div = document.createElement('div');
+        div.appendChild(document.createTextNode(''));
+        expect(isEffectivelyEmpty(div)).toBe(true);
+    });
+
+    it('returns true for a div containing multiple empty Text nodes', () => {
+        const div = document.createElement('div');
+        div.appendChild(document.createTextNode(''));
+        div.appendChild(document.createTextNode(''));
+        expect(isEffectivelyEmpty(div)).toBe(true);
+    });
+
+    it('returns false for a div with a non-empty Text node', () => {
+        const div = document.createElement('div');
+        div.appendChild(document.createTextNode('x'));
+        expect(isEffectivelyEmpty(div)).toBe(false);
+    });
+
+    it('returns false for a div containing a <br>', () => {
+        const div = document.createElement('div');
+        div.appendChild(document.createElement('br'));
+        expect(isEffectivelyEmpty(div)).toBe(false);
+    });
+
+    it('returns false for a div containing an element child', () => {
+        const div = document.createElement('div');
+        div.appendChild(document.createElement('span'));
+        expect(isEffectivelyEmpty(div)).toBe(false);
+    });
+
+    it('returns false when empty Text node and non-empty Text node coexist', () => {
+        const div = document.createElement('div');
+        div.appendChild(document.createTextNode(''));
+        div.appendChild(document.createTextNode('y'));
+        expect(isEffectivelyEmpty(div)).toBe(false);
+    });
+});
+
+describe('clearChildren', () => {
+    it('removes all children from an element', () => {
+        const div = document.createElement('div');
+        div.appendChild(document.createTextNode('abc'));
+        div.appendChild(document.createElement('br'));
+        clearChildren(div);
+        expect(div.childNodes.length).toBe(0);
+    });
+
+    it('is a no-op on an already-empty element', () => {
+        const div = document.createElement('div');
+        expect(() => clearChildren(div)).not.toThrow();
+        expect(div.childNodes.length).toBe(0);
+    });
+});
+
+describe('ensureBrPlaceholder', () => {
+    it('appends <br> to an empty div', () => {
+        const div = document.createElement('div');
+        ensureBrPlaceholder(div);
+        expect(div.childNodes.length).toBe(1);
+        expect(div.firstChild?.nodeName).toBe('BR');
+    });
+
+    it('replaces empty Text nodes with <br>', () => {
+        const div = document.createElement('div');
+        div.appendChild(document.createTextNode(''));
+        div.appendChild(document.createTextNode(''));
+        ensureBrPlaceholder(div);
+        expect(div.childNodes.length).toBe(1);
+        expect(div.firstChild?.nodeName).toBe('BR');
+    });
+
+    it('does not modify a div that already has a <br>', () => {
+        const div = document.createElement('div');
+        const br = document.createElement('br');
+        div.appendChild(br);
+        ensureBrPlaceholder(div);
+        expect(div.childNodes.length).toBe(1);
+        expect(div.firstChild).toBe(br);
+    });
+
+    it('does not modify a div with text content', () => {
+        const div = document.createElement('div');
+        const text = document.createTextNode('hello');
+        div.appendChild(text);
+        ensureBrPlaceholder(div);
+        expect(div.childNodes.length).toBe(1);
+        expect(div.firstChild).toBe(text);
+    });
+
+    it('does not modify a div with mixed content', () => {
+        const div = document.createElement('div');
+        div.appendChild(document.createTextNode('a'));
+        div.appendChild(document.createElement('span'));
+        ensureBrPlaceholder(div);
+        expect(div.childNodes.length).toBe(2);
     });
 });
 
