@@ -572,6 +572,7 @@ export class VerticalWritingView extends ItemView {
         // Derive cursor position from the diff (end of the restored/deleted text)
         const srcOffset = this.deriveUndoRedoCursor(prevContent, newContent);
         editorEl.applyFromCm6(prevContent, newContent, srcOffset);
+        editorEl.scrollCursorIntoView('nearest', 'nearest');
         // Update last committed content to reflect the new CM6 state.
         // Without this, onExternalModify() would misfire on the CM6 autosave modify event,
         // causing the tate view DOM to reset and the cursor to jump during input right after undo.

@@ -133,3 +133,4 @@ that load's `scrollCursorIntoView()` to run with 44 px estimates.
 | File switch (`file-open` event) | before `loadFile()` in `file-open` handler | rAF 1 in `restoreViewOffset` | rAF 2 in `restoreViewOffset` |
 | No saved cursor (any trigger) | before `loadFile()` | — | cleanup rAF (generation-guarded) |
 | File changed during async load | before `loadFile()` | — | cleanup rAF (generation-guarded) |
+| Undo/Redo (`Cmd+Z` / `Cmd+Shift+Z`) | — (not needed; `patchParagraphs` preserves size cache for unchanged paragraphs) | synchronously in `doUndoRedo` | — |

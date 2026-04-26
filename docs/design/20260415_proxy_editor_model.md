@@ -57,7 +57,8 @@ cm6.undo() / cm6.redo()          // execute Undo/Redo on CM6 side
 newContent = cm6.getValue()
 if newContent === prevContent: return  // stack empty or no change → leave cursor as-is
 srcOffset = deriveUndoRedoCursor(prevContent, newContent)
-editorEl.applyFromCm6(newContent, srcOffset)
+editorEl.applyFromCm6(prevContent, newContent, srcOffset)
+editorEl.scrollCursorIntoView('nearest', 'nearest')  // scroll cursor into view (minimal scroll)
 ```
 
 ### Why `cm6.getCursor()` Is Not Used
@@ -73,8 +74,8 @@ Returns the end of the changed region in `next` from the diff between `prevConte
 
 ### Cursor Restoration via `applyFromCm6()`
 
-`EditorElement.applyFromCm6(content, srcOffset)`:
-1. Clear `expandedEl` / `expandedElOriginalText` / `savedRange` (remove stale references)
-2. If content changed, update DOM with `replaceChildren(sanitizeHTMLToDom(parseToHtml(content)))`
+`EditorElement.applyFromCm6(prevContent, content, srcOffset)`:
+1. `inlineEditor.reset()` — collapses any expanded inline span
+2. `patchParagraphs(prevContent, content)` — diff-updates only changed paragraph `<div>` nodes (see `20260425_undo_redo_patch_paragraphs.md`)
 3. Convert source offset to view offset using `buildSegmentMap(content)` + `srcToView(segs, srcOffset)`
 4. Set cursor with `setVisibleOffset(viewOffset)`

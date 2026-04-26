@@ -2120,13 +2120,13 @@ var EditorElement = class {
   setViewCursorOffset(offset) {
     this.setVisibleOffset(offset);
   }
-  /** Scrolls the current cursor position into the center of the view. */
-  scrollCursorIntoView() {
+  /** Scrolls the current cursor position into view. Defaults to centering; pass 'nearest' for minimal scroll. */
+  scrollCursorIntoView(block = "center", inline = "center") {
     var _a;
     const sel = window.getSelection();
     if (sel && sel.rangeCount > 0) {
       const node = sel.getRangeAt(0).startContainer;
-      (_a = node instanceof Element ? node : node.parentElement) == null ? void 0 : _a.scrollIntoView({ block: "center", inline: "center" });
+      (_a = node instanceof Element ? node : node.parentElement) == null ? void 0 : _a.scrollIntoView({ block, inline });
     }
   }
   // Called after input/compositionend to manage U+200B in the cursor anchor span.
@@ -2723,6 +2723,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian4.I
     if (newContent === prevContent) return;
     const srcOffset = this.deriveUndoRedoCursor(prevContent, newContent);
     editorEl.applyFromCm6(prevContent, newContent, srcOffset);
+    editorEl.scrollCursorIntoView("nearest", "nearest");
     this.lastCommittedContent = newContent;
     this.plugin.updateCharCount(countChars(newContent));
   }

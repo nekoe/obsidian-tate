@@ -513,12 +513,12 @@ export class EditorElement {
         this.setVisibleOffset(offset);
     }
 
-    /** Scrolls the current cursor position into the center of the view. */
-    scrollCursorIntoView(): void {
+    /** Scrolls the current cursor position into view. Defaults to centering; pass 'nearest' for minimal scroll. */
+    scrollCursorIntoView(block: ScrollLogicalPosition = 'center', inline: ScrollLogicalPosition = 'center'): void {
         const sel = window.getSelection();
         if (sel && sel.rangeCount > 0) {
             const node = sel.getRangeAt(0).startContainer;
-            (node instanceof Element ? node : node.parentElement)?.scrollIntoView({ block: 'center', inline: 'center' });
+            (node instanceof Element ? node : node.parentElement)?.scrollIntoView({ block, inline });
         }
     }
 

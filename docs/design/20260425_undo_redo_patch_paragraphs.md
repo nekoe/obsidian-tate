@@ -144,6 +144,9 @@ This is guaranteed by the call chain in `doUndoRedo`:
 3. `inlineEditor.reset()` at the start of `applyFromCm6` — collapses any expanded
    inline span, making the DOM reflect the plain source text (matching `prevContent`).
 4. `patchParagraphs(prevContent, content)` — diff is therefore valid.
+5. `editorEl.scrollCursorIntoView('nearest', 'nearest')` — scrolls the cursor into view
+   with minimal scroll after `applyFromCm6` returns. Because `patchParagraphs` preserves
+   the size cache of unchanged paragraphs, no `tate-scroll-restoring` class is needed here.
 
 ### `applyFromCm6` signature change
 
