@@ -106,6 +106,9 @@ See the design documents in `docs/design/` for details:
 - `autoIndentOnInput`: insert leading full-width spaces at line start when a character is typed (default: `true`)
 - `matchPrecedingIndent`: match the leading full-width space count of the preceding paragraph (default: `true`). Independent of `autoIndentOnInput`.
 - `removeBracketIndent`: remove one leading full-width space when a full-width opening bracket is typed at line start (default: `true`)
+- `suppressRubyInline`: suppress inline expansion of ruby elements when the cursor moves into them (default: `false`)
+- `suppressTcyInline`: suppress inline expansion of tate-chu-yoko elements when the cursor moves into them (default: `false`)
+- `suppressBoutenInline`: suppress inline expansion of emphasis mark (bouten) elements when the cursor moves into them (default: `false`)
 
 After changing settings, call `plugin.applySettingsToAllViews()` to apply them immediately to all open views.
 

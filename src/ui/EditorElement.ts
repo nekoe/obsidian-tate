@@ -369,9 +369,9 @@ export class EditorElement {
         this.el.style.lineBreak = settings.lineBreak;
         this.inputTransformer.updateSettings(settings);
         this.inlineEditor.setExpandSettings(
-            settings.expandRubyInline,
-            settings.expandTcyInline,
-            settings.expandBoutenInline,
+            !settings.suppressRubyInline,
+            !settings.suppressTcyInline,
+            !settings.suppressBoutenInline,
         );
     }
 

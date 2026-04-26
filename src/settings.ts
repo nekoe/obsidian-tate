@@ -9,9 +9,9 @@ export interface TatePluginSettings {
     autoIndentOnInput: boolean;
     matchPrecedingIndent: boolean;
     removeBracketIndent: boolean;
-    expandRubyInline: boolean;
-    expandTcyInline: boolean;
-    expandBoutenInline: boolean;
+    suppressRubyInline: boolean;
+    suppressTcyInline: boolean;
+    suppressBoutenInline: boolean;
 }
 
 export const DEFAULT_SETTINGS: TatePluginSettings = {
@@ -22,9 +22,9 @@ export const DEFAULT_SETTINGS: TatePluginSettings = {
     autoIndentOnInput: true,
     matchPrecedingIndent: true,
     removeBracketIndent: true,
-    expandRubyInline: true,
-    expandTcyInline: true,
-    expandBoutenInline: true,
+    suppressRubyInline: false,
+    suppressTcyInline: false,
+    suppressBoutenInline: false,
 };
 
 export class TateSettingTab extends PluginSettingTab {
@@ -136,34 +136,34 @@ export class TateSettingTab extends PluginSettingTab {
         });
 
         new Setting(containerEl)
-            .setName('ルビをインライン展開する')
-            .setDesc('カーソルがルビ上に移動したとき、青空記法テキストに展開して編集できるようにする (default on)')
+            .setName('ルビのインライン展開を抑制する')
+            .setDesc('カーソルがルビ上に移動しても青空記法テキストに展開しない (default off)')
             .addToggle(toggle => toggle
-                .setValue(this.plugin.settings.expandRubyInline)
+                .setValue(this.plugin.settings.suppressRubyInline)
                 .onChange(async (value) => {
-                    this.plugin.settings.expandRubyInline = value;
+                    this.plugin.settings.suppressRubyInline = value;
                     await this.plugin.saveSettings();
                     this.plugin.applySettingsToAllViews();
                 }));
 
         new Setting(containerEl)
-            .setName('縦中横をインライン展開する')
-            .setDesc('カーソルが縦中横上に移動したとき、青空記法テキストに展開して編集できるようにする (default on)')
+            .setName('縦中横のインライン展開を抑制する')
+            .setDesc('カーソルが縦中横上に移動しても青空記法テキストに展開しない (default off)')
             .addToggle(toggle => toggle
-                .setValue(this.plugin.settings.expandTcyInline)
+                .setValue(this.plugin.settings.suppressTcyInline)
                 .onChange(async (value) => {
-                    this.plugin.settings.expandTcyInline = value;
+                    this.plugin.settings.suppressTcyInline = value;
                     await this.plugin.saveSettings();
                     this.plugin.applySettingsToAllViews();
                 }));
 
         new Setting(containerEl)
-            .setName('傍点をインライン展開する')
-            .setDesc('カーソルが傍点上に移動したとき、青空記法テキストに展開して編集できるようにする (default on)')
+            .setName('傍点のインライン展開を抑制する')
+            .setDesc('カーソルが傍点上に移動しても青空記法テキストに展開しない (default off)')
             .addToggle(toggle => toggle
-                .setValue(this.plugin.settings.expandBoutenInline)
+                .setValue(this.plugin.settings.suppressBoutenInline)
                 .onChange(async (value) => {
-                    this.plugin.settings.expandBoutenInline = value;
+                    this.plugin.settings.suppressBoutenInline = value;
                     await this.plugin.saveSettings();
                     this.plugin.applySettingsToAllViews();
                 }));

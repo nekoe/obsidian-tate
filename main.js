@@ -92,9 +92,9 @@ var DEFAULT_SETTINGS = {
   autoIndentOnInput: true,
   matchPrecedingIndent: true,
   removeBracketIndent: true,
-  expandRubyInline: true,
-  expandTcyInline: true,
-  expandBoutenInline: true
+  suppressRubyInline: false,
+  suppressTcyInline: false,
+  suppressBoutenInline: false
 };
 var TateSettingTab = class extends import_obsidian.PluginSettingTab {
   constructor(app, plugin) {
@@ -147,18 +147,18 @@ var TateSettingTab = class extends import_obsidian.PluginSettingTab {
       text: "\u30C7\u30D5\u30A9\u30EB\u30C8\u5024\u4EE5\u5916\u306B\u8A2D\u5B9A\u3059\u308B\u5834\u5408\u3001\u30AB\u30FC\u30BD\u30EB\u79FB\u52D5\u306E\u6319\u52D5\u304C\u4E0D\u5B89\u5B9A\u306B\u306A\u308B\u5834\u5408\u304C\u3042\u308A\u307E\u3059\u3002",
       cls: "setting-item-description"
     });
-    new import_obsidian.Setting(containerEl).setName("\u30EB\u30D3\u3092\u30A4\u30F3\u30E9\u30A4\u30F3\u5C55\u958B\u3059\u308B").setDesc("\u30AB\u30FC\u30BD\u30EB\u304C\u30EB\u30D3\u4E0A\u306B\u79FB\u52D5\u3057\u305F\u3068\u304D\u3001\u9752\u7A7A\u8A18\u6CD5\u30C6\u30AD\u30B9\u30C8\u306B\u5C55\u958B\u3057\u3066\u7DE8\u96C6\u3067\u304D\u308B\u3088\u3046\u306B\u3059\u308B (default on)").addToggle((toggle) => toggle.setValue(this.plugin.settings.expandRubyInline).onChange(async (value) => {
-      this.plugin.settings.expandRubyInline = value;
+    new import_obsidian.Setting(containerEl).setName("\u30EB\u30D3\u306E\u30A4\u30F3\u30E9\u30A4\u30F3\u5C55\u958B\u3092\u6291\u5236\u3059\u308B").setDesc("\u30AB\u30FC\u30BD\u30EB\u304C\u30EB\u30D3\u4E0A\u306B\u79FB\u52D5\u3057\u3066\u3082\u9752\u7A7A\u8A18\u6CD5\u30C6\u30AD\u30B9\u30C8\u306B\u5C55\u958B\u3057\u306A\u3044 (default off)").addToggle((toggle) => toggle.setValue(this.plugin.settings.suppressRubyInline).onChange(async (value) => {
+      this.plugin.settings.suppressRubyInline = value;
       await this.plugin.saveSettings();
       this.plugin.applySettingsToAllViews();
     }));
-    new import_obsidian.Setting(containerEl).setName("\u7E26\u4E2D\u6A2A\u3092\u30A4\u30F3\u30E9\u30A4\u30F3\u5C55\u958B\u3059\u308B").setDesc("\u30AB\u30FC\u30BD\u30EB\u304C\u7E26\u4E2D\u6A2A\u4E0A\u306B\u79FB\u52D5\u3057\u305F\u3068\u304D\u3001\u9752\u7A7A\u8A18\u6CD5\u30C6\u30AD\u30B9\u30C8\u306B\u5C55\u958B\u3057\u3066\u7DE8\u96C6\u3067\u304D\u308B\u3088\u3046\u306B\u3059\u308B (default on)").addToggle((toggle) => toggle.setValue(this.plugin.settings.expandTcyInline).onChange(async (value) => {
-      this.plugin.settings.expandTcyInline = value;
+    new import_obsidian.Setting(containerEl).setName("\u7E26\u4E2D\u6A2A\u306E\u30A4\u30F3\u30E9\u30A4\u30F3\u5C55\u958B\u3092\u6291\u5236\u3059\u308B").setDesc("\u30AB\u30FC\u30BD\u30EB\u304C\u7E26\u4E2D\u6A2A\u4E0A\u306B\u79FB\u52D5\u3057\u3066\u3082\u9752\u7A7A\u8A18\u6CD5\u30C6\u30AD\u30B9\u30C8\u306B\u5C55\u958B\u3057\u306A\u3044 (default off)").addToggle((toggle) => toggle.setValue(this.plugin.settings.suppressTcyInline).onChange(async (value) => {
+      this.plugin.settings.suppressTcyInline = value;
       await this.plugin.saveSettings();
       this.plugin.applySettingsToAllViews();
     }));
-    new import_obsidian.Setting(containerEl).setName("\u508D\u70B9\u3092\u30A4\u30F3\u30E9\u30A4\u30F3\u5C55\u958B\u3059\u308B").setDesc("\u30AB\u30FC\u30BD\u30EB\u304C\u508D\u70B9\u4E0A\u306B\u79FB\u52D5\u3057\u305F\u3068\u304D\u3001\u9752\u7A7A\u8A18\u6CD5\u30C6\u30AD\u30B9\u30C8\u306B\u5C55\u958B\u3057\u3066\u7DE8\u96C6\u3067\u304D\u308B\u3088\u3046\u306B\u3059\u308B (default on)").addToggle((toggle) => toggle.setValue(this.plugin.settings.expandBoutenInline).onChange(async (value) => {
-      this.plugin.settings.expandBoutenInline = value;
+    new import_obsidian.Setting(containerEl).setName("\u508D\u70B9\u306E\u30A4\u30F3\u30E9\u30A4\u30F3\u5C55\u958B\u3092\u6291\u5236\u3059\u308B").setDesc("\u30AB\u30FC\u30BD\u30EB\u304C\u508D\u70B9\u4E0A\u306B\u79FB\u52D5\u3057\u3066\u3082\u9752\u7A7A\u8A18\u6CD5\u30C6\u30AD\u30B9\u30C8\u306B\u5C55\u958B\u3057\u306A\u3044 (default off)").addToggle((toggle) => toggle.setValue(this.plugin.settings.suppressBoutenInline).onChange(async (value) => {
+      this.plugin.settings.suppressBoutenInline = value;
       await this.plugin.saveSettings();
       this.plugin.applySettingsToAllViews();
     }));
@@ -2010,9 +2010,9 @@ var EditorElement = class {
     this.el.style.lineBreak = settings.lineBreak;
     this.inputTransformer.updateSettings(settings);
     this.inlineEditor.setExpandSettings(
-      settings.expandRubyInline,
-      settings.expandTcyInline,
-      settings.expandBoutenInline
+      !settings.suppressRubyInline,
+      !settings.suppressTcyInline,
+      !settings.suppressBoutenInline
     );
   }
   adjustWidth() {
