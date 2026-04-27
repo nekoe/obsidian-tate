@@ -73,9 +73,9 @@ This table supersedes the equivalent table in `20260415_proxy_editor_model.md`.
 | Cut | Immediately after `cut` event |
 | Live notation conversion | When annotation handler returns `true` in `input` |
 | Annotation collapse | When `collapseEditing()` returns `true` in `selectionchange` |
-| Navigation keys | On `keydown` detecting arrow / Home / End / PgUp / PgDn |
+| Navigation keys | On `keydown`, **only if `commitTimer !== null`** (uncommitted changes exist) |
 | mousedown | On click (ends a burst) |
-| TCY navigation | After `handleTcyNavigation()` succeeds in `keydown` |
+| TCY navigation | After `handleTcyNavigation()` succeeds in `keydown`, **only if `commitTimer !== null`** |
 | tcy/bouten command | Inside `applyAnnotation()` |
 | Undo/Redo | At the start of `doUndoRedo()` (flushes before delegating to CM6) |
 | Close view | At the start of `onClose()` |
