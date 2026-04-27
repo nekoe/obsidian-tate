@@ -2490,11 +2490,15 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian4.I
               this.pendingCursorOffset = null;
               el.setViewCursorOffset(offset);
               this.lastKnownViewOffset = offset;
-              this.hideLoadingSpinner();
-              el.scrollCursorIntoView();
               requestAnimationFrame(() => {
-                if (this.scrollRestoringGeneration === gen)
-                  el.el.classList.remove("tate-scroll-restoring");
+                if (this.scrollRestoringGeneration !== gen) return;
+                this.hideLoadingSpinner();
+                el.setViewCursorOffset(offset);
+                el.scrollCursorIntoView();
+                requestAnimationFrame(() => {
+                  if (this.scrollRestoringGeneration === gen)
+                    el.el.classList.remove("tate-scroll-restoring");
+                });
               });
             } else if (this.lastKnownViewOffset !== null) {
               el.setViewCursorOffset(this.lastKnownViewOffset);

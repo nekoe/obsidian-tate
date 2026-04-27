@@ -309,16 +309,24 @@ export class VerticalWritingView extends ItemView {
                         if (this.pendingCursorOffset !== null) {
                             // New file was loaded in the background: restore the saved offset and scroll.
                             // tate-scroll-restoring was set before loadFile(); real sizes are in effect.
+                            // Defer hide + scroll to rAF 1 so the spinner is visible on the first
+                            // paint when the tab becomes active (matches restoreViewOffset active path).
                             const gen = this.scrollRestoringGeneration; // snapshot for rAF guard
                             const offset = this.pendingCursorOffset;
                             this.pendingCursorOffset = null;
                             el.setViewCursorOffset(offset);
                             this.lastKnownViewOffset = offset; // sync update
-                            this.hideLoadingSpinner(); // hide before scroll so spinner disappears with content reveal
-                            el.scrollCursorIntoView();
                             requestAnimationFrame(() => {
-                                if (this.scrollRestoringGeneration === gen)
-                                    el.el.classList.remove('tate-scroll-restoring');
+                                if (this.scrollRestoringGeneration !== gen) return;
+                                // Hide spinner before scroll so it disappears at the same time content is revealed.
+                                this.hideLoadingSpinner();
+                                // Re-assert cursor in case focus() moved it between now and this frame.
+                                el.setViewCursorOffset(offset);
+                                el.scrollCursorIntoView();
+                                requestAnimationFrame(() => {
+                                    if (this.scrollRestoringGeneration === gen)
+                                        el.el.classList.remove('tate-scroll-restoring');
+                                });
                             });
                         } else if (this.lastKnownViewOffset !== null) {
                             // Normal tab switch: restore the cursor to where the user left off.
