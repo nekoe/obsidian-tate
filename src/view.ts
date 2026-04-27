@@ -227,6 +227,11 @@ export class VerticalWritingView extends ItemView {
                     this.pendingCursorOffset = null;
                     this.lastKnownViewOffset = null;
                     this.plugin.updateCharCount(null);
+                    // Cancel any in-flight scroll-restore: increment generation to invalidate
+                    // pending rAFs, then remove the class and spinner directly.
+                    ++this.scrollRestoringGeneration;
+                    editorEl.el.classList.remove('tate-scroll-restoring');
+                    this.hideLoadingSpinner();
                     return;
                 }
                 // Save cursor for the file being switched away from before loading the new one.
@@ -292,6 +297,11 @@ export class VerticalWritingView extends ItemView {
                     this.pendingCursorOffset = null;
                     this.lastKnownViewOffset = null;
                     this.plugin.updateCharCount(null);
+                    // Cancel any in-flight scroll-restore: increment generation to invalidate
+                    // pending rAFs, then remove the class and spinner directly.
+                    ++this.scrollRestoringGeneration;
+                    editorEl.el.classList.remove('tate-scroll-restoring');
+                    this.hideLoadingSpinner();
                 }
             })
         );

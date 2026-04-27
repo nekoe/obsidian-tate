@@ -2417,6 +2417,9 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian4.I
           this.pendingCursorOffset = null;
           this.lastKnownViewOffset = null;
           this.plugin.updateCharCount(null);
+          ++this.scrollRestoringGeneration;
+          editorEl.el.classList.remove("tate-scroll-restoring");
+          this.hideLoadingSpinner();
           return;
         }
         const prevFile = syncCoordinator.currentFile;
@@ -2472,6 +2475,9 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian4.I
           this.pendingCursorOffset = null;
           this.lastKnownViewOffset = null;
           this.plugin.updateCharCount(null);
+          ++this.scrollRestoringGeneration;
+          editorEl.el.classList.remove("tate-scroll-restoring");
+          this.hideLoadingSpinner();
         }
       })
     );
