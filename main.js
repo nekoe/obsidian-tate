@@ -1179,7 +1179,7 @@ var InlineEditor = class {
   // Returns true if collapse changed the content (signal for view.ts to call commitToCm6).
   handleSelectionChange() {
     if (!this.isModifyingDom) {
-      if (!this.expandedEl || !this.expandedEl.isConnected) {
+      if (this.expandedEl !== null && !this.expandedEl.isConnected) {
         const actualSpan = this.el.querySelector("span.tate-editing");
         if (actualSpan !== this.expandedEl) {
           this.expandedEl = actualSpan;

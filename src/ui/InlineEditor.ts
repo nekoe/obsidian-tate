@@ -66,8 +66,10 @@ export class InlineEditor {
         // Update the cache only when not in DOM manipulation and there is a non-collapsed selection inside the editor
         // (retaining it when focus leaves allows access after the command palette is opened)
         if (!this.isModifyingDom) {
-            // Synchronize expandedEl with the actual tate-editing span in the DOM
-            if (!this.expandedEl || !this.expandedEl.isConnected) {
+            // Synchronize expandedEl when Undo/external DOM change detached the span.
+            // Skip when expandedEl is null: no span is in the DOM in that case (all code paths
+            // that create span.tate-editing also set expandedEl, so null → no DOM span to find).
+            if (this.expandedEl !== null && !this.expandedEl.isConnected) {
                 const actualSpan = this.el.querySelector<HTMLSpanElement>('span.tate-editing');
                 if (actualSpan !== this.expandedEl) {
                     this.expandedEl = actualSpan;
