@@ -2244,8 +2244,8 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian4.I
     // Deferred cursor offset: set when a file is loaded while the view is not active.
     // Applied (with scroll) on the next active-leaf-change for this view.
     this.pendingCursorOffset = null;
-    // Monotonic counter incremented each time tate-scroll-restoring is added.
-    // Guards classList.remove rAFs: a stale rAF from a superseded load will not remove
+    // Monotonic counter managed by beginScrollRestoring/cancelScrollRestoring.
+    // Guards cleanup rAFs: a stale rAF from a superseded load will not remove
     // the class that belongs to a newer load (prevents fast-switching race condition).
     this.scrollRestoringGeneration = 0;
     // Spinner element shown while tate-scroll-restoring is active (file load + scroll restore).
@@ -2417,9 +2417,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian4.I
           this.pendingCursorOffset = null;
           this.lastKnownViewOffset = null;
           this.plugin.updateCharCount(null);
-          ++this.scrollRestoringGeneration;
-          editorEl.el.classList.remove("tate-scroll-restoring");
-          this.hideLoadingSpinner();
+          this.cancelScrollRestoring();
           return;
         }
         const prevFile = syncCoordinator.currentFile;
@@ -2427,17 +2425,10 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian4.I
           void this.plugin.saveCursorPosition(prevFile.path, this.lastKnownViewOffset);
         }
         void (async () => {
-          const gen = ++this.scrollRestoringGeneration;
-          editorEl.el.classList.add("tate-scroll-restoring");
-          this.showLoadingSpinner();
+          const gen = this.beginScrollRestoring();
           await syncCoordinator.loadFile(file);
           if (syncCoordinator.currentFile !== file) {
-            requestAnimationFrame(() => {
-              if (this.scrollRestoringGeneration === gen) {
-                editorEl.el.classList.remove("tate-scroll-restoring");
-                this.hideLoadingSpinner();
-              }
-            });
+            this.scheduleScrollRestoringCleanup(gen);
             return;
           }
           this.lastKnownViewOffset = null;
@@ -2445,12 +2436,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian4.I
           if (savedOffset !== void 0) {
             this.restoreViewOffset(savedOffset);
           } else {
-            requestAnimationFrame(() => {
-              if (this.scrollRestoringGeneration === gen) {
-                editorEl.el.classList.remove("tate-scroll-restoring");
-                this.hideLoadingSpinner();
-              }
-            });
+            this.scheduleScrollRestoringCleanup(gen);
           }
         })();
       })
@@ -2475,9 +2461,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian4.I
           this.pendingCursorOffset = null;
           this.lastKnownViewOffset = null;
           this.plugin.updateCharCount(null);
-          ++this.scrollRestoringGeneration;
-          editorEl.el.classList.remove("tate-scroll-restoring");
-          this.hideLoadingSpinner();
+          this.cancelScrollRestoring();
         }
       })
     );
@@ -2524,67 +2508,38 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian4.I
     }
   }
   async loadInitialFile(syncCoordinator) {
-    var _a, _b;
     const activeFile = this.app.workspace.getActiveFile();
     if (activeFile) {
-      const gen = ++this.scrollRestoringGeneration;
-      (_a = this.editorEl) == null ? void 0 : _a.el.classList.add("tate-scroll-restoring");
-      this.showLoadingSpinner();
+      const gen = this.beginScrollRestoring();
       await syncCoordinator.loadFile(activeFile);
-      if (syncCoordinator.currentFile === activeFile) {
-        this.lastKnownViewOffset = null;
-        const savedOffset = this.plugin.getCursorPosition(activeFile.path);
-        if (savedOffset !== void 0) {
-          this.restoreViewOffset(savedOffset);
-        } else {
-          requestAnimationFrame(() => {
-            var _a2;
-            if (this.scrollRestoringGeneration === gen) {
-              (_a2 = this.editorEl) == null ? void 0 : _a2.el.classList.remove("tate-scroll-restoring");
-              this.hideLoadingSpinner();
-            }
-          });
-        }
+      if (syncCoordinator.currentFile !== activeFile) {
+        this.scheduleScrollRestoringCleanup(gen);
+        return;
+      }
+      this.lastKnownViewOffset = null;
+      const savedOffset = this.plugin.getCursorPosition(activeFile.path);
+      if (savedOffset !== void 0) {
+        this.restoreViewOffset(savedOffset);
       } else {
-        requestAnimationFrame(() => {
-          var _a2;
-          if (this.scrollRestoringGeneration === gen) {
-            (_a2 = this.editorEl) == null ? void 0 : _a2.el.classList.remove("tate-scroll-restoring");
-            this.hideLoadingSpinner();
-          }
-        });
+        this.scheduleScrollRestoringCleanup(gen);
       }
       return;
     }
     for (const leaf of this.app.workspace.getLeavesOfType("markdown")) {
       if (leaf.view instanceof import_obsidian4.MarkdownView && leaf.view.file) {
         const file = leaf.view.file;
-        const gen = ++this.scrollRestoringGeneration;
-        (_b = this.editorEl) == null ? void 0 : _b.el.classList.add("tate-scroll-restoring");
-        this.showLoadingSpinner();
+        const gen = this.beginScrollRestoring();
         await syncCoordinator.loadFile(file);
-        if (syncCoordinator.currentFile === file) {
-          this.lastKnownViewOffset = null;
-          const savedOffset = this.plugin.getCursorPosition(file.path);
-          if (savedOffset !== void 0) {
-            this.restoreViewOffset(savedOffset);
-          } else {
-            requestAnimationFrame(() => {
-              var _a2;
-              if (this.scrollRestoringGeneration === gen) {
-                (_a2 = this.editorEl) == null ? void 0 : _a2.el.classList.remove("tate-scroll-restoring");
-                this.hideLoadingSpinner();
-              }
-            });
-          }
+        if (syncCoordinator.currentFile !== file) {
+          this.scheduleScrollRestoringCleanup(gen);
+          return;
+        }
+        this.lastKnownViewOffset = null;
+        const savedOffset = this.plugin.getCursorPosition(file.path);
+        if (savedOffset !== void 0) {
+          this.restoreViewOffset(savedOffset);
         } else {
-          requestAnimationFrame(() => {
-            var _a2;
-            if (this.scrollRestoringGeneration === gen) {
-              (_a2 = this.editorEl) == null ? void 0 : _a2.el.classList.remove("tate-scroll-restoring");
-              this.hideLoadingSpinner();
-            }
-          });
+          this.scheduleScrollRestoringCleanup(gen);
         }
         return;
       }
@@ -2650,6 +2605,36 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian4.I
   hideLoadingSpinner() {
     var _a;
     (_a = this.spinnerEl) == null ? void 0 : _a.classList.remove("tate-loading-visible");
+  }
+  /** Starts a scroll-restore cycle: increments the generation counter, adds
+   *  tate-scroll-restoring (must be called before loadFile() so new paragraph divs
+   *  are created with content-visibility:visible and real sizes), and shows the spinner.
+   *  Returns the generation number for use in rAF guards. */
+  beginScrollRestoring() {
+    var _a;
+    const gen = ++this.scrollRestoringGeneration;
+    (_a = this.editorEl) == null ? void 0 : _a.el.classList.add("tate-scroll-restoring");
+    this.showLoadingSpinner();
+    return gen;
+  }
+  /** Schedules a one-rAF cleanup for the scroll-restore cycle identified by gen.
+   *  Used when no scroll is needed (no savedOffset or superseded load). */
+  scheduleScrollRestoringCleanup(gen) {
+    requestAnimationFrame(() => {
+      var _a;
+      if (this.scrollRestoringGeneration === gen) {
+        (_a = this.editorEl) == null ? void 0 : _a.el.classList.remove("tate-scroll-restoring");
+        this.hideLoadingSpinner();
+      }
+    });
+  }
+  /** Cancels an in-flight scroll-restore cycle immediately (synchronous, no rAF).
+   *  Increments the generation to invalidate any pending cleanup rAFs. */
+  cancelScrollRestoring() {
+    var _a;
+    ++this.scrollRestoringGeneration;
+    (_a = this.editorEl) == null ? void 0 : _a.el.classList.remove("tate-scroll-restoring");
+    this.hideLoadingSpinner();
   }
   applySettings(settings) {
     var _a;

@@ -18,8 +18,8 @@ export class VerticalWritingView extends ItemView {
     // Deferred cursor offset: set when a file is loaded while the view is not active.
     // Applied (with scroll) on the next active-leaf-change for this view.
     private pendingCursorOffset: number | null = null;
-    // Monotonic counter incremented each time tate-scroll-restoring is added.
-    // Guards classList.remove rAFs: a stale rAF from a superseded load will not remove
+    // Monotonic counter managed by beginScrollRestoring/cancelScrollRestoring.
+    // Guards cleanup rAFs: a stale rAF from a superseded load will not remove
     // the class that belongs to a newer load (prevents fast-switching race condition).
     private scrollRestoringGeneration = 0;
     // Spinner element shown while tate-scroll-restoring is active (file load + scroll restore).
@@ -227,11 +227,7 @@ export class VerticalWritingView extends ItemView {
                     this.pendingCursorOffset = null;
                     this.lastKnownViewOffset = null;
                     this.plugin.updateCharCount(null);
-                    // Cancel any in-flight scroll-restore: increment generation to invalidate
-                    // pending rAFs, then remove the class and spinner directly.
-                    ++this.scrollRestoringGeneration;
-                    editorEl.el.classList.remove('tate-scroll-restoring');
-                    this.hideLoadingSpinner();
+                    this.cancelScrollRestoring();
                     return;
                 }
                 // Save cursor for the file being switched away from before loading the new one.
@@ -241,21 +237,10 @@ export class VerticalWritingView extends ItemView {
                     void this.plugin.saveCursorPosition(prevFile.path, this.lastKnownViewOffset);
                 }
                 void (async () => {
-                    // Set tate-scroll-restoring before replaceChildren so new paragraph divs
-                    // are created with content-visibility:visible (real sizes) from the start.
-                    // The generation counter ensures that cleanup rAFs from superseded loads
-                    // do not remove the class that belongs to a newer load.
-                    const gen = ++this.scrollRestoringGeneration;
-                    editorEl.el.classList.add('tate-scroll-restoring');
-                    this.showLoadingSpinner();
+                    const gen = this.beginScrollRestoring();
                     await syncCoordinator.loadFile(file);
                     if (syncCoordinator.currentFile !== file) {
-                        requestAnimationFrame(() => {
-                            if (this.scrollRestoringGeneration === gen) {
-                                editorEl.el.classList.remove('tate-scroll-restoring');
-                                this.hideLoadingSpinner();
-                            }
-                        });
+                        this.scheduleScrollRestoringCleanup(gen);
                         return;
                     }
                     this.lastKnownViewOffset = null;
@@ -263,12 +248,7 @@ export class VerticalWritingView extends ItemView {
                     if (savedOffset !== undefined) {
                         this.restoreViewOffset(savedOffset); // rAF 1 hides spinner; rAF 2 removes class
                     } else {
-                        requestAnimationFrame(() => {
-                            if (this.scrollRestoringGeneration === gen) {
-                                editorEl.el.classList.remove('tate-scroll-restoring');
-                                this.hideLoadingSpinner();
-                            }
-                        });
+                        this.scheduleScrollRestoringCleanup(gen);
                     }
                 })();
             })
@@ -297,11 +277,7 @@ export class VerticalWritingView extends ItemView {
                     this.pendingCursorOffset = null;
                     this.lastKnownViewOffset = null;
                     this.plugin.updateCharCount(null);
-                    // Cancel any in-flight scroll-restore: increment generation to invalidate
-                    // pending rAFs, then remove the class and spinner directly.
-                    ++this.scrollRestoringGeneration;
-                    editorEl.el.classList.remove('tate-scroll-restoring');
-                    this.hideLoadingSpinner();
+                    this.cancelScrollRestoring();
                 }
             })
         );
@@ -366,30 +342,18 @@ export class VerticalWritingView extends ItemView {
         // Use the file that was active just before the vertical writing view was opened
         const activeFile = this.app.workspace.getActiveFile();
         if (activeFile) {
-            const gen = ++this.scrollRestoringGeneration;
-            this.editorEl?.el.classList.add('tate-scroll-restoring'); // before DOM build
-            this.showLoadingSpinner();
+            const gen = this.beginScrollRestoring();
             await syncCoordinator.loadFile(activeFile);
-            if (syncCoordinator.currentFile === activeFile) {
-                this.lastKnownViewOffset = null;
-                const savedOffset = this.plugin.getCursorPosition(activeFile.path);
-                if (savedOffset !== undefined) {
-                    this.restoreViewOffset(savedOffset); // rAF 1 hides spinner; rAF 2 removes class
-                } else {
-                    requestAnimationFrame(() => {
-                        if (this.scrollRestoringGeneration === gen) {
-                            this.editorEl?.el.classList.remove('tate-scroll-restoring');
-                            this.hideLoadingSpinner();
-                        }
-                    });
-                }
+            if (syncCoordinator.currentFile !== activeFile) {
+                this.scheduleScrollRestoringCleanup(gen);
+                return;
+            }
+            this.lastKnownViewOffset = null;
+            const savedOffset = this.plugin.getCursorPosition(activeFile.path);
+            if (savedOffset !== undefined) {
+                this.restoreViewOffset(savedOffset); // rAF 1 hides spinner; rAF 2 removes class
             } else {
-                requestAnimationFrame(() => {
-                    if (this.scrollRestoringGeneration === gen) {
-                        this.editorEl?.el.classList.remove('tate-scroll-restoring');
-                        this.hideLoadingSpinner();
-                    }
-                });
+                this.scheduleScrollRestoringCleanup(gen);
             }
             return;
         }
@@ -397,30 +361,18 @@ export class VerticalWritingView extends ItemView {
         for (const leaf of this.app.workspace.getLeavesOfType('markdown')) {
             if (leaf.view instanceof MarkdownView && leaf.view.file) {
                 const file = leaf.view.file;
-                const gen = ++this.scrollRestoringGeneration;
-                this.editorEl?.el.classList.add('tate-scroll-restoring'); // before DOM build
-                this.showLoadingSpinner();
+                const gen = this.beginScrollRestoring();
                 await syncCoordinator.loadFile(file);
-                if (syncCoordinator.currentFile === file) {
-                    this.lastKnownViewOffset = null;
-                    const savedOffset = this.plugin.getCursorPosition(file.path);
-                    if (savedOffset !== undefined) {
-                        this.restoreViewOffset(savedOffset); // rAF 1 hides spinner; rAF 2 removes class
-                    } else {
-                        requestAnimationFrame(() => {
-                            if (this.scrollRestoringGeneration === gen) {
-                                this.editorEl?.el.classList.remove('tate-scroll-restoring');
-                                this.hideLoadingSpinner();
-                            }
-                        });
-                    }
+                if (syncCoordinator.currentFile !== file) {
+                    this.scheduleScrollRestoringCleanup(gen);
+                    return;
+                }
+                this.lastKnownViewOffset = null;
+                const savedOffset = this.plugin.getCursorPosition(file.path);
+                if (savedOffset !== undefined) {
+                    this.restoreViewOffset(savedOffset); // rAF 1 hides spinner; rAF 2 removes class
                 } else {
-                    requestAnimationFrame(() => {
-                        if (this.scrollRestoringGeneration === gen) {
-                            this.editorEl?.el.classList.remove('tate-scroll-restoring');
-                            this.hideLoadingSpinner();
-                        }
-                    });
+                    this.scheduleScrollRestoringCleanup(gen);
                 }
                 return;
             }
@@ -496,6 +448,36 @@ export class VerticalWritingView extends ItemView {
 
     private hideLoadingSpinner(): void {
         this.spinnerEl?.classList.remove('tate-loading-visible');
+    }
+
+    /** Starts a scroll-restore cycle: increments the generation counter, adds
+     *  tate-scroll-restoring (must be called before loadFile() so new paragraph divs
+     *  are created with content-visibility:visible and real sizes), and shows the spinner.
+     *  Returns the generation number for use in rAF guards. */
+    private beginScrollRestoring(): number {
+        const gen = ++this.scrollRestoringGeneration;
+        this.editorEl?.el.classList.add('tate-scroll-restoring');
+        this.showLoadingSpinner();
+        return gen;
+    }
+
+    /** Schedules a one-rAF cleanup for the scroll-restore cycle identified by gen.
+     *  Used when no scroll is needed (no savedOffset or superseded load). */
+    private scheduleScrollRestoringCleanup(gen: number): void {
+        requestAnimationFrame(() => {
+            if (this.scrollRestoringGeneration === gen) {
+                this.editorEl?.el.classList.remove('tate-scroll-restoring');
+                this.hideLoadingSpinner();
+            }
+        });
+    }
+
+    /** Cancels an in-flight scroll-restore cycle immediately (synchronous, no rAF).
+     *  Increments the generation to invalidate any pending cleanup rAFs. */
+    private cancelScrollRestoring(): void {
+        ++this.scrollRestoringGeneration;
+        this.editorEl?.el.classList.remove('tate-scroll-restoring');
+        this.hideLoadingSpinner();
     }
 
     applySettings(settings: TatePluginSettings): void {
