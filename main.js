@@ -2366,7 +2366,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian4.I
       if (!e.isComposing && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
         if (editorEl.handleTcyNavigation(e.key)) {
           e.preventDefault();
-          this.commitToCm6();
+          if (this.commitTimer !== null) this.commitToCm6();
           editorEl.afterNavigation();
           return;
         }
@@ -2382,7 +2382,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian4.I
         "PageDown"
       ].includes(e.key)) {
         editorEl.notifyNavigationKey(e.key);
-        this.commitToCm6();
+        if (this.commitTimer !== null) this.commitToCm6();
         editorEl.afterNavigation();
       }
     });

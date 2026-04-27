@@ -175,17 +175,19 @@ export class VerticalWritingView extends ItemView {
             if (!e.isComposing && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
                 if (editorEl.handleTcyNavigation(e.key)) {
                     e.preventDefault();
-                    this.commitToCm6();
+                    if (this.commitTimer !== null) this.commitToCm6();
                     editorEl.afterNavigation();
                     return;
                 }
             }
-            // Navigation keys are commit points (to record the next input as a separate CM6 history entry)
+            // Navigation keys are commit points only when there are uncommitted changes
+            // (commitTimer !== null means the debounce is running). Skipping the commit
+            // when nothing is pending avoids an O(N) getValue() call on every keypress.
             // Skip while isComposing=true (user is selecting IME candidates)
             if (!e.isComposing && ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown',
                  'Home', 'End', 'PageUp', 'PageDown'].includes(e.key)) {
                 editorEl.notifyNavigationKey(e.key);
-                this.commitToCm6();
+                if (this.commitTimer !== null) this.commitToCm6();
                 editorEl.afterNavigation();
             }
         });
