@@ -290,6 +290,8 @@ export class SearchPanel {
             }
             // Update last navigated offset so ESC restores here
             this.lastNavigatedOffset = this.editorElementRef.getViewCursorOffset();
+            // sel.addRange() stole focus from the search input; give it back.
+            this.inputEl?.focus();
         }
 
         this.scrollRangeIntoView(range);

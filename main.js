@@ -2435,6 +2435,7 @@ var SearchPanel = class {
     this.setFocus(next, true);
   }
   setFocus(index, isNavigation) {
+    var _a;
     this.currentIndex = index;
     this.updateCount();
     this.applyFocusHighlight();
@@ -2450,6 +2451,7 @@ var SearchPanel = class {
         sel.addRange(cursorRange);
       }
       this.lastNavigatedOffset = this.editorElementRef.getViewCursorOffset();
+      (_a = this.inputEl) == null ? void 0 : _a.focus();
     }
     this.scrollRangeIntoView(range);
   }
