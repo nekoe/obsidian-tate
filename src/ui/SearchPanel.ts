@@ -175,7 +175,13 @@ export class SearchPanel {
         input.type = 'text';
         input.className = 'tate-search-input';
         input.setAttribute('placeholder', '検索');
-        input.addEventListener('input', () => this.runSearch());
+        input.addEventListener('input', (e) => {
+            if ((e as InputEvent).isComposing) return;
+            this.runSearch();
+        });
+        // Run search after IME composition is committed (compositionend fires before the
+        // subsequent input event in Chromium, so this is the reliable trigger point).
+        input.addEventListener('compositionend', () => this.runSearch());
         // Prevent panel input events from bubbling into the editor's keydown handler
         input.addEventListener('keydown', (e) => {
             // Allow the scope to handle Enter/Escape; block other keys from reaching the editor

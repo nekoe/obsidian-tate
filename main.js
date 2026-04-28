@@ -2363,7 +2363,11 @@ var SearchPanel = class {
     input.type = "text";
     input.className = "tate-search-input";
     input.setAttribute("placeholder", "\u691C\u7D22");
-    input.addEventListener("input", () => this.runSearch());
+    input.addEventListener("input", (e) => {
+      if (e.isComposing) return;
+      this.runSearch();
+    });
+    input.addEventListener("compositionend", () => this.runSearch());
     input.addEventListener("keydown", (e) => {
       if (e.key !== "Enter" && e.key !== "Escape") e.stopPropagation();
     });
