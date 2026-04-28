@@ -553,9 +553,12 @@ export class VerticalWritingView extends ItemView {
     private closeSearch(): void {
         if (!this.searchPanel) return;
         const restoreOffset = this.searchPanel.close();
-        if (restoreOffset !== null && this.editorEl) {
-            this.editorEl.setViewCursorOffset(restoreOffset);
-            this.lastKnownViewOffset = restoreOffset;
+        if (this.editorEl) {
+            if (restoreOffset !== null) {
+                this.editorEl.setViewCursorOffset(restoreOffset);
+                this.lastKnownViewOffset = restoreOffset;
+            }
+            this.editorEl.el.focus();
         }
     }
 
