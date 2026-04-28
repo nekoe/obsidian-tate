@@ -2365,7 +2365,7 @@ var SearchPanel = class {
   onContentChanged() {
     if (!this.isOpen) return;
     this.contentVisibilityDirty = true;
-    this.runSearch();
+    this.runSearch(false);
   }
   buildPanel() {
     const panel = document.createElement("div");
@@ -2406,7 +2406,7 @@ var SearchPanel = class {
     this.container.appendChild(panel);
     this.panelEl = panel;
   }
-  runSearch() {
+  runSearch(scroll = true) {
     var _a, _b, _c, _d, _e;
     const query = (_b = (_a = this.inputEl) == null ? void 0 : _a.value) != null ? _b : "";
     this.clearHighlights();
@@ -2435,17 +2435,20 @@ var SearchPanel = class {
     (_e = this.inputEl) == null ? void 0 : _e.classList.remove("tate-search-no-match");
     this.applyHitHighlights();
     if (prevIndex >= 0 && prevIndex < this.matches.length) {
-      this.setFocus(prevIndex, false);
+      this.setFocus(prevIndex, false, scroll);
     } else {
-      this.setFocus(0, false);
+      this.setFocus(0, false, scroll);
     }
   }
   navigate(delta) {
     if (this.matches.length === 0) return;
     const next = (this.currentIndex + delta + this.matches.length) % this.matches.length;
-    this.setFocus(next, true);
+    this.setFocus(next, true, true);
   }
-  setFocus(index, isNavigation) {
+  // isNavigation: true = explicit Enter/button nav (move DOM cursor, update lastNavigatedOffset,
+  //               restore focus to input).  false = typing in search field or content change.
+  // triggerScroll: false when called from onContentChanged() — user is editing; no scroll.
+  setFocus(index, isNavigation, triggerScroll) {
     var _a;
     this.currentIndex = index;
     this.updateCount();
@@ -2464,7 +2467,7 @@ var SearchPanel = class {
       this.lastNavigatedOffset = this.editorElementRef.getViewCursorOffset();
       (_a = this.inputEl) == null ? void 0 : _a.focus();
     }
-    this.scrollRangeIntoView(range);
+    if (triggerScroll) this.scrollRangeIntoView(range);
   }
   scrollRangeIntoView(range) {
     const editorEl = this.editorElementRef.el;

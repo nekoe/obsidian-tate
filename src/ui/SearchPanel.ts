@@ -180,7 +180,7 @@ export class SearchPanel {
     onContentChanged(): void {
         if (!this.isOpen) return;
         this.contentVisibilityDirty = true; // edit may have changed paragraph heights
-        this.runSearch();
+        this.runSearch(false); // update highlights only; no scroll while user is editing
     }
 
     private buildPanel(): void {
@@ -236,7 +236,7 @@ export class SearchPanel {
         this.panelEl = panel;
     }
 
-    private runSearch(): void {
+    private runSearch(scroll = true): void {
         const query = this.inputEl?.value ?? '';
         this.clearHighlights();
         const prevIndex = this.currentIndex;
@@ -268,23 +268,24 @@ export class SearchPanel {
         this.inputEl?.classList.remove('tate-search-no-match');
         this.applyHitHighlights();
 
-        // On re-search after content change, keep the previously focused index if still valid.
-        // isNavigation=false: typing in the input — highlight and scroll, but do NOT move the
-        // DOM selection (which would steal focus from the input field).
+        // Keep the previously focused index if still valid across re-searches.
         if (prevIndex >= 0 && prevIndex < this.matches.length) {
-            this.setFocus(prevIndex, false);
+            this.setFocus(prevIndex, false, scroll);
         } else {
-            this.setFocus(0, false);
+            this.setFocus(0, false, scroll);
         }
     }
 
     private navigate(delta: 1 | -1): void {
         if (this.matches.length === 0) return;
         const next = (this.currentIndex + delta + this.matches.length) % this.matches.length;
-        this.setFocus(next, true);
+        this.setFocus(next, true, true);
     }
 
-    private setFocus(index: number, isNavigation: boolean): void {
+    // isNavigation: true = explicit Enter/button nav (move DOM cursor, update lastNavigatedOffset,
+    //               restore focus to input).  false = typing in search field or content change.
+    // triggerScroll: false when called from onContentChanged() — user is editing; no scroll.
+    private setFocus(index: number, isNavigation: boolean, triggerScroll: boolean): void {
         this.currentIndex = index;
         this.updateCount();
         this.applyFocusHighlight();
@@ -310,7 +311,7 @@ export class SearchPanel {
             this.inputEl?.focus();
         }
 
-        this.scrollRangeIntoView(range);
+        if (triggerScroll) this.scrollRangeIntoView(range);
     }
 
     private scrollRangeIntoView(range: Range): void {
