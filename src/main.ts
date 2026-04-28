@@ -31,6 +31,12 @@ export default class TatePlugin extends Plugin {
         });
 
         this.addCommand({
+            id: 'search',
+            name: '検索',
+            callback: () => this.dispatchToView(v => v.openSearch()),
+        });
+
+        this.addCommand({
             id: 'add-ruby',
             name: '選択テキストにルビを設定 (ruby)',
             callback: () => this.dispatchToView(v => v.applyRuby()),

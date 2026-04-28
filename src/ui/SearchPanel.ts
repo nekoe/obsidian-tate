@@ -1,0 +1,328 @@
+import { App, Scope } from 'obsidian';
+import type { EditorElement } from './EditorElement';
+import { isInsideRtNode } from './domHelpers';
+
+// ---- Visible text extraction ----
+
+interface TextSegment {
+    node: Text;
+    start: number; // offset in visible text where this node begins
+    length: number; // number of visible chars in this node (excluding U+200B)
+}
+
+interface VisibleText {
+    text: string;
+    segments: TextSegment[];
+}
+
+function extractVisibleText(editorEl: HTMLDivElement): VisibleText {
+    const segments: TextSegment[] = [];
+    let text = '';
+    const walker = document.createTreeWalker(editorEl, NodeFilter.SHOW_TEXT);
+    let node = walker.nextNode() as Text | null;
+    while (node) {
+        if (!isInsideRtNode(node, editorEl)) {
+            // Strip U+200B (cursor anchor placeholders) from visible text
+            const visible = (node.textContent ?? '').replace(/\u200B/g, '');
+            if (visible.length > 0) {
+                segments.push({ node, start: text.length, length: visible.length });
+                text += visible;
+            }
+        }
+        node = walker.nextNode() as Text | null;
+    }
+    return { text, segments };
+}
+
+// ---- Range building ----
+
+function createRangeForMatch(
+    segments: TextSegment[],
+    matchStart: number,
+    matchEnd: number,
+): Range | null {
+    let startNode: Text | null = null;
+    let startOffset = 0;
+    let endNode: Text | null = null;
+    let endOffset = 0;
+
+    for (const seg of segments) {
+        const segEnd = seg.start + seg.length;
+        if (startNode === null && matchStart < segEnd) {
+            startNode = seg.node;
+            startOffset = visibleToRawOffset(seg.node, matchStart - seg.start);
+        }
+        if (endNode === null && matchEnd <= segEnd) {
+            endNode = seg.node;
+            endOffset = visibleToRawOffset(seg.node, matchEnd - seg.start);
+            break;
+        }
+    }
+    if (!startNode || !endNode) return null;
+    const range = document.createRange();
+    range.setStart(startNode, startOffset);
+    range.setEnd(endNode, endOffset);
+    return range;
+}
+
+// Maps a visible character offset (excluding U+200B) to the raw text node offset.
+function visibleToRawOffset(node: Text, visibleOffset: number): number {
+    const text = node.textContent ?? '';
+    let visible = 0;
+    for (let i = 0; i < text.length; i++) {
+        if (visible === visibleOffset) return i;
+        if (text[i] !== '\u200B') visible++;
+    }
+    return text.length;
+}
+
+function escapeRegex(s: string): string {
+    return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// ---- SearchPanel ----
+
+export class SearchPanel {
+    private panelEl: HTMLElement | null = null;
+    private inputEl: HTMLInputElement | null = null;
+    private countEl: HTMLElement | null = null;
+
+    private readonly searchScope: Scope;
+
+    private matches: Range[] = [];
+    private currentIndex = -1;
+    // Cursor offset (visible) when the panel was opened; restored if no navigation occurred.
+    private prSearchOffset: number | null = null;
+    // Offset of the last navigated hit; used as the restore target after close.
+    private lastNavigatedOffset: number | null = null;
+    // Generation counter for scrollRangeIntoView rAF guard (prevents stale rAF from
+    // clearing tate-searching class after a newer navigation has already started).
+    private scrollGen = 0;
+
+    constructor(
+        private readonly editorElementRef: EditorElement,
+        private readonly container: HTMLElement,
+        private readonly app: App,
+    ) {
+        this.searchScope = new Scope(app.scope);
+
+        this.searchScope.register([], 'Enter', (evt) => {
+            if (evt.isComposing) return;
+            this.navigate(1);
+            return false;
+        });
+        this.searchScope.register(['Shift'], 'Enter', (evt) => {
+            if (evt.isComposing) return;
+            this.navigate(-1);
+            return false;
+        });
+        this.searchScope.register([], 'Escape', (evt) => {
+            if (evt.isComposing) return;
+            this.close();
+            return false; // suppress Obsidian's global ESC handler
+        });
+    }
+
+    get isOpen(): boolean {
+        return this.panelEl !== null;
+    }
+
+    open(initialOffset: number): void {
+        if (this.isOpen) {
+            this.inputEl?.focus();
+            return;
+        }
+
+        this.prSearchOffset = initialOffset;
+        this.lastNavigatedOffset = null;
+        this.matches = [];
+        this.currentIndex = -1;
+
+        this.buildPanel();
+        this.app.keymap.pushScope(this.searchScope);
+        this.inputEl?.focus();
+    }
+
+    close(): number | null {
+        if (!this.isOpen) return null;
+
+        this.app.keymap.popScope(this.searchScope);
+        this.clearHighlights();
+
+        this.panelEl?.remove();
+        this.panelEl = null;
+        this.inputEl = null;
+        this.countEl = null;
+        this.matches = [];
+        this.currentIndex = -1;
+
+        const restoreOffset = this.lastNavigatedOffset ?? this.prSearchOffset;
+        this.prSearchOffset = null;
+        this.lastNavigatedOffset = null;
+        return restoreOffset;
+    }
+
+    onContentChanged(): void {
+        if (!this.isOpen) return;
+        this.runSearch();
+    }
+
+    private buildPanel(): void {
+        const panel = document.createElement('div');
+        panel.className = 'tate-search-panel';
+
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.className = 'tate-search-input';
+        input.setAttribute('placeholder', '検索');
+        input.addEventListener('input', () => this.runSearch());
+        // Prevent panel input events from bubbling into the editor's keydown handler
+        input.addEventListener('keydown', (e) => {
+            // Allow the scope to handle Enter/Escape; block other keys from reaching the editor
+            if (e.key !== 'Enter' && e.key !== 'Escape') e.stopPropagation();
+        });
+        this.inputEl = input;
+
+        const count = document.createElement('span');
+        count.className = 'tate-search-count';
+        count.textContent = '';
+        this.countEl = count;
+
+        const nextBtn = document.createElement('button');
+        nextBtn.className = 'tate-search-btn';
+        nextBtn.setAttribute('aria-label', '次へ');
+        nextBtn.textContent = '↓';
+        nextBtn.addEventListener('click', () => this.navigate(1));
+
+        const prevBtn = document.createElement('button');
+        prevBtn.className = 'tate-search-btn';
+        prevBtn.setAttribute('aria-label', '前へ');
+        prevBtn.textContent = '↑';
+        prevBtn.addEventListener('click', () => this.navigate(-1));
+
+        const closeBtn = document.createElement('button');
+        closeBtn.className = 'tate-search-btn';
+        closeBtn.setAttribute('aria-label', '閉じる');
+        closeBtn.textContent = '×';
+        closeBtn.addEventListener('click', () => this.close());
+
+        panel.append(input, count, nextBtn, prevBtn, closeBtn);
+        // Append to the tate-container so Obsidian's cleanup manages this DOM.
+        // position:absolute with top/right anchors to the container's visible edge,
+        // which stays fixed even during horizontal scroll of the editor content.
+        this.container.appendChild(panel);
+        this.panelEl = panel;
+    }
+
+    private runSearch(): void {
+        const query = this.inputEl?.value ?? '';
+        this.clearHighlights();
+        const prevIndex = this.currentIndex;
+        this.matches = [];
+        this.currentIndex = -1;
+
+        if (!query) {
+            this.updateCount();
+            this.inputEl?.classList.remove('tate-search-no-match');
+            return;
+        }
+
+        const editorEl = this.editorElementRef.el;
+        const { text, segments } = extractVisibleText(editorEl);
+        const re = new RegExp(escapeRegex(query), 'gi');
+        let m: RegExpExecArray | null;
+        while ((m = re.exec(text)) !== null) {
+            const range = createRangeForMatch(segments, m.index, m.index + m[0].length);
+            if (range) this.matches.push(range);
+            if (m[0].length === 0) re.lastIndex++;
+        }
+
+        if (this.matches.length === 0) {
+            this.inputEl?.classList.add('tate-search-no-match');
+            this.updateCount();
+            return;
+        }
+
+        this.inputEl?.classList.remove('tate-search-no-match');
+        this.applyHitHighlights();
+
+        // On re-search after content change, keep the previously focused index if still valid.
+        if (prevIndex >= 0 && prevIndex < this.matches.length) {
+            this.setFocus(prevIndex);
+        } else {
+            this.setFocus(0);
+        }
+    }
+
+    private navigate(delta: 1 | -1): void {
+        if (this.matches.length === 0) return;
+        const next = (this.currentIndex + delta + this.matches.length) % this.matches.length;
+        this.setFocus(next);
+    }
+
+    private setFocus(index: number): void {
+        this.currentIndex = index;
+        this.updateCount();
+        this.applyFocusHighlight();
+
+        const range = this.matches[index];
+        if (!range) return;
+
+        // Place the editor cursor at the start of the focused match
+        const sel = window.getSelection();
+        if (sel) {
+            const cursorRange = document.createRange();
+            cursorRange.setStart(range.startContainer, range.startOffset);
+            cursorRange.collapse(true);
+            sel.removeAllRanges();
+            sel.addRange(cursorRange);
+        }
+
+        // Update last navigated offset so ESC restores here
+        this.lastNavigatedOffset = this.editorElementRef.getViewCursorOffset();
+
+        this.scrollRangeIntoView(range);
+    }
+
+    private scrollRangeIntoView(range: Range): void {
+        const editorEl = this.editorElementRef.el;
+        editorEl.classList.add('tate-searching');
+        const gen = ++this.scrollGen;
+        const node = range.startContainer;
+        const el = node instanceof Element ? node : node.parentElement;
+        el?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+        requestAnimationFrame(() => {
+            if (this.scrollGen === gen) editorEl.classList.remove('tate-searching');
+        });
+    }
+
+    private applyHitHighlights(): void {
+        if (typeof CSS === 'undefined' || !CSS.highlights) return;
+        CSS.highlights.set('tate-search-hit', new Highlight(...this.matches));
+    }
+
+    private applyFocusHighlight(): void {
+        if (typeof CSS === 'undefined' || !CSS.highlights) return;
+        const focused = this.matches[this.currentIndex];
+        if (focused) {
+            CSS.highlights.set('tate-search-focus', new Highlight(focused));
+        } else {
+            CSS.highlights.delete('tate-search-focus');
+        }
+    }
+
+    private clearHighlights(): void {
+        if (typeof CSS === 'undefined' || !CSS.highlights) return;
+        CSS.highlights.delete('tate-search-hit');
+        CSS.highlights.delete('tate-search-focus');
+    }
+
+    private updateCount(): void {
+        if (!this.countEl) return;
+        if (this.matches.length === 0) {
+            this.countEl.textContent = this.inputEl?.value ? '0/0' : '';
+        } else {
+            this.countEl.textContent = `${this.currentIndex + 1}/${this.matches.length}`;
+        }
+    }
+}

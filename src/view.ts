@@ -2,6 +2,7 @@ import { Editor, ItemView, MarkdownView, Notice, Scope, TFile, WorkspaceLeaf } f
 import type TatePlugin from './main';
 import { SyncCoordinator } from './sync/SyncCoordinator';
 import { EditorElement } from './ui/EditorElement';
+import { SearchPanel } from './ui/SearchPanel';
 import { buildSegmentMap, viewToSrc } from './ui/SegmentMap';
 import { TatePluginSettings } from './settings';
 
@@ -32,6 +33,7 @@ export class VerticalWritingView extends ItemView {
     // Obsidian's global handler, which would otherwise switch the active leaf to a
     // navigation=true view (e.g. MarkdownView). See docs/design/20260424_esc_key_scope.md.
     private readonly escScope: Scope;
+    private searchPanel: SearchPanel | null = null;
 
     constructor(leaf: WorkspaceLeaf, private readonly plugin: TatePlugin) {
         super(leaf);
@@ -53,6 +55,8 @@ export class VerticalWritingView extends ItemView {
         const editorEl = new EditorElement(container);
         this.editorEl = editorEl;
         editorEl.applySettings(this.plugin.settings);
+
+        this.searchPanel = new SearchPanel(editorEl, container, this.app);
 
         const spinnerEl = container.createEl('div', { cls: 'tate-loading-spinner' });
         this.spinnerEl = spinnerEl;
@@ -109,12 +113,14 @@ export class VerticalWritingView extends ItemView {
             if (!this.guardCm6(e)) return; // Block cut if CM6 is unavailable
             editorEl.handleCut(e);
             this.commitToCm6(); // Cut is an immediate commit point
+            this.searchPanel?.onContentChanged();
         });
         this.registerDomEvent(editorEl.el, 'paste', (e: ClipboardEvent) => {
             if (!this.guardCm6(e)) return; // Block if CM6 is unavailable
             const newDivs = editorEl.handlePaste(e);
             this.commitToCm6(); // Paste is an immediate commit point
             this.scheduleLayoutRefresh(newDivs);
+            this.searchPanel?.onContentChanged();
         });
         this.registerDomEvent(editorEl.el, 'beforeinput', (e: InputEvent) => {
             if (!this.guardCm6(e)) return; // Block input if CM6 is unavailable (read-only)
@@ -135,6 +141,7 @@ export class VerticalWritingView extends ItemView {
                 if (inputEvent.inputType === 'insertParagraph') {
                     editorEl.handleParagraphInsert();
                     this.commitToCm6(); // Enter is an immediate commit point
+                    this.searchPanel?.onContentChanged();
                     return;
                 }
                 const annotated = editorEl.handleRubyCompletion()
@@ -142,6 +149,7 @@ export class VerticalWritingView extends ItemView {
                                || editorEl.handleBoutenCompletion();
                 if (annotated) {
                     this.commitToCm6(); // Notation conversion is an immediate commit point
+                    this.searchPanel?.onContentChanged();
                 } else if (inputEvent.inputType === 'deleteByCut') {
                     // Chrome's native cut-line behavior (collapsed cursor + Ctrl+X) fires
                     // this event AFTER the cut event handler (and its commitToCm6) already
@@ -149,9 +157,11 @@ export class VerticalWritingView extends ItemView {
                     // the cut event, so commitToCm6 must be called again here.
                     editorEl.cleanupEmptyParagraphDivs();
                     this.commitToCm6();
+                    this.searchPanel?.onContentChanged();
                 } else if (inputEvent.inputType === 'insertText'
                         || inputEvent.inputType.startsWith('deleteContent')) {
                     this.scheduleCommit(); // Debounced commit for plain typing and deletion
+                    this.searchPanel?.onContentChanged();
                 }
                 editorEl.handleCursorAnchorInput(); // Manage U+200B placeholder in cursor anchor span
             }
@@ -168,6 +178,7 @@ export class VerticalWritingView extends ItemView {
             editorEl.handleCursorAnchorInput(); // Manage U+200B placeholder after IME input
             editorEl.handleBoutenPostCollapseInput(); // Move IME text out of post-collapse bouten span
             this.commitToCm6(); // IME confirmation is a commit point
+            this.searchPanel?.onContentChanged();
         });
         this.registerDomEvent(document, 'selectionchange', () => {
             const contentChanged = editorEl.handleSelectionChange();
@@ -236,6 +247,8 @@ export class VerticalWritingView extends ItemView {
         this.registerEvent(
             this.app.workspace.on('file-open', (file) => {
                 if (file === syncCoordinator.currentFile) return;
+                // Close search panel when the file changes
+                this.closeSearch();
                 if (!file) {
                     // file-open fires with null when the active file is cleared (e.g., the active
                     // Markdown view is closed while the tate view is not the active leaf).
@@ -448,6 +461,7 @@ export class VerticalWritingView extends ItemView {
     }
 
     async onClose(): Promise<void> {
+        this.searchPanel?.close();
         this.app.keymap.popScope(this.escScope);
         // Flush any uncommitted changes to CM6 before closing
         this.commitToCm6();
@@ -515,6 +529,29 @@ export class VerticalWritingView extends ItemView {
 
     applySettings(settings: TatePluginSettings): void {
         this.editorEl?.applySettings(settings);
+    }
+
+    openSearch(): void {
+        const el = this.editorEl;
+        if (!el || !this.searchPanel) return;
+
+        // If an inline element is expanded, collapse it before opening search
+        if (el.isInlineExpanded()) {
+            const contentChanged = el.collapseForEnter();
+            if (contentChanged) this.commitToCm6();
+        }
+
+        const offset = el.getViewCursorOffset();
+        this.searchPanel.open(offset);
+    }
+
+    private closeSearch(): void {
+        if (!this.searchPanel) return;
+        const restoreOffset = this.searchPanel.close();
+        if (restoreOffset !== null && this.editorEl) {
+            this.editorEl.setViewCursorOffset(restoreOffset);
+            this.lastKnownViewOffset = restoreOffset;
+        }
     }
 
     applyRuby(): void {

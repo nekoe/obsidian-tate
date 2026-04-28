@@ -120,3 +120,88 @@
     margin-top: 2em;
     text-align: right;
 }
+
+/* Force content-visibility:visible on all paragraphs during search navigation so
+   scrollIntoView() gets accurate paragraph positions rather than 44px fallback estimates. */
+.tate-editor.tate-searching > div {
+    content-visibility: visible;
+}
+
+/* Search panel: position:absolute within tate-container (position:relative).
+   right/top offsets anchor to the container's visible edge, so the panel stays
+   put even when the editor content scrolls horizontally. */
+.tate-search-panel {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 8px;
+    background: var(--background-primary);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 6px;
+    box-shadow: var(--shadow-s);
+    z-index: 100;
+}
+
+.tate-search-input {
+    width: 160px;
+    padding: 2px 6px;
+    background: var(--background-modifier-form-field);
+    color: var(--text-normal);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 4px;
+    font-size: var(--font-ui-small);
+    outline: none;
+}
+
+.tate-search-input:focus {
+    border-color: var(--interactive-accent);
+    box-shadow: 0 0 0 2px var(--background-modifier-border-focus);
+}
+
+.tate-search-input.tate-search-no-match {
+    border-color: var(--color-red);
+    background: color-mix(in srgb, var(--color-red) 12%, var(--background-modifier-form-field));
+}
+
+.tate-search-count {
+    font-size: var(--font-ui-small);
+    color: var(--text-muted);
+    min-width: 3em;
+    text-align: center;
+    white-space: nowrap;
+}
+
+.tate-search-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    background: transparent;
+    color: var(--text-muted);
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 14px;
+}
+
+.tate-search-btn:hover {
+    background: var(--background-modifier-hover);
+    color: var(--text-normal);
+}
+
+/* CSS Custom Highlight API: all search hits */
+::highlight(tate-search-hit) {
+    background-color: var(--text-highlight-bg, rgba(255, 208, 0, 0.4));
+    color: inherit;
+}
+
+/* CSS Custom Highlight API: currently focused hit */
+::highlight(tate-search-focus) {
+    background-color: var(--interactive-accent);
+    color: var(--text-on-accent);
+}
