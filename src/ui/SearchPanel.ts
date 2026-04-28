@@ -318,7 +318,11 @@ export class SearchPanel {
         if (typeof CSS === 'undefined' || !CSS.highlights) return;
         const focused = this.matches[this.currentIndex];
         if (focused) {
-            CSS.highlights.set('tate-search-focus', new Highlight(focused));
+            const h = new Highlight(focused);
+            // Must be higher than tate-search-hit (default 0) so the focused style wins
+            // when the same range is present in both highlight sets.
+            h.priority = 1;
+            CSS.highlights.set('tate-search-focus', h);
         } else {
             CSS.highlights.delete('tate-search-focus');
         }

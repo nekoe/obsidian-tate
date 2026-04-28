@@ -11,6 +11,7 @@ declare global {
 
     class Highlight {
         constructor(...ranges: AbstractRange[]);
+        priority: number;
     }
 
     // Augment the built-in CSS namespace to include the Highlight Registry.
