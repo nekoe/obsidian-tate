@@ -1,6 +1,14 @@
-/* Vertical writing view container */
+/* Vertical writing view container (non-scrolling; holds spinner and search panel) */
 .tate-container {
     position: relative;
+    width: 100%;
+    height: 100%;
+}
+
+/* Inner scroll wrapper: the editor lives here so that position:absolute children of
+   tate-container (spinner, search panel) are anchored to the visible area and do not
+   move when the editor content is scrolled horizontally. */
+.tate-scroll-area {
     width: 100%;
     height: 100%;
     overflow-x: auto;
@@ -107,11 +115,11 @@
 }
 
 /* Scrollbar styling */
-.tate-container::-webkit-scrollbar {
+.tate-scroll-area::-webkit-scrollbar {
     height: 8px;
 }
 
-.tate-container::-webkit-scrollbar-thumb {
+.tate-scroll-area::-webkit-scrollbar-thumb {
     background-color: var(--scrollbar-thumb-bg);
     border-radius: 4px;
 }
@@ -127,9 +135,10 @@
     content-visibility: visible;
 }
 
-/* Search panel: position:absolute within tate-container (position:relative).
-   right/top offsets anchor to the container's visible edge, so the panel stays
-   put even when the editor content scrolls horizontally. */
+/* Search panel: position:absolute within tate-container (position:relative, non-scrolling).
+   tate-container no longer has overflow-x:auto; the inner tate-scroll-area handles scroll.
+   This ensures right/top offsets anchor to the visible edge and the panel never moves
+   when the editor content scrolls horizontally. */
 .tate-search-panel {
     position: absolute;
     top: 8px;
@@ -146,7 +155,7 @@
 }
 
 .tate-search-input {
-    width: 160px;
+    width: 320px;
     padding: 2px 6px;
     background: var(--background-modifier-form-field);
     color: var(--text-normal);

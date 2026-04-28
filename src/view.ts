@@ -51,8 +51,13 @@ export class VerticalWritingView extends ItemView {
         container.empty();
         container.addClass('tate-container');
 
+        // Inner scroll wrapper: the editor lives here so that position:absolute elements in
+        // container (spinner, search panel) are anchored to the visible area rather than the
+        // scrollable content area, preventing them from moving during horizontal scroll.
+        const scrollArea = container.createEl('div', { cls: 'tate-scroll-area' });
+
         // Assign to local variables to avoid non-null assertions inside closures
-        const editorEl = new EditorElement(container);
+        const editorEl = new EditorElement(scrollArea);
         this.editorEl = editorEl;
         editorEl.applySettings(this.plugin.settings);
 

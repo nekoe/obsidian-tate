@@ -2528,7 +2528,8 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian5.I
     const container = this.containerEl.children[1];
     container.empty();
     container.addClass("tate-container");
-    const editorEl = new EditorElement(container);
+    const scrollArea = container.createEl("div", { cls: "tate-scroll-area" });
+    const editorEl = new EditorElement(scrollArea);
     this.editorEl = editorEl;
     editorEl.applySettings(this.plugin.settings);
     this.searchPanel = new SearchPanel(editorEl, container, this.app);
