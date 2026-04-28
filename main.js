@@ -2302,6 +2302,11 @@ var SearchPanel = class {
     // Generation counter for scrollRangeIntoView rAF guard (prevents stale rAF from
     // clearing tate-searching class after a newer navigation has already started).
     this.scrollGen = 0;
+    // True when tate-searching must be applied before the next scrollIntoView call.
+    // Set on open() (new file DOM has no cached sizes) and on onContentChanged()
+    // (edits may have invalidated contain-intrinsic-block-size caches for affected
+    // paragraphs).  Cleared once the class is applied; stays false until next edit.
+    this.contentVisibilityDirty = true;
     this.searchScope = new import_obsidian4.Scope(app.scope);
     this.searchScope.register([], "Enter", (evt) => {
       if (evt.isComposing) return;
@@ -2332,6 +2337,7 @@ var SearchPanel = class {
     this.lastNavigatedOffset = null;
     this.matches = [];
     this.currentIndex = -1;
+    this.contentVisibilityDirty = true;
     this.buildPanel();
     this.app.keymap.pushScope(this.searchScope);
     (_b = this.inputEl) == null ? void 0 : _b.focus();
@@ -2358,6 +2364,7 @@ var SearchPanel = class {
   }
   onContentChanged() {
     if (!this.isOpen) return;
+    this.contentVisibilityDirty = true;
     this.runSearch();
   }
   buildPanel() {
@@ -2461,7 +2468,10 @@ var SearchPanel = class {
   }
   scrollRangeIntoView(range) {
     const editorEl = this.editorElementRef.el;
-    editorEl.classList.add("tate-searching");
+    if (this.contentVisibilityDirty) {
+      editorEl.classList.add("tate-searching");
+      this.contentVisibilityDirty = false;
+    }
     const gen = ++this.scrollGen;
     const node = range.startContainer;
     const el = node instanceof Element ? node : node.parentElement;
