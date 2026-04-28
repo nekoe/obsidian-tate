@@ -2420,31 +2420,33 @@ var SearchPanel = class {
     (_e = this.inputEl) == null ? void 0 : _e.classList.remove("tate-search-no-match");
     this.applyHitHighlights();
     if (prevIndex >= 0 && prevIndex < this.matches.length) {
-      this.setFocus(prevIndex);
+      this.setFocus(prevIndex, false);
     } else {
-      this.setFocus(0);
+      this.setFocus(0, false);
     }
   }
   navigate(delta) {
     if (this.matches.length === 0) return;
     const next = (this.currentIndex + delta + this.matches.length) % this.matches.length;
-    this.setFocus(next);
+    this.setFocus(next, true);
   }
-  setFocus(index) {
+  setFocus(index, isNavigation) {
     this.currentIndex = index;
     this.updateCount();
     this.applyFocusHighlight();
     const range = this.matches[index];
     if (!range) return;
-    const sel = window.getSelection();
-    if (sel) {
-      const cursorRange = document.createRange();
-      cursorRange.setStart(range.startContainer, range.startOffset);
-      cursorRange.collapse(true);
-      sel.removeAllRanges();
-      sel.addRange(cursorRange);
+    if (isNavigation) {
+      const sel = window.getSelection();
+      if (sel) {
+        const cursorRange = document.createRange();
+        cursorRange.setStart(range.startContainer, range.startOffset);
+        cursorRange.collapse(true);
+        sel.removeAllRanges();
+        sel.addRange(cursorRange);
+      }
+      this.lastNavigatedOffset = this.editorElementRef.getViewCursorOffset();
     }
-    this.lastNavigatedOffset = this.editorElementRef.getViewCursorOffset();
     this.scrollRangeIntoView(range);
   }
   scrollRangeIntoView(range) {

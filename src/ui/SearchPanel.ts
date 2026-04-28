@@ -247,20 +247,22 @@ export class SearchPanel {
         this.applyHitHighlights();
 
         // On re-search after content change, keep the previously focused index if still valid.
+        // isNavigation=false: typing in the input — highlight and scroll, but do NOT move the
+        // DOM selection (which would steal focus from the input field).
         if (prevIndex >= 0 && prevIndex < this.matches.length) {
-            this.setFocus(prevIndex);
+            this.setFocus(prevIndex, false);
         } else {
-            this.setFocus(0);
+            this.setFocus(0, false);
         }
     }
 
     private navigate(delta: 1 | -1): void {
         if (this.matches.length === 0) return;
         const next = (this.currentIndex + delta + this.matches.length) % this.matches.length;
-        this.setFocus(next);
+        this.setFocus(next, true);
     }
 
-    private setFocus(index: number): void {
+    private setFocus(index: number, isNavigation: boolean): void {
         this.currentIndex = index;
         this.updateCount();
         this.applyFocusHighlight();
@@ -268,18 +270,21 @@ export class SearchPanel {
         const range = this.matches[index];
         if (!range) return;
 
-        // Place the editor cursor at the start of the focused match
-        const sel = window.getSelection();
-        if (sel) {
-            const cursorRange = document.createRange();
-            cursorRange.setStart(range.startContainer, range.startOffset);
-            cursorRange.collapse(true);
-            sel.removeAllRanges();
-            sel.addRange(cursorRange);
+        if (isNavigation) {
+            // Place the editor cursor at the start of the focused match.
+            // Only done during explicit navigation (Enter / buttons) — not during typing —
+            // because sel.addRange() on a contenteditable node steals browser focus.
+            const sel = window.getSelection();
+            if (sel) {
+                const cursorRange = document.createRange();
+                cursorRange.setStart(range.startContainer, range.startOffset);
+                cursorRange.collapse(true);
+                sel.removeAllRanges();
+                sel.addRange(cursorRange);
+            }
+            // Update last navigated offset so ESC restores here
+            this.lastNavigatedOffset = this.editorElementRef.getViewCursorOffset();
         }
-
-        // Update last navigated offset so ESC restores here
-        this.lastNavigatedOffset = this.editorElementRef.getViewCursorOffset();
 
         this.scrollRangeIntoView(range);
     }
