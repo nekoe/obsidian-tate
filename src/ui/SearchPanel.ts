@@ -159,7 +159,16 @@ export class SearchPanel {
         const restoreOffset = this.lastNavigatedOffset ?? this.prSearchOffset;
         this.prSearchOffset = null;
         this.lastNavigatedOffset = null;
-        return restoreOffset;
+
+        // Restore cursor and give focus back to the editor.  This must happen inside
+        // close() rather than in the caller because ESC and the × button call close()
+        // directly — their return value is never used.
+        if (restoreOffset !== null) {
+            this.editorElementRef.setViewCursorOffset(restoreOffset);
+        }
+        this.editorElementRef.el.focus();
+
+        return restoreOffset; // returned so view.ts can update lastKnownViewOffset
     }
 
     onContentChanged(): void {

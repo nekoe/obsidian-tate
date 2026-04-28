@@ -2350,6 +2350,10 @@ var SearchPanel = class {
     const restoreOffset = (_b = this.lastNavigatedOffset) != null ? _b : this.prSearchOffset;
     this.prSearchOffset = null;
     this.lastNavigatedOffset = null;
+    if (restoreOffset !== null) {
+      this.editorElementRef.setViewCursorOffset(restoreOffset);
+    }
+    this.editorElementRef.el.focus();
     return restoreOffset;
   }
   onContentChanged() {
@@ -2937,12 +2941,8 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian5.I
   closeSearch() {
     if (!this.searchPanel) return;
     const restoreOffset = this.searchPanel.close();
-    if (this.editorEl) {
-      if (restoreOffset !== null) {
-        this.editorEl.setViewCursorOffset(restoreOffset);
-        this.lastKnownViewOffset = restoreOffset;
-      }
-      this.editorEl.el.focus();
+    if (restoreOffset !== null) {
+      this.lastKnownViewOffset = restoreOffset;
     }
   }
   applyRuby() {

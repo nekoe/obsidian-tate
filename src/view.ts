@@ -552,13 +552,11 @@ export class VerticalWritingView extends ItemView {
 
     private closeSearch(): void {
         if (!this.searchPanel) return;
+        // close() restores the cursor and focuses the editor; we only need to sync
+        // lastKnownViewOffset so tab-switch restore uses the post-search position.
         const restoreOffset = this.searchPanel.close();
-        if (this.editorEl) {
-            if (restoreOffset !== null) {
-                this.editorEl.setViewCursorOffset(restoreOffset);
-                this.lastKnownViewOffset = restoreOffset;
-            }
-            this.editorEl.el.focus();
+        if (restoreOffset !== null) {
+            this.lastKnownViewOffset = restoreOffset;
         }
     }
 
