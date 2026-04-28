@@ -15,6 +15,7 @@ buttons). ESC or the close button dismisses the panel.
 - Search is case-insensitive.
 - All hits are highlighted simultaneously; the focused hit uses a distinct style.
 - The panel updates search results in real time as the user edits content while the panel is open.
+- Search does not run while an IME composition is in progress; it fires on `compositionend`.
 - ESC restores the cursor to the last navigated hit position, or to the pre-search position if
   no navigation occurred.
 - Opening the panel while an inline element is expanded (a `tate-editing` span) collapses it
@@ -38,7 +39,7 @@ VerticalWritingView
     ├── matches: Range[]             CSS Highlight ranges, rebuilt on each runSearch()
     ├── currentIndex: number         focused hit index; preserved across content-change re-searches
     ├── prSearchOffset               cursor offset at open(); restored if no navigation happened
-    ├── lastNavigatedOffset          cursor offset of the last setFocus(); restored on ESC
+    ├── lastNavigatedOffset          cursor offset of the last setFocus(isNavigation=true); restored on close
     └── scrollGen: number            generation counter for rAF guard in scrollRangeIntoView()
 ```
 
@@ -68,24 +69,49 @@ The resulting `Range` objects are passed directly to the CSS Custom Highlight AP
 
 Two named highlights are maintained:
 
-| Name | Contents |
-|---|---|
-| `tate-search-hit` | All match ranges |
-| `tate-search-focus` | The single focused match range |
+| Name | Contents | Priority |
+|---|---|---|
+| `tate-search-hit` | All match ranges | 0 (default) |
+| `tate-search-focus` | The single focused match range | 1 |
 
 ```typescript
 CSS.highlights.set('tate-search-hit', new Highlight(...this.matches));
-CSS.highlights.set('tate-search-focus', new Highlight(focused));
+
+const h = new Highlight(focused);
+h.priority = 1; // wins over tate-search-hit when ranges overlap
+CSS.highlights.set('tate-search-focus', h);
 ```
 
 Both are cleared on `close()` and rebuilt on every `runSearch()`. The `::highlight()` pseudo-element
 rules live in `styles.css`:
 
 ```css
-::highlight(tate-search-hit)   { background-color: var(--text-highlight-bg); }
-::highlight(tate-search-focus) { background-color: var(--interactive-accent);
-                                  color: var(--text-on-accent); }
+::highlight(tate-search-hit) {
+    background-color: var(--text-highlight-bg, rgba(255, 208, 0, 0.4));
+    color: inherit;
+}
+/* ::highlight() does not support outline/border/box-shadow.
+   text-decoration underline+overline = right/left lines in vertical-rl. */
+::highlight(tate-search-focus) {
+    background-color: color-mix(in srgb, var(--interactive-accent) 35%, transparent);
+    color: inherit;
+    text-decoration-line: underline overline;
+    text-decoration-style: dashed;
+    text-decoration-color: var(--interactive-accent);
+    text-decoration-thickness: 2px;
+}
 ```
+
+**Priority requirement**: the focused match range is registered in _both_ `tate-search-hit` and
+`tate-search-focus`. Without `h.priority = 1`, both highlights have the same priority (0) and the
+CSS cascade order is not guaranteed to resolve the conflict correctly — the focus style may be
+invisible. Setting `priority = 1` ensures `tate-search-focus` always wins.
+
+**`::highlight()` property constraints**: CSS Custom Highlight API only supports a limited subset
+of CSS properties. `outline`, `border`, `box-shadow`, and `padding` are NOT supported. To create
+a visually distinct focused indicator in vertical writing mode, `text-decoration-line: underline overline`
+is used — in `writing-mode: vertical-rl`, `underline` renders on the right side and `overline` on
+the left side of each character, approximating a lateral border.
 
 CSS Custom Highlight API requires no DOM mutation for highlighting — it applies paint-layer
 decoration directly to `Range` objects. This avoids the O(N) cost of inserting wrapper `<span>`
@@ -117,6 +143,65 @@ The panel's `<input>` element also has a `keydown` listener that calls `stopProp
 keys except Enter and Escape, preventing the editor's `keydown` handler in `view.ts` from seeing
 typing in the search field (which would trigger Undo/Redo or navigation-key commits).
 
+### IME composition guard
+
+Incremental search must not run against partially composed IME text. The `input` listener checks
+`event.isComposing` and returns early during composition. A separate `compositionend` listener
+triggers `runSearch()` when the user commits the input:
+
+```typescript
+input.addEventListener('input', (e) => {
+    if ((e as InputEvent).isComposing) return;
+    this.runSearch();
+});
+// In Chromium/Electron, compositionend fires before the subsequent input event,
+// so this is the reliable trigger point for post-IME search.
+input.addEventListener('compositionend', () => this.runSearch());
+```
+
+### Focus management
+
+**Browser focus invariant**: while the search panel is open, keyboard focus must remain in the
+search `<input>` so the user can type consecutive characters and use Enter for navigation.
+
+Two operations risk stealing focus from the input:
+
+1. **`sel.addRange()` on a contenteditable node** — moves browser focus to the contenteditable.
+   This is called in `setFocus()` to place the editor cursor at the hit (needed to capture
+   `lastNavigatedOffset` via `getViewCursorOffset()`). It is guarded by `isNavigation`:
+
+   ```typescript
+   private setFocus(index: number, isNavigation: boolean): void {
+       // ...highlight, count, scroll always...
+       if (isNavigation) {
+           sel.removeAllRanges();
+           sel.addRange(cursorRange);                      // steals focus
+           this.lastNavigatedOffset = getViewCursorOffset();
+           this.inputEl?.focus();                          // give it back
+       }
+   }
+   ```
+
+   `runSearch()` calls `setFocus(index, false)` — typing in the input never moves the DOM cursor.
+   `navigate()` calls `setFocus(next, true)` — Enter/button navigation moves the cursor then
+   immediately restores focus to the input.
+
+2. **`close()` called by ESC scope handler or × button** — these call `SearchPanel.close()`
+   directly; the return value is not used by a caller. Therefore `close()` must handle cursor
+   restore and `el.focus()` itself:
+
+   ```typescript
+   close(): number | null {
+       // ...cleanup...
+       if (restoreOffset !== null) editorElementRef.setViewCursorOffset(restoreOffset);
+       editorElementRef.el.focus();
+       return restoreOffset; // caller (closeSearch) uses this only to update lastKnownViewOffset
+   }
+   ```
+
+   `VerticalWritingView.closeSearch()` (called on file-open) also invokes `close()`, so the
+   focus restore is consistent across all close paths.
+
 ### Panel position
 
 The panel element is appended to `.tate-container` (the `container` parameter passed to the
@@ -135,9 +220,24 @@ pattern and ensures Obsidian's normal DOM cleanup manages the panel's lifetime.
 `position: absolute` with `right: 8px` inside `.tate-container` (which has `position: relative`)
 anchors the panel to the physical right edge of the container element. Because CSS absolute
 positioning uses the containing block's padding-box edge (not the scroll position), the panel
-stays visually fixed even as the editor content scrolls horizontally. A `position: fixed` approach
-was considered but rejected because it requires dynamic `px` positioning from `getBoundingClientRect()`
-and must be updated on resize; `position: absolute` within the container is self-maintaining.
+stays visually fixed even as the editor content scrolls horizontally.
+
+**DOM structure**: `.tate-container` must NOT have `overflow-x: auto`. The scroll behavior lives
+in the inner `.tate-scroll-area` wrapper. If `overflow-x: auto` were on `.tate-container`, then
+`right: 8px` would anchor to the right edge of the full scroll content area (which in
+`writing-mode: vertical-rl` is the physical left / document end), causing the panel to move with
+horizontal scroll and to jump there on `inputEl.focus()`. The inner scroll wrapper was introduced
+specifically to fix this:
+
+```
+.tate-container  (position:relative, no overflow — anchor for spinner + search panel)
+└── .tate-scroll-area  (overflow-x:auto — scroll wrapper for editor content)
+    └── .tate-editor   (contenteditable, writing-mode:vertical-rl)
+```
+
+A `position: fixed` approach was considered but rejected because it requires dynamic `px`
+positioning from `getBoundingClientRect()` and must be updated on resize; `position: absolute`
+within the container is self-maintaining.
 
 ### Scroll to focused hit: `tate-searching` class
 
@@ -170,6 +270,9 @@ generation counter inside `SearchPanel` guards against stale rAF callbacks when 
 navigates quickly (pressing Enter multiple times before any rAF fires): only the most recent
 rAF removes the class.
 
+`scrollRangeIntoView` is called for both typing-triggered updates (`isNavigation=false`) and
+explicit navigation (`isNavigation=true`), so the current hit scrolls into view in both cases.
+
 No loading spinner is shown during search navigation. The `tate-scroll-restoring` spinner is
 appropriate for file loads (where the user waits for content to appear) but would be jarring for
 in-session navigation.
@@ -180,16 +283,21 @@ in-session navigation.
 excluded) rather than maintaining its own offset calculation. This guarantees consistency with
 the offset space used by `VerticalWritingView.lastKnownViewOffset` and `setViewCursorOffset()`.
 
-On `setFocus()`, the editor selection is moved to the start of the focused `Range`, then
-`getViewCursorOffset()` is called to capture `lastNavigatedOffset`. When the panel is closed
-(by ESC or the close button), `close()` returns the offset to restore:
+`lastNavigatedOffset` is updated only during explicit navigation (`isNavigation=true`), not
+during typing. This ensures ESC always restores to the last position the user explicitly visited,
+not to a position set as a side-effect of typing.
+
+When the panel is closed (by any path), `close()` determines the restore target and applies it:
 
 ```typescript
 const restoreOffset = this.lastNavigatedOffset ?? this.prSearchOffset;
+if (restoreOffset !== null) editorElementRef.setViewCursorOffset(restoreOffset);
+editorElementRef.el.focus();
+return restoreOffset;
 ```
 
-`VerticalWritingView.closeSearch()` applies the returned offset via `setViewCursorOffset()` and
-updates `lastKnownViewOffset` so that subsequent tab-switch restore uses the post-search position.
+`VerticalWritingView.closeSearch()` uses the returned offset only to update `lastKnownViewOffset`
+so that subsequent tab-switch restore uses the post-search position.
 
 ### `currentIndex` preservation across content changes
 
@@ -204,9 +312,9 @@ this.matches = [];
 this.currentIndex = -1;
 // ... rebuild matches ...
 if (prevIndex >= 0 && prevIndex < this.matches.length) {
-    this.setFocus(prevIndex);
+    this.setFocus(prevIndex, false);  // isNavigation=false: do not move DOM cursor
 } else {
-    this.setFocus(0);
+    this.setFocus(0, false);
 }
 ```
 
@@ -215,7 +323,7 @@ if (prevIndex >= 0 && prevIndex < this.matches.length) {
 | File | Role |
 |---|---|
 | `src/ui/SearchPanel.ts` | SearchPanel class, visible text extraction, Range building |
-| `src/css-highlight.d.ts` | TypeScript type declarations for CSS Custom Highlight API |
+| `src/css-highlight.d.ts` | TypeScript type declarations for CSS Custom Highlight API (including `Highlight.priority`) |
 | `src/view.ts` | Creates SearchPanel in `onOpen()`; calls `openSearch()`, `closeSearch()`, `onContentChanged()` |
 | `src/main.ts` | Registers `tate-search` command (no default hotkey) |
 | `styles.css` | `.tate-search-panel`, `.tate-searching`, `::highlight(tate-search-hit/focus)` |
