@@ -264,12 +264,10 @@ export class SearchPanel {
 
         // Re-search (user keeps typing): stay on the same index if still valid.
         // First search: focus the nearest hit at or after the cursor position.
-        // isNavigation mirrors scroll: when we scroll to a hit, we also move the DOM
-        // cursor there so focus always follows the viewport.
         if (prevIndex >= 0 && prevIndex < this.matches.length) {
-            this.setFocus(prevIndex, scroll, scroll);
+            this.setFocus(prevIndex, scroll);
         } else {
-            this.setFocus(this.findFirstIndexAtOrAfter(this.prSearchOffset ?? 0), scroll, scroll);
+            this.setFocus(this.findFirstIndexAtOrAfter(this.prSearchOffset ?? 0), scroll);
         }
     }
 
@@ -285,39 +283,35 @@ export class SearchPanel {
     private navigate(delta: 1 | -1): void {
         if (this.matches.length === 0) return;
         const next = (this.currentIndex + delta + this.matches.length) % this.matches.length;
-        this.setFocus(next, true, true);
+        this.setFocus(next, true);
     }
 
-    // isNavigation: true = move DOM cursor to the hit, update lastNavigatedOffset, restore
-    //               focus to input.  Always equals triggerScroll (scroll ↔ cursor move together).
-    // triggerScroll: false only when called from onContentChanged() — user is editing; no scroll.
-    private setFocus(index: number, isNavigation: boolean, triggerScroll: boolean): void {
+    // scroll=true: move the DOM cursor to the hit, update lastNavigatedOffset, restore
+    //              focus to the input, and scroll the hit into view.
+    // scroll=false: update highlight and count only (called from onContentChanged).
+    private setFocus(index: number, scroll: boolean): void {
         this.currentIndex = index;
         this.updateCount();
         this.applyFocusHighlight();
 
         const range = this.matches[index];
-        if (!range) return;
+        if (!range || !scroll) return;
 
-        if (isNavigation) {
-            // Place the editor cursor at the start of the focused match.
-            // Only done during explicit navigation (Enter / buttons) — not during typing —
-            // because sel.addRange() on a contenteditable node steals browser focus.
-            const sel = window.getSelection();
-            if (sel) {
-                const cursorRange = document.createRange();
-                cursorRange.setStart(range.startContainer, range.startOffset);
-                cursorRange.collapse(true);
-                sel.removeAllRanges();
-                sel.addRange(cursorRange);
-            }
-            // Update last navigated offset so ESC restores here
-            this.lastNavigatedOffset = this.editorElementRef.getViewCursorOffset();
-            // sel.addRange() stole focus from the search input; give it back.
-            this.inputEl?.focus();
+        // Place the editor cursor at the start of the focused match.
+        // sel.addRange() on a contenteditable node steals browser focus.
+        const sel = window.getSelection();
+        if (sel) {
+            const cursorRange = document.createRange();
+            cursorRange.setStart(range.startContainer, range.startOffset);
+            cursorRange.collapse(true);
+            sel.removeAllRanges();
+            sel.addRange(cursorRange);
         }
-
-        if (triggerScroll) this.scrollRangeIntoView(range);
+        // Update last navigated offset so ESC restores here.
+        this.lastNavigatedOffset = this.editorElementRef.getViewCursorOffset();
+        // sel.addRange() stole focus from the search input; give it back.
+        this.inputEl?.focus();
+        this.scrollRangeIntoView(range);
     }
 
     private scrollRangeIntoView(range: Range): void {

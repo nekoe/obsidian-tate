@@ -2483,9 +2483,9 @@ var SearchPanel = class {
     }
     this.applyHitHighlights();
     if (prevIndex >= 0 && prevIndex < this.matches.length) {
-      this.setFocus(prevIndex, scroll, scroll);
+      this.setFocus(prevIndex, scroll);
     } else {
-      this.setFocus(this.findFirstIndexAtOrAfter((_c = this.prSearchOffset) != null ? _c : 0), scroll, scroll);
+      this.setFocus(this.findFirstIndexAtOrAfter((_c = this.prSearchOffset) != null ? _c : 0), scroll);
     }
   }
   // Returns the index of the first match whose visible-text start is >= offset.
@@ -2499,31 +2499,29 @@ var SearchPanel = class {
   navigate(delta) {
     if (this.matches.length === 0) return;
     const next = (this.currentIndex + delta + this.matches.length) % this.matches.length;
-    this.setFocus(next, true, true);
+    this.setFocus(next, true);
   }
-  // isNavigation: true = move DOM cursor to the hit, update lastNavigatedOffset, restore
-  //               focus to input.  Always equals triggerScroll (scroll ↔ cursor move together).
-  // triggerScroll: false only when called from onContentChanged() — user is editing; no scroll.
-  setFocus(index, isNavigation, triggerScroll) {
+  // scroll=true: move the DOM cursor to the hit, update lastNavigatedOffset, restore
+  //              focus to the input, and scroll the hit into view.
+  // scroll=false: update highlight and count only (called from onContentChanged).
+  setFocus(index, scroll) {
     var _a;
     this.currentIndex = index;
     this.updateCount();
     this.applyFocusHighlight();
     const range = this.matches[index];
-    if (!range) return;
-    if (isNavigation) {
-      const sel = window.getSelection();
-      if (sel) {
-        const cursorRange = document.createRange();
-        cursorRange.setStart(range.startContainer, range.startOffset);
-        cursorRange.collapse(true);
-        sel.removeAllRanges();
-        sel.addRange(cursorRange);
-      }
-      this.lastNavigatedOffset = this.editorElementRef.getViewCursorOffset();
-      (_a = this.inputEl) == null ? void 0 : _a.focus();
+    if (!range || !scroll) return;
+    const sel = window.getSelection();
+    if (sel) {
+      const cursorRange = document.createRange();
+      cursorRange.setStart(range.startContainer, range.startOffset);
+      cursorRange.collapse(true);
+      sel.removeAllRanges();
+      sel.addRange(cursorRange);
     }
-    if (triggerScroll) this.scrollRangeIntoView(range);
+    this.lastNavigatedOffset = this.editorElementRef.getViewCursorOffset();
+    (_a = this.inputEl) == null ? void 0 : _a.focus();
+    this.scrollRangeIntoView(range);
   }
   scrollRangeIntoView(range) {
     this.editorElementRef.scrollToRange(range);
