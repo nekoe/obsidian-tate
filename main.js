@@ -2354,7 +2354,15 @@ var SearchPanel = class {
     this.prSearchOffset = null;
     // Offset of the last navigated hit; used as the restore target after close.
     this.lastNavigatedOffset = null;
+    // True while the editor has focus due to a user click (not a programmatic setFocus call).
+    // When true: tate-search-focus is hidden, and close() skips cursor restore.
+    this.editorFocused = false;
     this.searchScope = new import_obsidian4.Scope(app.scope);
+    editorElementRef.el.addEventListener("mousedown", () => {
+      if (!this.isOpen) return;
+      this.editorFocused = true;
+      this.clearFocusHighlight();
+    });
     this.searchScope.register([], "Enter", (evt) => {
       if (evt.isComposing) return;
       this.navigate(1);
@@ -2382,6 +2390,7 @@ var SearchPanel = class {
     }
     this.prSearchOffset = initialOffset;
     this.lastNavigatedOffset = null;
+    this.editorFocused = false;
     this.matches = [];
     this.matchStarts = [];
     this.currentIndex = -1;
@@ -2400,14 +2409,18 @@ var SearchPanel = class {
     this.countEl = null;
     this.matches = [];
     this.currentIndex = -1;
-    const restoreOffset = (_b = this.lastNavigatedOffset) != null ? _b : this.prSearchOffset;
+    const wasEditorFocused = this.editorFocused;
+    const restoreOffset = wasEditorFocused ? null : (_b = this.lastNavigatedOffset) != null ? _b : this.prSearchOffset;
     this.prSearchOffset = null;
     this.lastNavigatedOffset = null;
+    this.editorFocused = false;
     this.matchStarts = [];
-    if (restoreOffset !== null) {
-      this.editorElementRef.setViewCursorOffset(restoreOffset);
+    if (!wasEditorFocused) {
+      if (restoreOffset !== null) {
+        this.editorElementRef.setViewCursorOffset(restoreOffset);
+      }
+      this.editorElementRef.el.focus();
     }
-    this.editorElementRef.el.focus();
     return restoreOffset;
   }
   onContentChanged() {
@@ -2511,6 +2524,7 @@ var SearchPanel = class {
     this.applyFocusHighlight();
     const range = this.matches[index];
     if (!range || !scroll) return;
+    this.editorFocused = false;
     const sel = window.getSelection();
     if (sel) {
       const cursorRange = document.createRange();
@@ -2548,6 +2562,10 @@ var SearchPanel = class {
     } else {
       CSS.highlights.delete("tate-search-focus");
     }
+  }
+  clearFocusHighlight() {
+    if (typeof CSS === "undefined" || !CSS.highlights) return;
+    CSS.highlights.delete("tate-search-focus");
   }
   clearHighlights() {
     if (typeof CSS === "undefined" || !CSS.highlights) return;

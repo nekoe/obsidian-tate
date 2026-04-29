@@ -98,6 +98,9 @@ export class SearchPanel {
     private prSearchOffset: number | null = null;
     // Offset of the last navigated hit; used as the restore target after close.
     private lastNavigatedOffset: number | null = null;
+    // True while the editor has focus due to a user click (not a programmatic setFocus call).
+    // When true: tate-search-focus is hidden, and close() skips cursor restore.
+    private editorFocused = false;
 
     constructor(
         private readonly editorElementRef: EditorElement,
@@ -105,6 +108,14 @@ export class SearchPanel {
         private readonly app: App,
     ) {
         this.searchScope = new Scope(app.scope);
+
+        // When the user clicks the editor, remove the focus highlight and mark that
+        // the editor has focus so close() does not restore the cursor over the click position.
+        editorElementRef.el.addEventListener('mousedown', () => {
+            if (!this.isOpen) return;
+            this.editorFocused = true;
+            this.clearFocusHighlight();
+        });
 
         this.searchScope.register([], 'Enter', (evt) => {
             if (evt.isComposing) return;
@@ -135,6 +146,7 @@ export class SearchPanel {
 
         this.prSearchOffset = initialOffset;
         this.lastNavigatedOffset = null;
+        this.editorFocused = false;
         this.matches = [];
         this.matchStarts = [];
         this.currentIndex = -1;
@@ -156,18 +168,24 @@ export class SearchPanel {
         this.matches = [];
         this.currentIndex = -1;
 
-        const restoreOffset = this.lastNavigatedOffset ?? this.prSearchOffset;
+        const wasEditorFocused = this.editorFocused;
+        const restoreOffset = wasEditorFocused ? null : (this.lastNavigatedOffset ?? this.prSearchOffset);
         this.prSearchOffset = null;
         this.lastNavigatedOffset = null;
+        this.editorFocused = false;
         this.matchStarts = [];
 
         // Restore cursor and give focus back to the editor.  This must happen inside
         // close() rather than in the caller because ESC and the × button call close()
         // directly — their return value is never used.
-        if (restoreOffset !== null) {
-            this.editorElementRef.setViewCursorOffset(restoreOffset);
+        // If the user clicked the editor before closing, skip cursor restore: the cursor
+        // is already at the click position and the editor already has focus.
+        if (!wasEditorFocused) {
+            if (restoreOffset !== null) {
+                this.editorElementRef.setViewCursorOffset(restoreOffset);
+            }
+            this.editorElementRef.el.focus();
         }
-        this.editorElementRef.el.focus();
 
         return restoreOffset; // returned so view.ts can update lastKnownViewOffset
     }
@@ -297,6 +315,10 @@ export class SearchPanel {
         const range = this.matches[index];
         if (!range || !scroll) return;
 
+        // Typing or navigation is restoring control to the search input; clear the flag
+        // so the focus highlight is shown again and close() will restore the cursor.
+        this.editorFocused = false;
+
         // Place the editor cursor at the start of the focused match.
         // sel.addRange() on a contenteditable node steals browser focus.
         const sel = window.getSelection();
@@ -351,6 +373,11 @@ export class SearchPanel {
         } else {
             CSS.highlights.delete('tate-search-focus');
         }
+    }
+
+    private clearFocusHighlight(): void {
+        if (typeof CSS === 'undefined' || !CSS.highlights) return;
+        CSS.highlights.delete('tate-search-focus');
     }
 
     private clearHighlights(): void {
