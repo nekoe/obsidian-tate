@@ -474,7 +474,6 @@ export class VerticalWritingView extends ItemView {
      *  are created with content-visibility:visible and real sizes), and shows the spinner.
      *  Returns the generation number for use in rAF guards. */
     private beginScrollRestoring(): number {
-        console.log("beginScrollRestoring");
         const gen = ++this.scrollRestoringGeneration;
         this.editorEl?.el.classList.add('tate-scroll-restoring');
         this.showLoadingSpinner();
@@ -484,7 +483,6 @@ export class VerticalWritingView extends ItemView {
     /** Schedules a one-rAF cleanup for the scroll-restore cycle identified by gen.
      *  Used when no scroll is needed (no savedOffset or superseded load). */
     private scheduleScrollRestoringCleanup(gen: number): void {
-        console.log("scheduleScrollRestoringCleanup");
         requestAnimationFrame(() => {
             if (this.scrollRestoringGeneration === gen) {
                 this.editorEl?.el.classList.remove('tate-scroll-restoring');
@@ -496,7 +494,6 @@ export class VerticalWritingView extends ItemView {
     /** Cancels an in-flight scroll-restore cycle immediately (synchronous, no rAF).
      *  Increments the generation to invalidate any pending cleanup rAFs. */
     private cancelScrollRestoring(): void {
-        console.log("cancelScrollRestoring");
         ++this.scrollRestoringGeneration;
         this.editorEl?.el.classList.remove('tate-scroll-restoring');
         this.hideLoadingSpinner();
@@ -508,7 +505,6 @@ export class VerticalWritingView extends ItemView {
      *  the actual size into the cache. Removes the class in the second rAF (Frame N+1)
      *  so Frame N's layout is not skipped. No spinner — two frames is imperceptible. */
     private scheduleLayoutRefresh(divs: HTMLDivElement[]): void {
-        console.log("scheduleLayoutRefresh");
         if (divs.length === 0) return;
         divs.forEach(d => d.classList.add('tate-layout-refreshing'));
         requestAnimationFrame(() => {
