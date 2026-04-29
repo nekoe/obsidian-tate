@@ -40,7 +40,8 @@ VerticalWritingView
     ├── currentIndex: number         focused hit index; preserved across content-change re-searches
     ├── prSearchOffset               cursor offset at open(); restored if no navigation happened
     ├── lastNavigatedOffset          cursor offset of the last setFocus(isNavigation=true); restored on close
-    └── scrollGen: number            generation counter for rAF guard in scrollRangeIntoView()
+    ├── scrollGen: number            generation counter for rAF guard in scrollRangeIntoView()
+    └── contentVisibilityDirty: bool true when tate-searching must precede the next scrollIntoView
 ```
 
 ### Visible text extraction
@@ -171,20 +172,22 @@ Two operations risk stealing focus from the input:
    `lastNavigatedOffset` via `getViewCursorOffset()`). It is guarded by `isNavigation`:
 
    ```typescript
-   private setFocus(index: number, isNavigation: boolean): void {
-       // ...highlight, count, scroll always...
+   private setFocus(index: number, isNavigation: boolean, triggerScroll: boolean): void {
+       // ...highlight, count...
        if (isNavigation) {
            sel.removeAllRanges();
            sel.addRange(cursorRange);                      // steals focus
            this.lastNavigatedOffset = getViewCursorOffset();
            this.inputEl?.focus();                          // give it back
        }
+       if (triggerScroll) this.scrollRangeIntoView(range);
    }
    ```
 
-   `runSearch()` calls `setFocus(index, false)` — typing in the input never moves the DOM cursor.
-   `navigate()` calls `setFocus(next, true)` — Enter/button navigation moves the cursor then
-   immediately restores focus to the input.
+   `runSearch()` calls `setFocus(index, false, scroll)` — typing in the input never moves the DOM
+   cursor; whether to scroll is controlled by the `scroll` argument passed to `runSearch()`.
+   `navigate()` calls `setFocus(next, true, true)` — Enter/button navigation moves the cursor then
+   immediately restores focus to the input, and always scrolls.
 
 2. **`close()` called by ESC scope handler or × button** — these call `SearchPanel.close()`
    directly; the return value is not used by a caller. Therefore `close()` must handle cursor
@@ -239,7 +242,7 @@ A `position: fixed` approach was considered but rejected because it requires dyn
 positioning from `getBoundingClientRect()` and must be updated on resize; `position: absolute`
 within the container is self-maintaining.
 
-### Scroll to focused hit: `tate-searching` class
+### Scroll to focused hit: `tate-searching` class and `contentVisibilityDirty`
 
 `content-visibility: auto` on `.tate-editor > div` makes `scrollIntoView()` inaccurate for
 off-screen paragraphs (they report their `contain-intrinsic-block-size: 44px` fallback size
@@ -247,15 +250,38 @@ rather than their real size). The same problem applies to search navigation as t
 after file load (see `20260425_scroll_restore_content_visibility.md`).
 
 A separate CSS class `tate-searching` is used — distinct from `tate-scroll-restoring` — to
-temporarily force `content-visibility: visible` on all paragraphs during a navigation scroll:
+temporarily force `content-visibility: visible` on all paragraphs before calling `scrollIntoView()`:
 
 ```css
 .tate-editor.tate-searching > div { content-visibility: visible; }
 ```
 
+Using a separate class avoids interfering with `scrollRestoringGeneration` counter in
+`VerticalWritingView`, which guards the file-load scroll-restore lifecycle.
+
+**`contentVisibilityDirty` flag — when to apply `tate-searching`**
+
+`contain-intrinsic-block-size: auto 44px` means the browser caches each paragraph's rendered
+size after its first paint, and uses that cache for layout (including `scrollIntoView()`) even
+when the paragraph is off-screen. After a `tate-searching` pass has forced all paragraphs to
+render, subsequent `scrollIntoView()` calls are accurate without the class — as long as no
+content has changed since.
+
+The `contentVisibilityDirty` flag tracks whether cached sizes may be stale:
+
+| Event | Flag |
+|---|---|
+| `open()` | → `true` (new file DOM has no cached sizes) |
+| `onContentChanged()` | → `true` (edit may have changed a paragraph's height) |
+| `tate-searching` applied in `scrollRangeIntoView()` | → `false` (all sizes now cached) |
+
 ```typescript
 private scrollRangeIntoView(range: Range): void {
-    editorEl.classList.add('tate-searching');
+    const editorEl = this.editorElementRef.el;
+    if (this.contentVisibilityDirty) {
+        editorEl.classList.add('tate-searching');
+        this.contentVisibilityDirty = false;
+    }
     const gen = ++this.scrollGen;
     el?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
     requestAnimationFrame(() => {
@@ -264,14 +290,19 @@ private scrollRangeIntoView(range: Range): void {
 }
 ```
 
-Using a separate class avoids interfering with `scrollRestoringGeneration` counter in
-`VerticalWritingView`, which guards the file-load scroll-restore lifecycle. The `scrollGen`
-generation counter inside `SearchPanel` guards against stale rAF callbacks when the user
-navigates quickly (pressing Enter multiple times before any rAF fires): only the most recent
-rAF removes the class.
+The `scrollGen` generation counter guards against stale rAF callbacks: when the user presses
+Enter rapidly, only the rAF from the most recent navigation removes the class.
 
-`scrollRangeIntoView` is called for both typing-triggered updates (`isNavigation=false`) and
-explicit navigation (`isNavigation=true`), so the current hit scrolls into view in both cases.
+**When scroll is triggered**
+
+`scrollRangeIntoView` is called only when `triggerScroll=true` is passed to `setFocus()`.
+The call sites are:
+
+| Caller | `triggerScroll` | Reason |
+|---|---|---|
+| `navigate()` (Enter / buttons) | `true` | User requested to jump to a hit |
+| `runSearch()` from search input | `true` (default) | Incremental search should show the first hit |
+| `runSearch(false)` from `onContentChanged()` | `false` | User is editing; no scroll needed, and skipping avoids a full content-visibility layout pass on every keystroke |
 
 No loading spinner is shown during search navigation. The `tate-scroll-restoring` spinner is
 appropriate for file loads (where the user waits for content to appear) but would be jarring for
@@ -312,11 +343,14 @@ this.matches = [];
 this.currentIndex = -1;
 // ... rebuild matches ...
 if (prevIndex >= 0 && prevIndex < this.matches.length) {
-    this.setFocus(prevIndex, false);  // isNavigation=false: do not move DOM cursor
+    this.setFocus(prevIndex, false, scroll);  // isNavigation=false: do not move DOM cursor
 } else {
-    this.setFocus(0, false);
+    this.setFocus(0, false, scroll);
 }
 ```
+
+`scroll` is `true` when called from typing in the search input (show the first hit as the query
+is refined) and `false` when called from `onContentChanged()` (no layout pass on every keystroke).
 
 ## Files
 
