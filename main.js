@@ -2436,6 +2436,9 @@ var SearchPanel = class {
     input.type = "text";
     input.className = "tate-search-input";
     input.setAttribute("placeholder", "\u691C\u7D22");
+    input.addEventListener("focus", () => {
+      this.editorFocused = false;
+    });
     input.addEventListener("input", (e) => {
       if (e.isComposing) return;
       this.runSearch();

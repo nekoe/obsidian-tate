@@ -205,6 +205,9 @@ export class SearchPanel {
         input.type = 'text';
         input.className = 'tate-search-input';
         input.setAttribute('placeholder', '検索');
+        input.addEventListener('focus', () => {
+            this.editorFocused = false;
+        });
         input.addEventListener('input', (e) => {
             if ((e as InputEvent).isComposing) return;
             this.runSearch();
