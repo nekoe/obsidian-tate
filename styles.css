@@ -176,7 +176,8 @@
     font-size: var(--font-ui-small);
     color: var(--text-muted);
     width: 5.5em;
-    text-align: center;
+    padding-left: 1px;
+    text-align: left;
     white-space: nowrap;
     overflow: hidden;
 }
