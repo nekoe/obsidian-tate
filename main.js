@@ -2138,26 +2138,38 @@ var EditorElement = class {
   setViewCursorOffset(offset) {
     this.setVisibleOffset(offset);
   }
-  /** Scrolls the current cursor position into view. Defaults to centering; pass 'nearest' for minimal scroll.
-   *  Uses Range.getBoundingClientRect() rather than element.scrollIntoView() so that long paragraphs
-   *  spanning multiple columns scroll to the cursor's exact column, not to the paragraph boundary. */
+  /** Scrolls the current cursor position into view. Defaults to centering; pass 'nearest' for minimal scroll. */
   scrollCursorIntoView(block = "center", _inline = "center") {
-    var _a;
     const sel = window.getSelection();
     if (!sel || sel.rangeCount === 0) return;
-    const range = sel.getRangeAt(0);
+    this.scrollRangeIntoView(sel.getRangeAt(0), block);
+  }
+  /** Scrolls an arbitrary Range into view using block:'nearest'. Used by SearchPanel to scroll
+   *  to search hits without scrolling to the paragraph boundary for long multi-column paragraphs. */
+  scrollToRange(range) {
+    this.scrollRangeIntoView(range, "nearest");
+  }
+  /** Scrolls a Range into view by computing the horizontal scroll offset from the range's
+   *  bounding rect rather than calling element.scrollIntoView(). For long paragraphs that span
+   *  multiple columns, element.scrollIntoView() scrolls to the element boundary (paragraph center
+   *  or edge) instead of the column containing the range. The rect-based approach is exact.
+   *  Also forces a layout flush via getBoundingClientRect(), which — when tate-scroll-restoring
+   *  or tate-layout-refreshing is active — runs with content-visibility:visible on the relevant
+   *  divs, so the returned rect reflects actual (not cached) sizes. */
+  scrollRangeIntoView(range, block) {
+    var _a;
     const container = this.el.parentElement;
     if (!container) return;
-    const cursorRect = range.getBoundingClientRect();
-    if (cursorRect.width === 0 && cursorRect.height === 0) {
+    const rect = range.getBoundingClientRect();
+    if (rect.width === 0 && rect.height === 0) {
       const node = range.startContainer;
-      (_a = node instanceof Element ? node : node.parentElement) == null ? void 0 : _a.scrollIntoView({ block, inline: _inline });
+      (_a = node instanceof Element ? node : node.parentElement) == null ? void 0 : _a.scrollIntoView({ block, inline: "nearest" });
       return;
     }
     const containerRect = container.getBoundingClientRect();
     const viewWidth = container.clientWidth;
-    const absLeft = cursorRect.left - containerRect.left + container.scrollLeft;
-    const absRight = cursorRect.right - containerRect.left + container.scrollLeft;
+    const absLeft = rect.left - containerRect.left + container.scrollLeft;
+    const absRight = rect.right - containerRect.left + container.scrollLeft;
     let newScrollLeft;
     if (block === "nearest") {
       const visLeft = container.scrollLeft;
@@ -2500,9 +2512,7 @@ var SearchPanel = class {
     if (triggerScroll) this.scrollRangeIntoView(range);
   }
   scrollRangeIntoView(range) {
-    const node = range.startContainer;
-    const el = node instanceof Element ? node : node.parentElement;
-    el == null ? void 0 : el.scrollIntoView({ block: "nearest", inline: "nearest" });
+    this.editorElementRef.scrollToRange(range);
   }
   applyHitHighlights() {
     if (typeof CSS === "undefined" || !CSS.highlights) return;

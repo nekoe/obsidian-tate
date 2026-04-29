@@ -304,9 +304,7 @@ export class SearchPanel {
     }
 
     private scrollRangeIntoView(range: Range): void {
-        const node = range.startContainer;
-        const el = node instanceof Element ? node : node.parentElement;
-        el?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+        this.editorElementRef.scrollToRange(range);
     }
 
     private applyHitHighlights(): void {
