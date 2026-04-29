@@ -27,7 +27,11 @@ export default class TatePlugin extends Plugin {
         this.addCommand({
             id: 'open-view',
             name: '縦書きビューを開く',
-            callback: () => this.activateView(),
+            checkCallback: (checking) => {
+                if (this.getActiveTateView()) return false;
+                if (!checking) void this.activateView();
+                return true;
+            },
         });
 
         this.addCommand({

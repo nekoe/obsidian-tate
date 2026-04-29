@@ -3211,7 +3211,11 @@ var TatePlugin = class extends import_obsidian6.Plugin {
     this.addCommand({
       id: "open-view",
       name: "\u7E26\u66F8\u304D\u30D3\u30E5\u30FC\u3092\u958B\u304F",
-      callback: () => this.activateView()
+      checkCallback: (checking) => {
+        if (this.getActiveTateView()) return false;
+        if (!checking) void this.activateView();
+        return true;
+      }
     });
     this.addCommand({
       id: "search",
