@@ -240,7 +240,6 @@ export class SearchPanel {
 
         if (!query) {
             this.updateCount();
-            this.inputEl?.classList.remove('tate-search-no-match');
             return;
         }
 
@@ -258,12 +257,9 @@ export class SearchPanel {
         }
 
         if (this.matches.length === 0) {
-            this.inputEl?.classList.add('tate-search-no-match');
             this.updateCount();
             return;
         }
-
-        this.inputEl?.classList.remove('tate-search-no-match');
         this.applyHitHighlights();
 
         // Re-search (user keeps typing): stay on the same index if still valid.
@@ -370,9 +366,12 @@ export class SearchPanel {
     private updateCount(): void {
         if (!this.countEl) return;
         if (this.matches.length === 0) {
-            this.countEl.textContent = this.inputEl?.value ? '0/0' : '';
+            const hasQuery = !!(this.inputEl?.value);
+            this.countEl.textContent = hasQuery ? 'No results' : '';
+            this.countEl.classList.toggle('tate-search-no-match', hasQuery);
         } else {
             this.countEl.textContent = `${this.currentIndex + 1}/${this.matches.length}`;
+            this.countEl.classList.remove('tate-search-no-match');
         }
     }
 }

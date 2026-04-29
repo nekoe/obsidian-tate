@@ -172,17 +172,16 @@
     box-shadow: 0 0 0 2px var(--background-modifier-border-focus);
 }
 
-.tate-search-input.tate-search-no-match {
-    border-color: var(--color-red);
-    background: color-mix(in srgb, var(--color-red) 12%, var(--background-modifier-form-field));
-}
-
 .tate-search-count {
     font-size: var(--font-ui-small);
     color: var(--text-muted);
     min-width: 3em;
     text-align: center;
     white-space: nowrap;
+}
+
+.tate-search-count.tate-search-no-match {
+    color: #b33030;
 }
 
 .tate-search-btn {
@@ -211,15 +210,8 @@
     color: inherit;
 }
 
-/* CSS Custom Highlight API: currently focused hit.
-   ::highlight() does not support outline/border/box-shadow, so we use
-   text-decoration underline+overline (= right/left lines in vertical-rl)
-   with dashed style to create a border-like visual marker. */
+/* CSS Custom Highlight API: currently focused hit. */
 ::highlight(tate-search-focus) {
-    background-color: color-mix(in srgb, var(--interactive-accent) 35%, transparent);
-    color: inherit;
-    text-decoration-line: underline overline;
-    text-decoration-style: dashed;
-    text-decoration-color: var(--interactive-accent);
-    text-decoration-thickness: 2px;
+    background-color: #e8559a;
+    color: #ffffff;
 }
