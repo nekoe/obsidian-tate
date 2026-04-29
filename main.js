@@ -2437,6 +2437,9 @@ var SearchPanel = class {
     input.className = "tate-search-input";
     input.setAttribute("placeholder", "\u691C\u7D22");
     input.addEventListener("focus", () => {
+      if (this.editorFocused) {
+        this.lastNavigatedOffset = this.editorElementRef.getViewCursorOffset();
+      }
       this.editorFocused = false;
     });
     input.addEventListener("input", (e) => {

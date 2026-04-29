@@ -206,6 +206,13 @@ export class SearchPanel {
         input.className = 'tate-search-input';
         input.setAttribute('placeholder', '検索');
         input.addEventListener('focus', () => {
+            if (this.editorFocused) {
+                // User clicked the editor then returned to the input.
+                // Capture the click position so ESC restores to it, not to the last search hit.
+                // window.getSelection() retains the editor selection even after focus moves to
+                // a text <input>, so getViewCursorOffset() is valid here.
+                this.lastNavigatedOffset = this.editorElementRef.getViewCursorOffset();
+            }
             this.editorFocused = false;
         });
         input.addEventListener('input', (e) => {
