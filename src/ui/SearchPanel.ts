@@ -95,14 +95,6 @@ export class SearchPanel {
     private prSearchOffset: number | null = null;
     // Offset of the last navigated hit; used as the restore target after close.
     private lastNavigatedOffset: number | null = null;
-    // Generation counter for scrollRangeIntoView rAF guard (prevents stale rAF from
-    // clearing tate-searching class after a newer navigation has already started).
-    private scrollGen = 0;
-    // True when tate-searching must be applied before the next scrollIntoView call.
-    // Set on open() (new file DOM has no cached sizes) and on onContentChanged()
-    // (edits may have invalidated contain-intrinsic-block-size caches for affected
-    // paragraphs).  Cleared once the class is applied; stays false until next edit.
-    private contentVisibilityDirty = true;
 
     constructor(
         private readonly editorElementRef: EditorElement,
@@ -142,8 +134,6 @@ export class SearchPanel {
         this.lastNavigatedOffset = null;
         this.matches = [];
         this.currentIndex = -1;
-        this.contentVisibilityDirty = true; // new file or first open — paragraph sizes not yet cached
-
         this.buildPanel();
         this.app.keymap.pushScope(this.searchScope);
         this.inputEl?.focus();
@@ -179,7 +169,6 @@ export class SearchPanel {
 
     onContentChanged(): void {
         if (!this.isOpen) return;
-        this.contentVisibilityDirty = true; // edit may have changed paragraph heights
         this.runSearch(false); // update highlights only; no scroll while user is editing
     }
 
@@ -315,23 +304,9 @@ export class SearchPanel {
     }
 
     private scrollRangeIntoView(range: Range): void {
-        const editorEl = this.editorElementRef.el;
-        // Only force content-visibility:visible when paragraph sizes may be stale.
-        // Once all divs have been rendered, contain-intrinsic-block-size:auto caches
-        // their sizes; subsequent scrollIntoView calls are accurate without the class.
-        // The cache is invalidated (contentVisibilityDirty=true) on open() and on each
-        // onContentChanged(), so the class is re-applied after every edit.
-        if (this.contentVisibilityDirty) {
-            editorEl.classList.add('tate-searching');
-            this.contentVisibilityDirty = false;
-        }
-        const gen = ++this.scrollGen;
         const node = range.startContainer;
         const el = node instanceof Element ? node : node.parentElement;
         el?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-        requestAnimationFrame(() => {
-            if (this.scrollGen === gen) editorEl.classList.remove('tate-searching');
-        });
     }
 
     private applyHitHighlights(): void {

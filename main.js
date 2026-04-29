@@ -1835,13 +1835,15 @@ var EditorElement = class {
   }
   // Paste handler: parses Aozora notation in the pasted text and inserts rendered inline elements.
   // Multi-line paste creates one <div> per line (matching Enter-key paragraph behavior).
+  // Returns newly created off-screen divs that need a proactive layout cache refresh.
+  // Single-line paste into a visible cursor div returns [] (cache updates naturally on-screen).
   handlePaste(e) {
     var _a, _b;
     e.preventDefault();
     const text = (_b = (_a = e.clipboardData) == null ? void 0 : _a.getData("text/plain")) != null ? _b : "";
-    if (!text) return;
+    if (!text) return [];
     const sel = window.getSelection();
-    if (!sel || sel.rangeCount === 0) return;
+    if (!sel || sel.rangeCount === 0) return [];
     const range = sel.getRangeAt(0);
     range.deleteContents();
     if (range.startContainer === this.el) {
@@ -1860,12 +1862,15 @@ var EditorElement = class {
       }
     }
     const lines = text.split("\n");
+    let newDivs;
     if (lines.length === 1 && range.startContainer !== this.el) {
       this.insertParsedInline(range, lines[0]);
+      newDivs = [];
     } else {
-      this.insertParsedParagraphs(range, lines);
+      newDivs = this.insertParsedParagraphs(range, lines);
     }
     this.inlineEditor.onBeforeInput();
+    return newDivs;
   }
   // Inserts parsed Aozora inline elements at the range position (single-line paste).
   insertParsedInline(range, line) {
@@ -1884,17 +1889,20 @@ var EditorElement = class {
   // Inserts parsed lines as separate paragraph <div>s (multi-line paste).
   // Splits the current paragraph at the cursor: first line appends to it,
   // each remaining line becomes a new <div>, and after-cursor content moves to the last.
+  // Returns newly created <div>s that may be off-screen and need a layout cache refresh.
   insertParsedParagraphs(range, lines) {
     var _a;
     const sel = window.getSelection();
     const paragraphDiv = this.findParagraphDiv(range.startContainer);
     if (!this.inlineEditor.isExpanded() && range.startContainer === this.el) {
       const refNode = (_a = this.el.childNodes[range.startOffset]) != null ? _a : null;
+      const newDivs2 = [];
       let lastDiv = null;
       for (const line of lines) {
         const div = document.createElement("div");
         div.replaceChildren((0, import_obsidian3.sanitizeHTMLToDom)(parseInlineToHtml(line) || "<br>"));
         this.el.insertBefore(div, refNode);
+        newDivs2.push(div);
         lastDiv = div;
       }
       if (lastDiv) {
@@ -1904,7 +1912,7 @@ var EditorElement = class {
         sel.removeAllRanges();
         sel.addRange(r);
       }
-      return;
+      return newDivs2;
     }
     if (!paragraphDiv || this.inlineEditor.isExpanded()) {
       for (let i = 0; i < lines.length; i++) {
@@ -1925,7 +1933,7 @@ var EditorElement = class {
       }
       sel.removeAllRanges();
       sel.addRange(range);
-      return;
+      return [];
     }
     const afterRange = document.createRange();
     afterRange.selectNodeContents(paragraphDiv);
@@ -1942,6 +1950,7 @@ var EditorElement = class {
     ensureBrPlaceholder(paragraphDiv);
     let insertAfter = paragraphDiv;
     let lastPastedNode = null;
+    const newDivs = [];
     for (let i = 1; i < lines.length; i++) {
       const div = document.createElement("div");
       const lineFrag = (0, import_obsidian3.sanitizeHTMLToDom)(parseInlineToHtml(lines[i]));
@@ -1954,6 +1963,7 @@ var EditorElement = class {
       ensureBrPlaceholder(div);
       insertAfter.after(div);
       insertAfter = div;
+      newDivs.push(div);
     }
     const newRange = document.createRange();
     if (lastPastedNode) {
@@ -1964,6 +1974,7 @@ var EditorElement = class {
     newRange.collapse(true);
     sel.removeAllRanges();
     sel.addRange(newRange);
+    return newDivs;
   }
   // Returns the direct <div> child of this.el that contains node, or null.
   findParagraphDiv(node) {
@@ -2066,21 +2077,25 @@ var EditorElement = class {
   // Called after CM6 Undo/Redo. Applies content to the vertical writing view and
   // restores the cursor by converting srcOffset (CM6 cursor position) via srcToView.
   // prevContent must equal the current DOM content (caller guarantees prevContent !== content).
+  // Returns the changed/added divs for proactive layout cache refresh, or null if patchParagraphs
+  // fell back to a full replaceChildren (hasCleanDivStructure failed).
   applyFromCm6(prevContent, content, srcOffset) {
     this.inlineEditor.reset();
-    this.patchParagraphs(prevContent, content);
+    const changedDivs = this.patchParagraphs(prevContent, content);
     const segs = buildSegmentMap(content);
     const viewOffset = srcToView(segs, srcOffset);
     this.setVisibleOffset(viewOffset);
+    return changedDivs;
   }
   // Updates paragraph divs to match nextContent, replacing only divs whose line changed.
+  // Returns the changed/added divs, or null if hasCleanDivStructure failed (full rebuild).
   patchParagraphs(prevContent, nextContent) {
     const prevLines = prevContent.split("\n");
     const nextLines = nextContent ? nextContent.split("\n") : [""];
     const el = this.el;
     if (!this.hasCleanDivStructure(prevLines.length)) {
       el.replaceChildren((0, import_obsidian3.sanitizeHTMLToDom)(parseToHtml(nextContent)));
-      return;
+      return null;
     }
     while (el.children.length < nextLines.length) {
       el.appendChild(document.createElement("div"));
@@ -2088,6 +2103,7 @@ var EditorElement = class {
     while (el.children.length > nextLines.length) {
       el.removeChild(el.lastChild);
     }
+    const changedDivs = [];
     for (let i = 0; i < nextLines.length; i++) {
       if (prevLines[i] === nextLines[i]) {
         if (nextLines[i] === "") ensureBrPlaceholder(el.children[i]);
@@ -2096,7 +2112,9 @@ var EditorElement = class {
       const div = el.children[i];
       const html = parseInlineToHtml(nextLines[i]) || "<br>";
       div.replaceChildren((0, import_obsidian3.sanitizeHTMLToDom)(html));
+      changedDivs.push(div);
     }
+    return changedDivs;
   }
   // Returns true iff el.childNodes consists of exactly expectedCount <div> elements.
   // Used by patchParagraphs to detect DOM structure corruption (e.g. bare text nodes
@@ -2120,14 +2138,36 @@ var EditorElement = class {
   setViewCursorOffset(offset) {
     this.setVisibleOffset(offset);
   }
-  /** Scrolls the current cursor position into view. Defaults to centering; pass 'nearest' for minimal scroll. */
-  scrollCursorIntoView(block = "center", inline = "center") {
+  /** Scrolls the current cursor position into view. Defaults to centering; pass 'nearest' for minimal scroll.
+   *  Uses Range.getBoundingClientRect() rather than element.scrollIntoView() so that long paragraphs
+   *  spanning multiple columns scroll to the cursor's exact column, not to the paragraph boundary. */
+  scrollCursorIntoView(block = "center", _inline = "center") {
     var _a;
     const sel = window.getSelection();
-    if (sel && sel.rangeCount > 0) {
-      const node = sel.getRangeAt(0).startContainer;
-      (_a = node instanceof Element ? node : node.parentElement) == null ? void 0 : _a.scrollIntoView({ block, inline });
+    if (!sel || sel.rangeCount === 0) return;
+    const range = sel.getRangeAt(0);
+    const container = this.el.parentElement;
+    if (!container) return;
+    const cursorRect = range.getBoundingClientRect();
+    if (cursorRect.width === 0 && cursorRect.height === 0) {
+      const node = range.startContainer;
+      (_a = node instanceof Element ? node : node.parentElement) == null ? void 0 : _a.scrollIntoView({ block, inline: _inline });
+      return;
     }
+    const containerRect = container.getBoundingClientRect();
+    const viewWidth = container.clientWidth;
+    const absLeft = cursorRect.left - containerRect.left + container.scrollLeft;
+    const absRight = cursorRect.right - containerRect.left + container.scrollLeft;
+    let newScrollLeft;
+    if (block === "nearest") {
+      const visLeft = container.scrollLeft;
+      const visRight = container.scrollLeft + viewWidth;
+      if (absLeft >= visLeft && absRight <= visRight) return;
+      newScrollLeft = absLeft < visLeft ? absLeft : absRight - viewWidth;
+    } else {
+      newScrollLeft = absLeft - (viewWidth - (absRight - absLeft)) / 2;
+    }
+    container.scrollLeft = Math.max(0, Math.min(container.scrollWidth - viewWidth, newScrollLeft));
   }
   // Called after input/compositionend to manage U+200B in the cursor anchor span.
   handleCursorAnchorInput() {
@@ -2299,14 +2339,6 @@ var SearchPanel = class {
     this.prSearchOffset = null;
     // Offset of the last navigated hit; used as the restore target after close.
     this.lastNavigatedOffset = null;
-    // Generation counter for scrollRangeIntoView rAF guard (prevents stale rAF from
-    // clearing tate-searching class after a newer navigation has already started).
-    this.scrollGen = 0;
-    // True when tate-searching must be applied before the next scrollIntoView call.
-    // Set on open() (new file DOM has no cached sizes) and on onContentChanged()
-    // (edits may have invalidated contain-intrinsic-block-size caches for affected
-    // paragraphs).  Cleared once the class is applied; stays false until next edit.
-    this.contentVisibilityDirty = true;
     this.searchScope = new import_obsidian4.Scope(app.scope);
     this.searchScope.register([], "Enter", (evt) => {
       if (evt.isComposing) return;
@@ -2337,7 +2369,6 @@ var SearchPanel = class {
     this.lastNavigatedOffset = null;
     this.matches = [];
     this.currentIndex = -1;
-    this.contentVisibilityDirty = true;
     this.buildPanel();
     this.app.keymap.pushScope(this.searchScope);
     (_b = this.inputEl) == null ? void 0 : _b.focus();
@@ -2364,7 +2395,6 @@ var SearchPanel = class {
   }
   onContentChanged() {
     if (!this.isOpen) return;
-    this.contentVisibilityDirty = true;
     this.runSearch(false);
   }
   buildPanel() {
@@ -2470,18 +2500,9 @@ var SearchPanel = class {
     if (triggerScroll) this.scrollRangeIntoView(range);
   }
   scrollRangeIntoView(range) {
-    const editorEl = this.editorElementRef.el;
-    if (this.contentVisibilityDirty) {
-      editorEl.classList.add("tate-searching");
-      this.contentVisibilityDirty = false;
-    }
-    const gen = ++this.scrollGen;
     const node = range.startContainer;
     const el = node instanceof Element ? node : node.parentElement;
     el == null ? void 0 : el.scrollIntoView({ block: "nearest", inline: "nearest" });
-    requestAnimationFrame(() => {
-      if (this.scrollGen === gen) editorEl.classList.remove("tate-searching");
-    });
   }
   applyHitHighlights() {
     if (typeof CSS === "undefined" || !CSS.highlights) return;
@@ -2567,9 +2588,18 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian5.I
       // Use committed text for comparison (not getValue() which may contain uncommitted IME text)
       () => this.lastCommittedContent,
       (content, preserveCursor) => {
+        var _a;
         this.lastCommittedContent = content;
-        editorEl.setValue(content, preserveCursor);
-        this.plugin.updateCharCount(countChars(content));
+        if (preserveCursor) {
+          const savedOffset = (_a = this.lastKnownViewOffset) != null ? _a : editorEl.getViewCursorOffset();
+          this.beginScrollRestoring();
+          editorEl.setValue(content, false);
+          this.plugin.updateCharCount(countChars(content));
+          this.restoreViewOffset(savedOffset);
+        } else {
+          editorEl.setValue(content, false);
+          this.plugin.updateCharCount(countChars(content));
+        }
       }
     );
     this.syncCoordinator = syncCoordinator;
@@ -2590,8 +2620,9 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian5.I
     this.registerDomEvent(editorEl.el, "paste", (e) => {
       var _a;
       if (!this.guardCm6(e)) return;
-      editorEl.handlePaste(e);
+      const newDivs = editorEl.handlePaste(e);
       this.commitToCm6();
+      this.scheduleLayoutRefresh(newDivs);
       (_a = this.searchPanel) == null ? void 0 : _a.onContentChanged();
     });
     this.registerDomEvent(editorEl.el, "beforeinput", (e) => {
@@ -2937,6 +2968,20 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian5.I
     (_a = this.editorEl) == null ? void 0 : _a.el.classList.remove("tate-scroll-restoring");
     this.hideLoadingSpinner();
   }
+  /** Proactively refreshes the contain-intrinsic-block-size:auto cache for divs that
+   *  were mutated while off-screen (paste, Undo/Redo). Adds tate-layout-refreshing
+   *  synchronously so Frame N's layout runs with content-visibility:visible and writes
+   *  the actual size into the cache. Removes the class in the second rAF (Frame N+1)
+   *  so Frame N's layout is not skipped. No spinner — two frames is imperceptible. */
+  scheduleLayoutRefresh(divs) {
+    if (divs.length === 0) return;
+    divs.forEach((d) => d.classList.add("tate-layout-refreshing"));
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        divs.forEach((d) => d.classList.remove("tate-layout-refreshing"));
+      });
+    });
+  }
   applySettings(settings) {
     var _a;
     (_a = this.editorEl) == null ? void 0 : _a.applySettings(settings);
@@ -3065,8 +3110,22 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian5.I
     const newContent = cm6.getValue();
     if (newContent === prevContent) return;
     const srcOffset = this.deriveUndoRedoCursor(prevContent, newContent);
-    editorEl.applyFromCm6(prevContent, newContent, srcOffset);
-    editorEl.scrollCursorIntoView("nearest", "nearest");
+    const changedDivs = editorEl.applyFromCm6(prevContent, newContent, srcOffset);
+    if (changedDivs === null) {
+      const gen = this.beginScrollRestoring();
+      requestAnimationFrame(() => {
+        if (this.scrollRestoringGeneration !== gen) return;
+        this.hideLoadingSpinner();
+        editorEl.scrollCursorIntoView("nearest", "nearest");
+        requestAnimationFrame(() => {
+          if (this.scrollRestoringGeneration === gen)
+            editorEl.el.classList.remove("tate-scroll-restoring");
+        });
+      });
+    } else {
+      this.scheduleLayoutRefresh(changedDivs);
+      editorEl.scrollCursorIntoView("nearest", "nearest");
+    }
     this.lastCommittedContent = newContent;
     this.plugin.updateCharCount(countChars(newContent));
   }

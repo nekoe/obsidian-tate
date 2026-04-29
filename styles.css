@@ -129,11 +129,6 @@
     text-align: right;
 }
 
-/* Force content-visibility:visible on all paragraphs during search navigation so
-   scrollIntoView() gets accurate paragraph positions rather than 44px fallback estimates. */
-.tate-editor.tate-searching > div {
-    content-visibility: visible;
-}
 
 /* Search panel: position:absolute within tate-container (position:relative, non-scrolling).
    tate-container no longer has overflow-x:auto; the inner tate-scroll-area handles scroll.
