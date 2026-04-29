@@ -175,9 +175,10 @@
 .tate-search-count {
     font-size: var(--font-ui-small);
     color: var(--text-muted);
-    min-width: 3em;
+    width: 5.5em;
     text-align: center;
     white-space: nowrap;
+    overflow: hidden;
 }
 
 .tate-search-count.tate-search-no-match {
