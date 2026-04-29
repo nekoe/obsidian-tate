@@ -2138,14 +2138,36 @@ var EditorElement = class {
   setViewCursorOffset(offset) {
     this.setVisibleOffset(offset);
   }
-  /** Scrolls the current cursor position into view. Defaults to centering; pass 'nearest' for minimal scroll. */
-  scrollCursorIntoView(block = "center", inline = "center") {
+  /** Scrolls the current cursor position into view. Defaults to centering; pass 'nearest' for minimal scroll.
+   *  Uses Range.getBoundingClientRect() rather than element.scrollIntoView() so that long paragraphs
+   *  spanning multiple columns scroll to the cursor's exact column, not to the paragraph boundary. */
+  scrollCursorIntoView(block = "center", _inline = "center") {
     var _a;
     const sel = window.getSelection();
-    if (sel && sel.rangeCount > 0) {
-      const node = sel.getRangeAt(0).startContainer;
-      (_a = node instanceof Element ? node : node.parentElement) == null ? void 0 : _a.scrollIntoView({ block, inline });
+    if (!sel || sel.rangeCount === 0) return;
+    const range = sel.getRangeAt(0);
+    const container = this.el.parentElement;
+    if (!container) return;
+    const cursorRect = range.getBoundingClientRect();
+    if (cursorRect.width === 0 && cursorRect.height === 0) {
+      const node = range.startContainer;
+      (_a = node instanceof Element ? node : node.parentElement) == null ? void 0 : _a.scrollIntoView({ block, inline: _inline });
+      return;
     }
+    const containerRect = container.getBoundingClientRect();
+    const viewWidth = container.clientWidth;
+    const absLeft = cursorRect.left - containerRect.left + container.scrollLeft;
+    const absRight = cursorRect.right - containerRect.left + container.scrollLeft;
+    let newScrollLeft;
+    if (block === "nearest") {
+      const visLeft = container.scrollLeft;
+      const visRight = container.scrollLeft + viewWidth;
+      if (absLeft >= visLeft && absRight <= visRight) return;
+      newScrollLeft = absLeft < visLeft ? absLeft : absRight - viewWidth;
+    } else {
+      newScrollLeft = absLeft - (viewWidth - (absRight - absLeft)) / 2;
+    }
+    container.scrollLeft = Math.max(0, Math.min(container.scrollWidth - viewWidth, newScrollLeft));
   }
   // Called after input/compositionend to manage U+200B in the cursor anchor span.
   handleCursorAnchorInput() {

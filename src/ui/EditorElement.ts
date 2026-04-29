@@ -532,13 +532,47 @@ export class EditorElement {
         this.setVisibleOffset(offset);
     }
 
-    /** Scrolls the current cursor position into view. Defaults to centering; pass 'nearest' for minimal scroll. */
-    scrollCursorIntoView(block: ScrollLogicalPosition = 'center', inline: ScrollLogicalPosition = 'center'): void {
+    /** Scrolls the current cursor position into view. Defaults to centering; pass 'nearest' for minimal scroll.
+     *  Uses Range.getBoundingClientRect() rather than element.scrollIntoView() so that long paragraphs
+     *  spanning multiple columns scroll to the cursor's exact column, not to the paragraph boundary. */
+    scrollCursorIntoView(block: ScrollLogicalPosition = 'center', _inline: ScrollLogicalPosition = 'center'): void {
         const sel = window.getSelection();
-        if (sel && sel.rangeCount > 0) {
-            const node = sel.getRangeAt(0).startContainer;
-            (node instanceof Element ? node : node.parentElement)?.scrollIntoView({ block, inline });
+        if (!sel || sel.rangeCount === 0) return;
+        const range = sel.getRangeAt(0);
+
+        const container = this.el.parentElement; // .tate-container (overflow-x: auto)
+        if (!container) return;
+
+        // Force a layout flush to get accurate cursor coordinates. When tate-scroll-restoring
+        // or tate-layout-refreshing is active, this flush runs with content-visibility:visible
+        // on the relevant divs, so the returned rect reflects actual (not cached) sizes.
+        const cursorRect = range.getBoundingClientRect();
+        if (cursorRect.width === 0 && cursorRect.height === 0) {
+            // Cursor not yet laid out — fall back to element-based scroll.
+            const node = range.startContainer;
+            (node instanceof Element ? node : node.parentElement)?.scrollIntoView({ block, inline: _inline });
+            return;
         }
+
+        const containerRect = container.getBoundingClientRect();
+        const viewWidth = container.clientWidth;
+        // Convert cursor viewport x-coordinates to the container's scroll coordinate space:
+        //   absolute_x = viewport_x - container_left + scrollLeft
+        const absLeft  = cursorRect.left  - containerRect.left + container.scrollLeft;
+        const absRight = cursorRect.right - containerRect.left + container.scrollLeft;
+
+        let newScrollLeft: number;
+        if (block === 'nearest') {
+            const visLeft  = container.scrollLeft;
+            const visRight = container.scrollLeft + viewWidth;
+            if (absLeft >= visLeft && absRight <= visRight) return; // cursor already fully visible
+            newScrollLeft = absLeft < visLeft ? absLeft : absRight - viewWidth;
+        } else {
+            // 'center': place cursor at the horizontal midpoint of the viewport.
+            newScrollLeft = absLeft - (viewWidth - (absRight - absLeft)) / 2;
+        }
+
+        container.scrollLeft = Math.max(0, Math.min(container.scrollWidth - viewWidth, newScrollLeft));
     }
 
     // Called after input/compositionend to manage U+200B in the cursor anchor span.
