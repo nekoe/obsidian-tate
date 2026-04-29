@@ -37,11 +37,10 @@ VerticalWritingView
     ├── panelEl: HTMLElement | null  non-null ↔ panel is visible
     ├── searchScope: Scope           created once; pushed/popped on open/close
     ├── matches: Range[]             CSS Highlight ranges, rebuilt on each runSearch()
+    ├── matchStarts: number[]        visible-text start offset for each match (parallel to matches[])
     ├── currentIndex: number         focused hit index; preserved across content-change re-searches
     ├── prSearchOffset               cursor offset at open(); restored if no navigation happened
-    ├── lastNavigatedOffset          cursor offset of the last setFocus(isNavigation=true); restored on close
-    ├── scrollGen: number            generation counter for rAF guard in scrollRangeIntoView()
-    └── contentVisibilityDirty: bool true when tate-searching must precede the next scrollIntoView
+    └── lastNavigatedOffset          cursor offset of the last setFocus(isNavigation=true); restored on close
 ```
 
 ### Visible text extraction
@@ -242,56 +241,50 @@ A `position: fixed` approach was considered but rejected because it requires dyn
 positioning from `getBoundingClientRect()` and must be updated on resize; `position: absolute`
 within the container is self-maintaining.
 
-### Scroll to focused hit: `tate-searching` class and `contentVisibilityDirty`
+### Scroll to focused hit
 
-`content-visibility: auto` on `.tate-editor > div` makes `scrollIntoView()` inaccurate for
-off-screen paragraphs (they report their `contain-intrinsic-block-size: 44px` fallback size
-rather than their real size). The same problem applies to search navigation as to cursor restore
-after file load (see `20260425_scroll_restore_content_visibility.md`).
+`scrollRangeIntoView()` delegates to `EditorElement.scrollToRange(range)`, which uses
+`Range.getBoundingClientRect()` to compute the exact column position of the hit and sets
+`container.scrollLeft` directly (see `20260425_scroll_restore_content_visibility.md` for the
+rect-based scroll design). `block: 'center'` is used so the hit appears in the horizontal
+center of the viewport.
 
-A separate CSS class `tate-searching` is used — distinct from `tate-scroll-restoring` — to
-temporarily force `content-visibility: visible` on all paragraphs before calling `scrollIntoView()`:
+Calling `element.scrollIntoView()` on the paragraph `<div>` was rejected: for long paragraphs
+spanning multiple columns, it scrolls to the element boundary rather than the hit's column.
 
-```css
-.tate-editor.tate-searching > div { content-visibility: visible; }
-```
+**CSS Custom Highlight repaint after scroll (`tate-search-repaint`)**
 
-Using a separate class avoids interfering with `scrollRestoringGeneration` counter in
-`VerticalWritingView`, which guards the file-load scroll-restore lifecycle.
+After a compositor-thread scroll, `content-visibility: auto` paragraphs that just entered the
+viewport can be composited before the CSS Custom Highlight registry reaches the main-thread paint
+record. The result is that highlights are absent on newly-visible content until the next pointer
+event (e.g. moving the mouse from the search panel to the editor) triggers a main-thread repaint.
 
-**`contentVisibilityDirty` flag — when to apply `tate-searching`**
-
-`contain-intrinsic-block-size: auto 44px` means the browser caches each paragraph's rendered
-size after its first paint, and uses that cache for layout (including `scrollIntoView()`) even
-when the paragraph is off-screen. After a `tate-searching` pass has forced all paragraphs to
-render, subsequent `scrollIntoView()` calls are accurate without the class — as long as no
-content has changed since.
-
-The `contentVisibilityDirty` flag tracks whether cached sizes may be stale:
-
-| Event | Flag |
-|---|---|
-| `open()` | → `true` (new file DOM has no cached sizes) |
-| `onContentChanged()` | → `true` (edit may have changed a paragraph's height) |
-| `tate-searching` applied in `scrollRangeIntoView()` | → `false` (all sizes now cached) |
+The fix: in the rAF after `scrollToRange()`, add the `tate-search-repaint` class to the editor,
+re-apply both highlights, then remove the class in the following rAF:
 
 ```typescript
 private scrollRangeIntoView(range: Range): void {
-    const editorEl = this.editorElementRef.el;
-    if (this.contentVisibilityDirty) {
-        editorEl.classList.add('tate-searching');
-        this.contentVisibilityDirty = false;
-    }
-    const gen = ++this.scrollGen;
-    el?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    this.editorElementRef.scrollToRange(range);
     requestAnimationFrame(() => {
-        if (this.scrollGen === gen) editorEl.classList.remove('tate-searching');
+        this.editorElementRef.el.classList.add('tate-search-repaint');
+        this.applyHitHighlights();
+        this.applyFocusHighlight();
+        requestAnimationFrame(() => {
+            this.editorElementRef.el.classList.remove('tate-search-repaint');
+        });
     });
 }
 ```
 
-The `scrollGen` generation counter guards against stale rAF callbacks: when the user presses
-Enter rapidly, only the rAF from the most recent navigation removes the class.
+```css
+.tate-editor.tate-search-repaint {
+    outline: 1px solid transparent;
+}
+```
+
+`outline-style: none → solid` is a paint-record mutation that Chrome cannot optimize away as a
+no-op, so it forces a main-thread repaint. The outline is transparent (invisible to the user)
+and reverts in the next frame.
 
 **When scroll is triggered**
 
@@ -302,11 +295,59 @@ The call sites are:
 |---|---|---|
 | `navigate()` (Enter / buttons) | `true` | User requested to jump to a hit |
 | `runSearch()` from search input | `true` (default) | Incremental search should show the first hit |
-| `runSearch(false)` from `onContentChanged()` | `false` | User is editing; no scroll needed, and skipping avoids a full content-visibility layout pass on every keystroke |
+| `runSearch(false)` from `onContentChanged()` | `false` | User is editing; no scroll needed |
 
 No loading spinner is shown during search navigation. The `tate-scroll-restoring` spinner is
 appropriate for file loads (where the user waits for content to appear) but would be jarring for
 in-session navigation.
+
+### Initial focus: nearest hit at or after cursor position
+
+When the search panel is first opened and the user types a query, the initial focused hit is the
+nearest match at or after `prSearchOffset` (the cursor position when the panel was opened),
+rather than always jumping to the first match in the document. This matches standard editor
+search UX (VSCode, Sublime Text, etc.).
+
+`matchStarts[]` (parallel to `matches[]`) records each match's visible-text start offset so
+`findFirstIndexAtOrAfter()` can locate the target without an additional DOM traversal:
+
+```typescript
+// In runSearch(): first search — focus nearest hit at or after the cursor.
+this.setFocus(this.findFirstIndexAtOrAfter(this.prSearchOffset ?? 0), false, scroll);
+
+private findFirstIndexAtOrAfter(offset: number): number {
+    for (let i = 0; i < this.matchStarts.length; i++) {
+        if (this.matchStarts[i] >= offset) return i;
+    }
+    return 0; // wrap: cursor is past all matches → go to first
+}
+```
+
+The offset space of `prSearchOffset` (from `EditorElement.getViewCursorOffset()`) and
+`matchStarts[i]` (from `m.index` in `extractVisibleText`) are identical: both walk all `Text`
+nodes excluding `<RT>` and U+200B, in document order.
+
+### `currentIndex` preservation across content changes
+
+When the user edits the document while the panel is open, `onContentChanged()` triggers
+`runSearch()` to rebuild the match list. To avoid jumping back to the initial-focus result after
+every keystroke, `runSearch()` saves `currentIndex` before resetting it, then restores it if the
+new match count is still sufficient:
+
+```typescript
+const prevIndex = this.currentIndex;
+this.matches = [];
+this.currentIndex = -1;
+// ... rebuild matches ...
+if (prevIndex >= 0 && prevIndex < this.matches.length) {
+    this.setFocus(prevIndex, false, scroll);  // isNavigation=false: do not move DOM cursor
+} else {
+    this.setFocus(this.findFirstIndexAtOrAfter(this.prSearchOffset ?? 0), false, scroll);
+}
+```
+
+`scroll` is `true` when called from typing in the search input (show the first hit as the query
+is refined) and `false` when called from `onContentChanged()` (no scroll on every keystroke).
 
 ### Cursor offset and ESC restore
 
@@ -330,28 +371,6 @@ return restoreOffset;
 `VerticalWritingView.closeSearch()` uses the returned offset only to update `lastKnownViewOffset`
 so that subsequent tab-switch restore uses the post-search position.
 
-### `currentIndex` preservation across content changes
-
-When the user edits the document while the panel is open, `onContentChanged()` triggers
-`runSearch()` to rebuild the match list. To avoid jumping back to the first result after every
-keystroke, `runSearch()` saves `currentIndex` before resetting it, then restores it if the new
-match count is still sufficient:
-
-```typescript
-const prevIndex = this.currentIndex;
-this.matches = [];
-this.currentIndex = -1;
-// ... rebuild matches ...
-if (prevIndex >= 0 && prevIndex < this.matches.length) {
-    this.setFocus(prevIndex, false, scroll);  // isNavigation=false: do not move DOM cursor
-} else {
-    this.setFocus(0, false, scroll);
-}
-```
-
-`scroll` is `true` when called from typing in the search input (show the first hit as the query
-is refined) and `false` when called from `onContentChanged()` (no layout pass on every keystroke).
-
 ## Files
 
 | File | Role |
@@ -360,4 +379,4 @@ is refined) and `false` when called from `onContentChanged()` (no layout pass on
 | `src/css-highlight.d.ts` | TypeScript type declarations for CSS Custom Highlight API (including `Highlight.priority`) |
 | `src/view.ts` | Creates SearchPanel in `onOpen()`; calls `openSearch()`, `closeSearch()`, `onContentChanged()` |
 | `src/main.ts` | Registers `tate-search` command (no default hotkey) |
-| `styles.css` | `.tate-search-panel`, `.tate-searching`, `::highlight(tate-search-hit/focus)` |
+| `styles.css` | `.tate-search-panel`, `.tate-search-repaint`, `::highlight(tate-search-hit/focus)` |
