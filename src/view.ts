@@ -71,14 +71,13 @@ export class VerticalWritingView extends ItemView {
                     // Prefer lastKnownViewOffset over getViewCursorOffset(): the latter returns 0
                     // when the editor is not focused (external edit often fires while unfocused).
                     const savedOffset = this.lastKnownViewOffset ?? editorEl.getViewCursorOffset();
-                    const gen = this.beginScrollRestoring(); // adds class BEFORE setValue
-                    editorEl.setValue(content, false);       // new divs born with class active
+                    this.beginScrollRestoring();       // adds class BEFORE setValue
+                    editorEl.setValue(content, false); // new divs born with class active
                     this.plugin.updateCharCount(countChars(content));
-                    if (this.app.workspace.getActiveViewOfType(VerticalWritingView) === this) {
-                        this.restoreViewOffset(savedOffset); // rAF 1 scroll, rAF 2 remove class
-                    } else {
-                        this.scheduleScrollRestoringCleanup(gen);
-                    }
+                    // restoreViewOffset handles both cases:
+                    //   active view  → rAF 1: scroll, rAF 2: remove class
+                    //   inactive view → pendingCursorOffset set; active-leaf-change scrolls
+                    this.restoreViewOffset(savedOffset);
                 } else {
                     // File load or file delete: caller manages the tate-scroll-restoring lifecycle.
                     editorEl.setValue(content, false);
