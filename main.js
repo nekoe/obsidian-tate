@@ -2346,6 +2346,9 @@ var SearchPanel = class {
     this.inputEl = null;
     this.countEl = null;
     this.matches = [];
+    // Visible-text start offset for each match (parallel to matches[]).
+    // Used by findFirstIndexAtOrAfter() to seed the initial focus from prSearchOffset.
+    this.matchStarts = [];
     this.currentIndex = -1;
     // Cursor offset (visible) when the panel was opened; restored if no navigation occurred.
     this.prSearchOffset = null;
@@ -2380,6 +2383,7 @@ var SearchPanel = class {
     this.prSearchOffset = initialOffset;
     this.lastNavigatedOffset = null;
     this.matches = [];
+    this.matchStarts = [];
     this.currentIndex = -1;
     this.buildPanel();
     this.app.keymap.pushScope(this.searchScope);
@@ -2399,6 +2403,7 @@ var SearchPanel = class {
     const restoreOffset = (_b = this.lastNavigatedOffset) != null ? _b : this.prSearchOffset;
     this.prSearchOffset = null;
     this.lastNavigatedOffset = null;
+    this.matchStarts = [];
     if (restoreOffset !== null) {
       this.editorElementRef.setViewCursorOffset(restoreOffset);
     }
@@ -2449,11 +2454,12 @@ var SearchPanel = class {
     this.panelEl = panel;
   }
   runSearch(scroll = true) {
-    var _a, _b, _c, _d, _e;
+    var _a, _b, _c, _d, _e, _f;
     const query = (_b = (_a = this.inputEl) == null ? void 0 : _a.value) != null ? _b : "";
     this.clearHighlights();
     const prevIndex = this.currentIndex;
     this.matches = [];
+    this.matchStarts = [];
     this.currentIndex = -1;
     if (!query) {
       this.updateCount();
@@ -2466,7 +2472,10 @@ var SearchPanel = class {
     let m;
     while ((m = re.exec(text)) !== null) {
       const range = createRangeForMatch(segments, m.index, m.index + m[0].length);
-      if (range) this.matches.push(range);
+      if (range) {
+        this.matches.push(range);
+        this.matchStarts.push(m.index);
+      }
       if (m[0].length === 0) re.lastIndex++;
     }
     if (this.matches.length === 0) {
@@ -2479,8 +2488,16 @@ var SearchPanel = class {
     if (prevIndex >= 0 && prevIndex < this.matches.length) {
       this.setFocus(prevIndex, false, scroll);
     } else {
-      this.setFocus(0, false, scroll);
+      this.setFocus(this.findFirstIndexAtOrAfter((_f = this.prSearchOffset) != null ? _f : 0), false, scroll);
     }
+  }
+  // Returns the index of the first match whose visible-text start is >= offset.
+  // Wraps to 0 if no match is at or after offset (cursor is past all matches).
+  findFirstIndexAtOrAfter(offset) {
+    for (let i = 0; i < this.matchStarts.length; i++) {
+      if (this.matchStarts[i] >= offset) return i;
+    }
+    return 0;
   }
   navigate(delta) {
     if (this.matches.length === 0) return;

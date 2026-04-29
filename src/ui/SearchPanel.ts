@@ -90,6 +90,9 @@ export class SearchPanel {
     private readonly searchScope: Scope;
 
     private matches: Range[] = [];
+    // Visible-text start offset for each match (parallel to matches[]).
+    // Used by findFirstIndexAtOrAfter() to seed the initial focus from prSearchOffset.
+    private matchStarts: number[] = [];
     private currentIndex = -1;
     // Cursor offset (visible) when the panel was opened; restored if no navigation occurred.
     private prSearchOffset: number | null = null;
@@ -133,6 +136,7 @@ export class SearchPanel {
         this.prSearchOffset = initialOffset;
         this.lastNavigatedOffset = null;
         this.matches = [];
+        this.matchStarts = [];
         this.currentIndex = -1;
         this.buildPanel();
         this.app.keymap.pushScope(this.searchScope);
@@ -155,6 +159,7 @@ export class SearchPanel {
         const restoreOffset = this.lastNavigatedOffset ?? this.prSearchOffset;
         this.prSearchOffset = null;
         this.lastNavigatedOffset = null;
+        this.matchStarts = [];
 
         // Restore cursor and give focus back to the editor.  This must happen inside
         // close() rather than in the caller because ESC and the × button call close()
@@ -230,6 +235,7 @@ export class SearchPanel {
         this.clearHighlights();
         const prevIndex = this.currentIndex;
         this.matches = [];
+        this.matchStarts = [];
         this.currentIndex = -1;
 
         if (!query) {
@@ -244,7 +250,10 @@ export class SearchPanel {
         let m: RegExpExecArray | null;
         while ((m = re.exec(text)) !== null) {
             const range = createRangeForMatch(segments, m.index, m.index + m[0].length);
-            if (range) this.matches.push(range);
+            if (range) {
+                this.matches.push(range);
+                this.matchStarts.push(m.index);
+            }
             if (m[0].length === 0) re.lastIndex++;
         }
 
@@ -257,12 +266,22 @@ export class SearchPanel {
         this.inputEl?.classList.remove('tate-search-no-match');
         this.applyHitHighlights();
 
-        // Keep the previously focused index if still valid across re-searches.
+        // Re-search (user keeps typing): stay on the same index if still valid.
+        // First search: focus the nearest hit at or after the cursor position.
         if (prevIndex >= 0 && prevIndex < this.matches.length) {
             this.setFocus(prevIndex, false, scroll);
         } else {
-            this.setFocus(0, false, scroll);
+            this.setFocus(this.findFirstIndexAtOrAfter(this.prSearchOffset ?? 0), false, scroll);
         }
+    }
+
+    // Returns the index of the first match whose visible-text start is >= offset.
+    // Wraps to 0 if no match is at or after offset (cursor is past all matches).
+    private findFirstIndexAtOrAfter(offset: number): number {
+        for (let i = 0; i < this.matchStarts.length; i++) {
+            if (this.matchStarts[i] >= offset) return i;
+        }
+        return 0;
     }
 
     private navigate(delta: 1 | -1): void {
