@@ -2595,6 +2595,10 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian5.I
     // Fallback for save paths that run while the editor is unfocused: getViewCursorOffset()
     // returns 0 when the editor lacks focus, so this field preserves the last valid offset.
     this.lastKnownViewOffset = null;
+    // Tracks whether escScope is currently on the keymap stack to prevent double-push.
+    // active-leaf-change and notifyActivated() can both trigger activation; the flag
+    // ensures pushScope/popScope are always balanced regardless of call order.
+    this.escScopeActive = false;
     this.searchPanel = null;
     this.escScope = new import_obsidian5.Scope(this.app.scope);
   }
@@ -2835,33 +2839,9 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian5.I
       this.app.workspace.on("active-leaf-change", (leaf) => {
         if (leaf === null) return;
         if (leaf === this.leaf) {
-          this.app.keymap.pushScope(this.escScope);
-          this.plugin.updateCharCount(countChars(this.lastCommittedContent));
-          const el = this.editorEl;
-          if (el) {
-            el.el.focus({ preventScroll: true });
-            if (this.pendingCursorOffset !== null) {
-              const gen = this.scrollRestoringGeneration;
-              const offset = this.pendingCursorOffset;
-              this.pendingCursorOffset = null;
-              el.setViewCursorOffset(offset);
-              this.lastKnownViewOffset = offset;
-              requestAnimationFrame(() => {
-                if (this.scrollRestoringGeneration !== gen) return;
-                this.hideLoadingSpinner();
-                el.setViewCursorOffset(offset);
-                el.scrollCursorIntoView();
-                requestAnimationFrame(() => {
-                  if (this.scrollRestoringGeneration === gen)
-                    el.el.classList.remove("tate-scroll-restoring");
-                });
-              });
-            } else if (this.lastKnownViewOffset !== null) {
-              el.setViewCursorOffset(this.lastKnownViewOffset);
-            }
-          }
+          this.onThisLeafActivated();
         } else {
-          this.app.keymap.popScope(this.escScope);
+          this.popEscScope();
           if (!this.app.workspace.getLeavesOfType(TATE_VIEW_TYPE).includes(leaf)) {
             this.plugin.updateCharCount(null);
           }
@@ -2870,7 +2850,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian5.I
     );
     await this.loadInitialFile(syncCoordinator);
     if (this.app.workspace.getActiveViewOfType(_VerticalWritingView) === this) {
-      this.app.keymap.pushScope(this.escScope);
+      this.pushEscScope();
     }
   }
   async loadInitialFile(syncCoordinator) {
@@ -2955,7 +2935,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian5.I
   async onClose() {
     var _a, _b;
     (_a = this.searchPanel) == null ? void 0 : _a.close();
-    this.app.keymap.popScope(this.escScope);
+    this.popEscScope();
     this.commitToCm6();
     const p = this.saveCursorForQuit();
     if (p) await p;
@@ -3020,6 +3000,51 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian5.I
   applySettings(settings) {
     var _a;
     (_a = this.editorEl) == null ? void 0 : _a.applySettings(settings);
+  }
+  pushEscScope() {
+    if (this.escScopeActive) return;
+    this.app.keymap.pushScope(this.escScope);
+    this.escScopeActive = true;
+  }
+  popEscScope() {
+    if (!this.escScopeActive) return;
+    this.app.keymap.popScope(this.escScope);
+    this.escScopeActive = false;
+  }
+  // Body of the "this leaf became active" branch, shared between active-leaf-change
+  // and notifyActivated() (called when revealLeaf doesn't fire active-leaf-change).
+  onThisLeafActivated() {
+    this.pushEscScope();
+    this.plugin.updateCharCount(countChars(this.lastCommittedContent));
+    const el = this.editorEl;
+    if (el) {
+      el.el.focus({ preventScroll: true });
+      if (this.pendingCursorOffset !== null) {
+        const gen = this.scrollRestoringGeneration;
+        const offset = this.pendingCursorOffset;
+        this.pendingCursorOffset = null;
+        el.setViewCursorOffset(offset);
+        this.lastKnownViewOffset = offset;
+        requestAnimationFrame(() => {
+          if (this.scrollRestoringGeneration !== gen) return;
+          this.hideLoadingSpinner();
+          el.setViewCursorOffset(offset);
+          el.scrollCursorIntoView();
+          requestAnimationFrame(() => {
+            if (this.scrollRestoringGeneration === gen)
+              el.el.classList.remove("tate-scroll-restoring");
+          });
+        });
+      } else if (this.lastKnownViewOffset !== null) {
+        el.setViewCursorOffset(this.lastKnownViewOffset);
+      }
+    }
+  }
+  /** Called by activateView() when revealLeaf doesn't trigger active-leaf-change.
+   *  Idempotent: pushEscScope() is guarded by escScopeActive, so calling this
+   *  and then receiving a genuine active-leaf-change is safe. */
+  notifyActivated() {
+    this.onThisLeafActivated();
   }
   openSearch() {
     const el = this.editorEl;
@@ -3322,6 +3347,7 @@ var TatePlugin = class extends import_obsidian6.Plugin {
     const existing = this.app.workspace.getLeavesOfType(TATE_VIEW_TYPE);
     if (existing.length > 0) {
       void this.app.workspace.revealLeaf(existing[0]);
+      existing[0].view.notifyActivated();
       return;
     }
     const leaf = this.app.workspace.getLeaf("tab");

@@ -159,6 +159,12 @@ export default class TatePlugin extends Plugin {
         const existing = this.app.workspace.getLeavesOfType(TATE_VIEW_TYPE);
         if (existing.length > 0) {
             void this.app.workspace.revealLeaf(existing[0]);
+            // revealLeaf does not always fire active-leaf-change when re-revealing an
+            // existing leaf, so manually trigger the activation logic (focus, cursor
+            // restore, spinner cleanup). notifyActivated() is idempotent: if
+            // active-leaf-change does fire afterwards, the escScope guard prevents a
+            // double push.
+            (existing[0].view as VerticalWritingView).notifyActivated();
             return;
         }
         const leaf = this.app.workspace.getLeaf('tab');

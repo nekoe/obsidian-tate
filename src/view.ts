@@ -33,6 +33,10 @@ export class VerticalWritingView extends ItemView {
     // Obsidian's global handler, which would otherwise switch the active leaf to a
     // navigation=true view (e.g. MarkdownView). See docs/design/20260424_esc_key_scope.md.
     private readonly escScope: Scope;
+    // Tracks whether escScope is currently on the keymap stack to prevent double-push.
+    // active-leaf-change and notifyActivated() can both trigger activation; the flag
+    // ensures pushScope/popScope are always balanced regardless of call order.
+    private escScopeActive = false;
     private searchPanel: SearchPanel | null = null;
 
     constructor(leaf: WorkspaceLeaf, private readonly plugin: TatePlugin) {
@@ -322,41 +326,9 @@ export class VerticalWritingView extends ItemView {
             this.app.workspace.on('active-leaf-change', (leaf) => {
                 if (leaf === null) return; // transient null during Obsidian internal navigation
                 if (leaf === this.leaf) {
-                    this.app.keymap.pushScope(this.escScope);
-                    this.plugin.updateCharCount(countChars(this.lastCommittedContent));
-                    const el = this.editorEl;
-                    if (el) {
-                        // focus() resets the caret to the start; restore it immediately after.
-                        el.el.focus({ preventScroll: true });
-                        if (this.pendingCursorOffset !== null) {
-                            // New file was loaded in the background: restore the saved offset and scroll.
-                            // tate-scroll-restoring was set before loadFile(); real sizes are in effect.
-                            // Defer hide + scroll to rAF 1 so the spinner is visible on the first
-                            // paint when the tab becomes active (matches restoreViewOffset active path).
-                            const gen = this.scrollRestoringGeneration; // snapshot for rAF guard
-                            const offset = this.pendingCursorOffset;
-                            this.pendingCursorOffset = null;
-                            el.setViewCursorOffset(offset);
-                            this.lastKnownViewOffset = offset; // sync update
-                            requestAnimationFrame(() => {
-                                if (this.scrollRestoringGeneration !== gen) return;
-                                // Hide spinner before scroll so it disappears at the same time content is revealed.
-                                this.hideLoadingSpinner();
-                                // Re-assert cursor in case focus() moved it between now and this frame.
-                                el.setViewCursorOffset(offset);
-                                el.scrollCursorIntoView();
-                                requestAnimationFrame(() => {
-                                    if (this.scrollRestoringGeneration === gen)
-                                        el.el.classList.remove('tate-scroll-restoring');
-                                });
-                            });
-                        } else if (this.lastKnownViewOffset !== null) {
-                            // Normal tab switch: restore the cursor to where the user left off.
-                            el.setViewCursorOffset(this.lastKnownViewOffset);
-                        }
-                    }
+                    this.onThisLeafActivated();
                 } else {
-                    this.app.keymap.popScope(this.escScope);
+                    this.popEscScope();
                     if (!this.app.workspace.getLeavesOfType(TATE_VIEW_TYPE).includes(leaf)) {
                         // Hide only when the newly active leaf is not any tate view
                         this.plugin.updateCharCount(null);
@@ -370,7 +342,7 @@ export class VerticalWritingView extends ItemView {
         // If the view is already active when it opens (the common case), push the scope now.
         // Otherwise the first active-leaf-change for this leaf will push it.
         if (this.app.workspace.getActiveViewOfType(VerticalWritingView) === this) {
-            this.app.keymap.pushScope(this.escScope);
+            this.pushEscScope();
         }
     }
 
@@ -467,7 +439,7 @@ export class VerticalWritingView extends ItemView {
 
     async onClose(): Promise<void> {
         this.searchPanel?.close();
-        this.app.keymap.popScope(this.escScope);
+        this.popEscScope();
         // Flush any uncommitted changes to CM6 before closing
         this.commitToCm6();
         const p = this.saveCursorForQuit();
@@ -534,6 +506,63 @@ export class VerticalWritingView extends ItemView {
 
     applySettings(settings: TatePluginSettings): void {
         this.editorEl?.applySettings(settings);
+    }
+
+    private pushEscScope(): void {
+        if (this.escScopeActive) return;
+        this.app.keymap.pushScope(this.escScope);
+        this.escScopeActive = true;
+    }
+
+    private popEscScope(): void {
+        if (!this.escScopeActive) return;
+        this.app.keymap.popScope(this.escScope);
+        this.escScopeActive = false;
+    }
+
+    // Body of the "this leaf became active" branch, shared between active-leaf-change
+    // and notifyActivated() (called when revealLeaf doesn't fire active-leaf-change).
+    private onThisLeafActivated(): void {
+        this.pushEscScope();
+        this.plugin.updateCharCount(countChars(this.lastCommittedContent));
+        const el = this.editorEl;
+        if (el) {
+            // focus() resets the caret to the start; restore it immediately after.
+            el.el.focus({ preventScroll: true });
+            if (this.pendingCursorOffset !== null) {
+                // New file was loaded in the background: restore the saved offset and scroll.
+                // tate-scroll-restoring was set before loadFile(); real sizes are in effect.
+                // Defer hide + scroll to rAF 1 so the spinner is visible on the first
+                // paint when the tab becomes active (matches restoreViewOffset active path).
+                const gen = this.scrollRestoringGeneration; // snapshot for rAF guard
+                const offset = this.pendingCursorOffset;
+                this.pendingCursorOffset = null;
+                el.setViewCursorOffset(offset);
+                this.lastKnownViewOffset = offset; // sync update
+                requestAnimationFrame(() => {
+                    if (this.scrollRestoringGeneration !== gen) return;
+                    // Hide spinner before scroll so it disappears at the same time content is revealed.
+                    this.hideLoadingSpinner();
+                    // Re-assert cursor in case focus() moved it between now and this frame.
+                    el.setViewCursorOffset(offset);
+                    el.scrollCursorIntoView();
+                    requestAnimationFrame(() => {
+                        if (this.scrollRestoringGeneration === gen)
+                            el.el.classList.remove('tate-scroll-restoring');
+                    });
+                });
+            } else if (this.lastKnownViewOffset !== null) {
+                // Normal tab switch: restore the cursor to where the user left off.
+                el.setViewCursorOffset(this.lastKnownViewOffset);
+            }
+        }
+    }
+
+    /** Called by activateView() when revealLeaf doesn't trigger active-leaf-change.
+     *  Idempotent: pushEscScope() is guarded by escScopeActive, so calling this
+     *  and then receiving a genuine active-leaf-change is safe. */
+    notifyActivated(): void {
+        this.onThisLeafActivated();
     }
 
     openSearch(): void {
