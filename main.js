@@ -2530,6 +2530,10 @@ var SearchPanel = class {
   }
   scrollRangeIntoView(range) {
     this.editorElementRef.scrollToRange(range);
+    requestAnimationFrame(() => {
+      this.applyHitHighlights();
+      this.applyFocusHighlight();
+    });
   }
   applyHitHighlights() {
     if (typeof CSS === "undefined" || !CSS.highlights) return;

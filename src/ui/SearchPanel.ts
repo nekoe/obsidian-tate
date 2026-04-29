@@ -324,6 +324,14 @@ export class SearchPanel {
 
     private scrollRangeIntoView(range: Range): void {
         this.editorElementRef.scrollToRange(range);
+        // Re-apply CSS Custom Highlights in the next frame. content-visibility:auto paragraphs
+        // that just scrolled into view may be composited before the synchronous highlight
+        // registration reaches the rendering thread, leaving them unpainted until the next
+        // pointer event. Re-registering in a rAF ensures they appear on the first visible paint.
+        requestAnimationFrame(() => {
+            this.applyHitHighlights();
+            this.applyFocusHighlight();
+        });
     }
 
     private applyHitHighlights(): void {
