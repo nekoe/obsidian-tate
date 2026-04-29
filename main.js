@@ -2365,11 +2365,13 @@ var SearchPanel = class {
     });
     this.searchScope.register([], "Enter", (evt) => {
       if (evt.isComposing) return;
+      if (this.editorFocused) return;
       this.navigate(1);
       return false;
     });
     this.searchScope.register(["Shift"], "Enter", (evt) => {
       if (evt.isComposing) return;
+      if (this.editorFocused) return;
       this.navigate(-1);
       return false;
     });

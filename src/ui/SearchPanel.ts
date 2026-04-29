@@ -119,11 +119,13 @@ export class SearchPanel {
 
         this.searchScope.register([], 'Enter', (evt) => {
             if (evt.isComposing) return;
+            if (this.editorFocused) return; // pass through to editor
             this.navigate(1);
             return false;
         });
         this.searchScope.register(['Shift'], 'Enter', (evt) => {
             if (evt.isComposing) return;
+            if (this.editorFocused) return; // pass through to editor
             this.navigate(-1);
             return false;
         });
