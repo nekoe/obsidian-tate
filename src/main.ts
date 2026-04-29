@@ -1,4 +1,4 @@
-import { Notice, Plugin, WorkspaceLeaf, setIcon } from 'obsidian';
+import { Plugin, WorkspaceLeaf, setIcon } from 'obsidian';
 import { TATE_VIEW_TYPE, VerticalWritingView } from './view';
 import { DEFAULT_SETTINGS, TatePluginSettings, TateSettingTab } from './settings';
 
@@ -33,25 +33,45 @@ export default class TatePlugin extends Plugin {
         this.addCommand({
             id: 'search',
             name: '検索',
-            callback: () => this.dispatchToView(v => v.openSearch()),
+            checkCallback: (checking) => {
+                const view = this.getActiveTateView();
+                if (!view) return false;
+                if (!checking) view.openSearch();
+                return true;
+            },
         });
 
         this.addCommand({
             id: 'add-ruby',
             name: '選択テキストにルビを設定 (ruby)',
-            callback: () => this.dispatchToView(v => v.applyRuby()),
+            checkCallback: (checking) => {
+                const view = this.getActiveTateView();
+                if (!view) return false;
+                if (!checking) view.applyRuby();
+                return true;
+            },
         });
 
         this.addCommand({
             id: 'add-tcy',
             name: '選択テキストを縦中横にする (tate-chu-yoko: tcy)',
-            callback: () => this.dispatchToView(v => v.applyTcy()),
+            checkCallback: (checking) => {
+                const view = this.getActiveTateView();
+                if (!view) return false;
+                if (!checking) view.applyTcy();
+                return true;
+            },
         });
 
         this.addCommand({
             id: 'add-bouten',
             name: '選択テキストに傍点を付ける (bouten)',
-            callback: () => this.dispatchToView(v => v.applyBouten()),
+            checkCallback: (checking) => {
+                const view = this.getActiveTateView();
+                if (!view) return false;
+                if (!checking) view.applyBouten();
+                return true;
+            },
         });
 
         this.addSettingTab(new TateSettingTab(this.app, this));
@@ -127,13 +147,8 @@ export default class TatePlugin extends Plugin {
         });
     }
 
-    private dispatchToView(action: (view: VerticalWritingView) => void): void {
-        const leaves = this.app.workspace.getLeavesOfType(TATE_VIEW_TYPE);
-        if (leaves.length === 0) {
-            new Notice('縦書きビューが開いていません');
-            return;
-        }
-        action(leaves[0].view as VerticalWritingView);
+    private getActiveTateView(): VerticalWritingView | null {
+        return this.app.workspace.getActiveViewOfType(VerticalWritingView);
     }
 
     private async activateView(): Promise<void> {

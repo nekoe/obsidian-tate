@@ -3216,22 +3216,42 @@ var TatePlugin = class extends import_obsidian6.Plugin {
     this.addCommand({
       id: "search",
       name: "\u691C\u7D22",
-      callback: () => this.dispatchToView((v) => v.openSearch())
+      checkCallback: (checking) => {
+        const view = this.getActiveTateView();
+        if (!view) return false;
+        if (!checking) view.openSearch();
+        return true;
+      }
     });
     this.addCommand({
       id: "add-ruby",
       name: "\u9078\u629E\u30C6\u30AD\u30B9\u30C8\u306B\u30EB\u30D3\u3092\u8A2D\u5B9A (ruby)",
-      callback: () => this.dispatchToView((v) => v.applyRuby())
+      checkCallback: (checking) => {
+        const view = this.getActiveTateView();
+        if (!view) return false;
+        if (!checking) view.applyRuby();
+        return true;
+      }
     });
     this.addCommand({
       id: "add-tcy",
       name: "\u9078\u629E\u30C6\u30AD\u30B9\u30C8\u3092\u7E26\u4E2D\u6A2A\u306B\u3059\u308B (tate-chu-yoko: tcy)",
-      callback: () => this.dispatchToView((v) => v.applyTcy())
+      checkCallback: (checking) => {
+        const view = this.getActiveTateView();
+        if (!view) return false;
+        if (!checking) view.applyTcy();
+        return true;
+      }
     });
     this.addCommand({
       id: "add-bouten",
       name: "\u9078\u629E\u30C6\u30AD\u30B9\u30C8\u306B\u508D\u70B9\u3092\u4ED8\u3051\u308B (bouten)",
-      callback: () => this.dispatchToView((v) => v.applyBouten())
+      checkCallback: (checking) => {
+        const view = this.getActiveTateView();
+        if (!view) return false;
+        if (!checking) view.applyBouten();
+        return true;
+      }
     });
     this.addSettingTab(new TateSettingTab(this.app, this));
     this.registerEvent(
@@ -3291,13 +3311,8 @@ var TatePlugin = class extends import_obsidian6.Plugin {
       }
     });
   }
-  dispatchToView(action) {
-    const leaves = this.app.workspace.getLeavesOfType(TATE_VIEW_TYPE);
-    if (leaves.length === 0) {
-      new import_obsidian6.Notice("\u7E26\u66F8\u304D\u30D3\u30E5\u30FC\u304C\u958B\u3044\u3066\u3044\u307E\u305B\u3093");
-      return;
-    }
-    action(leaves[0].view);
+  getActiveTateView() {
+    return this.app.workspace.getActiveViewOfType(VerticalWritingView);
   }
   async activateView() {
     const existing = this.app.workspace.getLeavesOfType(TATE_VIEW_TYPE);
