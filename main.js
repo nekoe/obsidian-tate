@@ -2554,6 +2554,7 @@ var SearchPanel = class {
   }
   applyFocusHighlight() {
     if (typeof CSS === "undefined" || !CSS.highlights) return;
+    if (this.editorFocused) return;
     const focused = this.matches[this.currentIndex];
     if (focused) {
       const h = new Highlight(focused);
