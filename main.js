@@ -2144,10 +2144,10 @@ var EditorElement = class {
     if (!sel || sel.rangeCount === 0) return;
     this.scrollRangeIntoView(sel.getRangeAt(0), block);
   }
-  /** Scrolls an arbitrary Range into view using block:'nearest'. Used by SearchPanel to scroll
+  /** Scrolls an arbitrary Range into view using block:'center'. Used by SearchPanel to scroll
    *  to search hits without scrolling to the paragraph boundary for long multi-column paragraphs. */
   scrollToRange(range) {
-    this.scrollRangeIntoView(range, "nearest");
+    this.scrollRangeIntoView(range, "center");
   }
   /** Scrolls a Range into view by computing the horizontal scroll offset from the range's
    *  bounding rect rather than calling element.scrollIntoView(). For long paragraphs that span
