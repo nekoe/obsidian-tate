@@ -2417,12 +2417,10 @@ var SearchPanel = class {
     this.lastNavigatedOffset = null;
     this.editorFocused = false;
     this.matchStarts = [];
-    if (!wasEditorFocused) {
-      if (restoreOffset !== null) {
-        this.editorElementRef.setViewCursorOffset(restoreOffset);
-      }
-      this.editorElementRef.el.focus();
+    if (!wasEditorFocused && restoreOffset !== null) {
+      this.editorElementRef.setViewCursorOffset(restoreOffset);
     }
+    this.editorElementRef.el.focus();
     return restoreOffset;
   }
   onContentChanged() {

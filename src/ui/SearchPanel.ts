@@ -181,13 +181,11 @@ export class SearchPanel {
         // close() rather than in the caller because ESC and the × button call close()
         // directly — their return value is never used.
         // If the user clicked the editor before closing, skip cursor restore: the cursor
-        // is already at the click position and the editor already has focus.
-        if (!wasEditorFocused) {
-            if (restoreOffset !== null) {
-                this.editorElementRef.setViewCursorOffset(restoreOffset);
-            }
-            this.editorElementRef.el.focus();
+        // is already at the click position.
+        if (!wasEditorFocused && restoreOffset !== null) {
+            this.editorElementRef.setViewCursorOffset(restoreOffset);
         }
+        this.editorElementRef.el.focus();
 
         return restoreOffset; // returned so view.ts can update lastKnownViewOffset
     }
