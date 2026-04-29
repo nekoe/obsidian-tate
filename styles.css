@@ -47,6 +47,13 @@
     content-visibility: visible;
 }
 
+/* Temporarily forces content-visibility:visible on specific paragraphs to update
+   their contain-intrinsic-block-size:auto cached size after a DOM mutation (paste,
+   Undo/Redo). Added synchronously after mutation; removed in the second rAF. */
+.tate-editor > div.tate-layout-refreshing {
+    content-visibility: visible;
+}
+
 /* Loading spinner shown while tate-scroll-restoring is active. Removed in rAF 1
    (before scrollIntoView) so it disappears simultaneously with the content reveal. */
 .tate-loading-spinner {

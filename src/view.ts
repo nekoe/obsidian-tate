@@ -62,10 +62,26 @@ export class VerticalWritingView extends ItemView {
             // Use committed text for comparison (not getValue() which may contain uncommitted IME text)
             () => this.lastCommittedContent,
             (content, preserveCursor) => {
-                // Update committed content on file load and external change application
                 this.lastCommittedContent = content;
-                editorEl.setValue(content, preserveCursor);
-                this.plugin.updateCharCount(countChars(content));
+                if (preserveCursor) {
+                    // External edit: rebuild all divs under tate-scroll-restoring so they are
+                    // born with content-visibility:visible → contain-intrinsic-block-size cache
+                    // is accurate from their first paint. Then restore cursor and scroll,
+                    // identical to the file-load path.
+                    const savedOffset = editorEl.getViewCursorOffset();
+                    const gen = this.beginScrollRestoring(); // adds class BEFORE setValue
+                    editorEl.setValue(content, false);       // new divs born with class active
+                    this.plugin.updateCharCount(countChars(content));
+                    if (this.app.workspace.getActiveViewOfType(VerticalWritingView) === this) {
+                        this.restoreViewOffset(savedOffset); // rAF 1 scroll, rAF 2 remove class
+                    } else {
+                        this.scheduleScrollRestoringCleanup(gen);
+                    }
+                } else {
+                    // File load or file delete: caller manages the tate-scroll-restoring lifecycle.
+                    editorEl.setValue(content, false);
+                    this.plugin.updateCharCount(countChars(content));
+                }
             },
         );
         this.syncCoordinator = syncCoordinator;
@@ -95,8 +111,9 @@ export class VerticalWritingView extends ItemView {
         });
         this.registerDomEvent(editorEl.el, 'paste', (e: ClipboardEvent) => {
             if (!this.guardCm6(e)) return; // Block if CM6 is unavailable
-            editorEl.handlePaste(e);
+            const newDivs = editorEl.handlePaste(e);
             this.commitToCm6(); // Paste is an immediate commit point
+            this.scheduleLayoutRefresh(newDivs);
         });
         this.registerDomEvent(editorEl.el, 'beforeinput', (e: InputEvent) => {
             if (!this.guardCm6(e)) return; // Block input if CM6 is unavailable (read-only)
@@ -480,6 +497,21 @@ export class VerticalWritingView extends ItemView {
         this.hideLoadingSpinner();
     }
 
+    /** Proactively refreshes the contain-intrinsic-block-size:auto cache for divs that
+     *  were mutated while off-screen (paste, Undo/Redo). Adds tate-layout-refreshing
+     *  synchronously so Frame N's layout runs with content-visibility:visible and writes
+     *  the actual size into the cache. Removes the class in the second rAF (Frame N+1)
+     *  so Frame N's layout is not skipped. No spinner — two frames is imperceptible. */
+    private scheduleLayoutRefresh(divs: HTMLDivElement[]): void {
+        if (divs.length === 0) return;
+        divs.forEach(d => d.classList.add('tate-layout-refreshing'));
+        requestAnimationFrame(() => {
+            requestAnimationFrame(() => {
+                divs.forEach(d => d.classList.remove('tate-layout-refreshing'));
+            });
+        });
+    }
+
     applySettings(settings: TatePluginSettings): void {
         this.editorEl?.applySettings(settings);
     }
@@ -605,8 +637,16 @@ export class VerticalWritingView extends ItemView {
         if (newContent === prevContent) return;
         // Derive cursor position from the diff (end of the restored/deleted text)
         const srcOffset = this.deriveUndoRedoCursor(prevContent, newContent);
-        editorEl.applyFromCm6(prevContent, newContent, srcOffset);
+        const changedDivs = editorEl.applyFromCm6(prevContent, newContent, srcOffset);
         editorEl.scrollCursorIntoView('nearest', 'nearest');
+        if (changedDivs === null) {
+            // hasCleanDivStructure failed → full rebuild; apply tate-scroll-restoring so
+            // the new divs have their contain-intrinsic-block-size cache populated.
+            const gen = this.beginScrollRestoring();
+            this.scheduleScrollRestoringCleanup(gen);
+        } else {
+            this.scheduleLayoutRefresh(changedDivs);
+        }
         // Update last committed content to reflect the new CM6 state.
         // Without this, onExternalModify() would misfire on the CM6 autosave modify event,
         // causing the tate view DOM to reset and the cursor to jump during input right after undo.

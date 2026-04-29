@@ -144,13 +144,15 @@ export class EditorElement {
 
     // Paste handler: parses Aozora notation in the pasted text and inserts rendered inline elements.
     // Multi-line paste creates one <div> per line (matching Enter-key paragraph behavior).
-    handlePaste(e: ClipboardEvent): void {
+    // Returns newly created off-screen divs that need a proactive layout cache refresh.
+    // Single-line paste into a visible cursor div returns [] (cache updates naturally on-screen).
+    handlePaste(e: ClipboardEvent): HTMLDivElement[] {
         e.preventDefault();
         const text = e.clipboardData?.getData('text/plain') ?? '';
-        if (!text) return;
+        if (!text) return [];
 
         const sel = window.getSelection();
-        if (!sel || sel.rangeCount === 0) return;
+        if (!sel || sel.rangeCount === 0) return [];
 
         const range = sel.getRangeAt(0);
         range.deleteContents();
@@ -185,15 +187,18 @@ export class EditorElement {
         // When the cursor is still at the editor root level (no adjacent empty div to adopt),
         // route single-line paste through insertParsedParagraphs, which has a dedicated
         // handler for the this.el case and creates a proper <div> instead of a bare text node.
+        let newDivs: HTMLDivElement[];
         if (lines.length === 1 && range.startContainer !== this.el) {
             this.insertParsedInline(range, lines[0]);
+            newDivs = []; // cursor div is always visible; cache updates naturally
         } else {
-            this.insertParsedParagraphs(range, lines);
+            newDivs = this.insertParsedParagraphs(range, lines);
         }
 
         // beforeinput does not fire for paste, so set inBurst manually
         this.inlineEditor.onBeforeInput();
         // view.ts calls commitToCm6() after paste
+        return newDivs;
     }
 
     // Inserts parsed Aozora inline elements at the range position (single-line paste).
@@ -214,7 +219,8 @@ export class EditorElement {
     // Inserts parsed lines as separate paragraph <div>s (multi-line paste).
     // Splits the current paragraph at the cursor: first line appends to it,
     // each remaining line becomes a new <div>, and after-cursor content moves to the last.
-    private insertParsedParagraphs(range: Range, lines: string[]): void {
+    // Returns newly created <div>s that may be off-screen and need a layout cache refresh.
+    private insertParsedParagraphs(range: Range, lines: string[]): HTMLDivElement[] {
         const sel = window.getSelection()!;
         const paragraphDiv = this.findParagraphDiv(range.startContainer);
 
@@ -225,11 +231,13 @@ export class EditorElement {
         // bare text nodes and <br>s directly inside the editor and corrupt patchParagraphs.
         if (!this.inlineEditor.isExpanded() && range.startContainer === this.el) {
             const refNode = this.el.childNodes[range.startOffset] ?? null;
-            let lastDiv: HTMLElement | null = null;
+            const newDivs: HTMLDivElement[] = [];
+            let lastDiv: HTMLDivElement | null = null;
             for (const line of lines) {
                 const div = document.createElement('div');
                 div.replaceChildren(sanitizeHTMLToDom(parseInlineToHtml(line) || '<br>'));
                 this.el.insertBefore(div, refNode);
+                newDivs.push(div);
                 lastDiv = div;
             }
             if (lastDiv) {
@@ -239,7 +247,7 @@ export class EditorElement {
                 sel.removeAllRanges();
                 sel.addRange(r);
             }
-            return;
+            return newDivs;
         }
 
         if (!paragraphDiv || this.inlineEditor.isExpanded()) {
@@ -263,7 +271,7 @@ export class EditorElement {
             }
             sel.removeAllRanges();
             sel.addRange(range);
-            return;
+            return []; // same div, always visible; no cache refresh needed
         }
 
         // Extract content from cursor to end of paragraph
@@ -288,10 +296,12 @@ export class EditorElement {
         const firstFrag = sanitizeHTMLToDom(parseInlineToHtml(lines[0]));
         paragraphDiv.append(...Array.from(firstFrag.childNodes));
         ensureBrPlaceholder(paragraphDiv);
+        // paragraphDiv (lines[0]) is the cursor's current paragraph — always visible; not collected.
 
         // Create a new <div> for each remaining line
         let insertAfter: Element = paragraphDiv;
         let lastPastedNode: Node | null = null;
+        const newDivs: HTMLDivElement[] = [];
 
         for (let i = 1; i < lines.length; i++) {
             const div = document.createElement('div');
@@ -309,6 +319,7 @@ export class EditorElement {
 
             insertAfter.after(div);
             insertAfter = div;
+            newDivs.push(div); // these N-1 divs may be off-screen
         }
 
         // Position cursor at end of pasted content (before the after-cursor content)
@@ -321,6 +332,7 @@ export class EditorElement {
         newRange.collapse(true);
         sel.removeAllRanges();
         sel.addRange(newRange);
+        return newDivs;
     }
 
     // Returns the direct <div> child of this.el that contains node, or null.
@@ -434,22 +446,26 @@ export class EditorElement {
     // Called after CM6 Undo/Redo. Applies content to the vertical writing view and
     // restores the cursor by converting srcOffset (CM6 cursor position) via srcToView.
     // prevContent must equal the current DOM content (caller guarantees prevContent !== content).
-    applyFromCm6(prevContent: string, content: string, srcOffset: number): void {
+    // Returns the changed/added divs for proactive layout cache refresh, or null if patchParagraphs
+    // fell back to a full replaceChildren (hasCleanDivStructure failed).
+    applyFromCm6(prevContent: string, content: string, srcOffset: number): HTMLDivElement[] | null {
         // Clear any expanded span (CM6 state is the source of truth, so force reset)
         this.inlineEditor.reset();
         // Patch only the paragraph divs whose source line changed, preserving the
         // content-visibility: auto size cache for unchanged paragraphs. This avoids the
         // O(N) replaceChildren cost and prevents the scroll-width collapse that causes
         // scroll position to jump after Undo/Redo on large files.
-        this.patchParagraphs(prevContent, content);
+        const changedDivs = this.patchParagraphs(prevContent, content);
         // Convert CM6 source offset to visible offset and restore cursor
         const segs = buildSegmentMap(content);
         const viewOffset = srcToView(segs, srcOffset);
         this.setVisibleOffset(viewOffset);
+        return changedDivs;
     }
 
     // Updates paragraph divs to match nextContent, replacing only divs whose line changed.
-    private patchParagraphs(prevContent: string, nextContent: string): void {
+    // Returns the changed/added divs, or null if hasCleanDivStructure failed (full rebuild).
+    private patchParagraphs(prevContent: string, nextContent: string): HTMLDivElement[] | null {
         const prevLines = prevContent.split('\n');
         const nextLines = nextContent ? nextContent.split('\n') : [''];
         const el = this.el;
@@ -462,7 +478,7 @@ export class EditorElement {
         // so we walk el.childNodes and verify that every node is a <div>.
         if (!this.hasCleanDivStructure(prevLines.length)) {
             el.replaceChildren(sanitizeHTMLToDom(parseToHtml(nextContent)));
-            return;
+            return null;
         }
 
         // Adjust paragraph count without touching unchanged trailing divs
@@ -473,6 +489,7 @@ export class EditorElement {
             el.removeChild(el.lastChild!);
         }
 
+        const changedDivs: HTMLDivElement[] = [];
         for (let i = 0; i < nextLines.length; i++) {
             if (prevLines[i] === nextLines[i]) {
                 // Defensive: a prior paste may have left a <div></div> (empty div without <br>)
@@ -481,10 +498,12 @@ export class EditorElement {
                 if (nextLines[i] === '') ensureBrPlaceholder(el.children[i] as HTMLElement);
                 continue;
             }
-            const div = el.children[i] as HTMLElement;
+            const div = el.children[i] as HTMLDivElement;
             const html = parseInlineToHtml(nextLines[i]) || '<br>';
             div.replaceChildren(sanitizeHTMLToDom(html));
+            changedDivs.push(div);
         }
+        return changedDivs;
     }
 
     // Returns true iff el.childNodes consists of exactly expectedCount <div> elements.
