@@ -2531,8 +2531,12 @@ var SearchPanel = class {
   scrollRangeIntoView(range) {
     this.editorElementRef.scrollToRange(range);
     requestAnimationFrame(() => {
+      this.editorElementRef.el.classList.add("tate-search-repaint");
       this.applyHitHighlights();
       this.applyFocusHighlight();
+      requestAnimationFrame(() => {
+        this.editorElementRef.el.classList.remove("tate-search-repaint");
+      });
     });
   }
   applyHitHighlights() {

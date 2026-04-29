@@ -324,13 +324,21 @@ export class SearchPanel {
 
     private scrollRangeIntoView(range: Range): void {
         this.editorElementRef.scrollToRange(range);
-        // Re-apply CSS Custom Highlights in the next frame. content-visibility:auto paragraphs
-        // that just scrolled into view may be composited before the synchronous highlight
-        // registration reaches the rendering thread, leaving them unpainted until the next
-        // pointer event. Re-registering in a rAF ensures they appear on the first visible paint.
+        // After a compositor-thread scroll, content-visibility:auto paragraphs that just
+        // entered the viewport may be composited before the CSS Custom Highlight registry
+        // reaches the main-thread paint record, leaving highlights absent until the next
+        // pointer event triggers a main-thread repaint.
+        // Changing outline-style (none→solid) is a paint-record mutation that Chrome
+        // cannot optimize away, so it forces a main-thread repaint that includes the
+        // current CSS Custom Highlights. The outline is transparent and removed in the
+        // next rAF, so it is never visible to the user.
         requestAnimationFrame(() => {
+            this.editorElementRef.el.classList.add('tate-search-repaint');
             this.applyHitHighlights();
             this.applyFocusHighlight();
+            requestAnimationFrame(() => {
+                this.editorElementRef.el.classList.remove('tate-search-repaint');
+            });
         });
     }
 

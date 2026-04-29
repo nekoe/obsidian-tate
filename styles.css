@@ -129,6 +129,13 @@
     text-align: right;
 }
 
+/* Temporarily applied after a search-scroll to force a main-thread repaint so CSS
+   Custom Highlights appear on paragraphs that just scrolled into view. Changes
+   outline-style from none→solid, which cannot be optimized away as a no-op paint. */
+.tate-editor.tate-search-repaint {
+    outline: 1px solid transparent;
+}
+
 
 /* Search panel: position:absolute within tate-container (position:relative, non-scrolling).
    tate-container no longer has overflow-x:auto; the inner tate-scroll-area handles scroll.
