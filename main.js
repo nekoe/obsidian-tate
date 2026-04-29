@@ -2297,9 +2297,10 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian4.I
       // Use committed text for comparison (not getValue() which may contain uncommitted IME text)
       () => this.lastCommittedContent,
       (content, preserveCursor) => {
+        var _a;
         this.lastCommittedContent = content;
         if (preserveCursor) {
-          const savedOffset = editorEl.getViewCursorOffset();
+          const savedOffset = (_a = this.lastKnownViewOffset) != null ? _a : editorEl.getViewCursorOffset();
           const gen = this.beginScrollRestoring();
           editorEl.setValue(content, false);
           this.plugin.updateCharCount(countChars(content));
@@ -2643,6 +2644,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian4.I
    *  Returns the generation number for use in rAF guards. */
   beginScrollRestoring() {
     var _a;
+    console.log("beginScrollRestoring");
     const gen = ++this.scrollRestoringGeneration;
     (_a = this.editorEl) == null ? void 0 : _a.el.classList.add("tate-scroll-restoring");
     this.showLoadingSpinner();
@@ -2651,6 +2653,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian4.I
   /** Schedules a one-rAF cleanup for the scroll-restore cycle identified by gen.
    *  Used when no scroll is needed (no savedOffset or superseded load). */
   scheduleScrollRestoringCleanup(gen) {
+    console.log("scheduleScrollRestoringCleanup");
     requestAnimationFrame(() => {
       var _a;
       if (this.scrollRestoringGeneration === gen) {
@@ -2663,6 +2666,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian4.I
    *  Increments the generation to invalidate any pending cleanup rAFs. */
   cancelScrollRestoring() {
     var _a;
+    console.log("cancelScrollRestoring");
     ++this.scrollRestoringGeneration;
     (_a = this.editorEl) == null ? void 0 : _a.el.classList.remove("tate-scroll-restoring");
     this.hideLoadingSpinner();
@@ -2673,6 +2677,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian4.I
    *  the actual size into the cache. Removes the class in the second rAF (Frame N+1)
    *  so Frame N's layout is not skipped. No spinner — two frames is imperceptible. */
   scheduleLayoutRefresh(divs) {
+    console.log("scheduleLayoutRefresh");
     if (divs.length === 0) return;
     divs.forEach((d) => d.classList.add("tate-layout-refreshing"));
     requestAnimationFrame(() => {
@@ -2793,12 +2798,20 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian4.I
     if (newContent === prevContent) return;
     const srcOffset = this.deriveUndoRedoCursor(prevContent, newContent);
     const changedDivs = editorEl.applyFromCm6(prevContent, newContent, srcOffset);
-    editorEl.scrollCursorIntoView("nearest", "nearest");
     if (changedDivs === null) {
       const gen = this.beginScrollRestoring();
-      this.scheduleScrollRestoringCleanup(gen);
+      requestAnimationFrame(() => {
+        if (this.scrollRestoringGeneration !== gen) return;
+        this.hideLoadingSpinner();
+        editorEl.scrollCursorIntoView("nearest", "nearest");
+        requestAnimationFrame(() => {
+          if (this.scrollRestoringGeneration === gen)
+            editorEl.el.classList.remove("tate-scroll-restoring");
+        });
+      });
     } else {
       this.scheduleLayoutRefresh(changedDivs);
+      editorEl.scrollCursorIntoView("nearest", "nearest");
     }
     this.lastCommittedContent = newContent;
     this.plugin.updateCharCount(countChars(newContent));

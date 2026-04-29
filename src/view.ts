@@ -68,7 +68,9 @@ export class VerticalWritingView extends ItemView {
                     // born with content-visibility:visible → contain-intrinsic-block-size cache
                     // is accurate from their first paint. Then restore cursor and scroll,
                     // identical to the file-load path.
-                    const savedOffset = editorEl.getViewCursorOffset();
+                    // Prefer lastKnownViewOffset over getViewCursorOffset(): the latter returns 0
+                    // when the editor is not focused (external edit often fires while unfocused).
+                    const savedOffset = this.lastKnownViewOffset ?? editorEl.getViewCursorOffset();
                     const gen = this.beginScrollRestoring(); // adds class BEFORE setValue
                     editorEl.setValue(content, false);       // new divs born with class active
                     this.plugin.updateCharCount(countChars(content));
@@ -472,6 +474,7 @@ export class VerticalWritingView extends ItemView {
      *  are created with content-visibility:visible and real sizes), and shows the spinner.
      *  Returns the generation number for use in rAF guards. */
     private beginScrollRestoring(): number {
+        console.log("beginScrollRestoring");
         const gen = ++this.scrollRestoringGeneration;
         this.editorEl?.el.classList.add('tate-scroll-restoring');
         this.showLoadingSpinner();
@@ -481,6 +484,7 @@ export class VerticalWritingView extends ItemView {
     /** Schedules a one-rAF cleanup for the scroll-restore cycle identified by gen.
      *  Used when no scroll is needed (no savedOffset or superseded load). */
     private scheduleScrollRestoringCleanup(gen: number): void {
+        console.log("scheduleScrollRestoringCleanup");
         requestAnimationFrame(() => {
             if (this.scrollRestoringGeneration === gen) {
                 this.editorEl?.el.classList.remove('tate-scroll-restoring');
@@ -492,6 +496,7 @@ export class VerticalWritingView extends ItemView {
     /** Cancels an in-flight scroll-restore cycle immediately (synchronous, no rAF).
      *  Increments the generation to invalidate any pending cleanup rAFs. */
     private cancelScrollRestoring(): void {
+        console.log("cancelScrollRestoring");
         ++this.scrollRestoringGeneration;
         this.editorEl?.el.classList.remove('tate-scroll-restoring');
         this.hideLoadingSpinner();
@@ -503,6 +508,7 @@ export class VerticalWritingView extends ItemView {
      *  the actual size into the cache. Removes the class in the second rAF (Frame N+1)
      *  so Frame N's layout is not skipped. No spinner — two frames is imperceptible. */
     private scheduleLayoutRefresh(divs: HTMLDivElement[]): void {
+        console.log("scheduleLayoutRefresh");
         if (divs.length === 0) return;
         divs.forEach(d => d.classList.add('tate-layout-refreshing'));
         requestAnimationFrame(() => {
@@ -638,14 +644,28 @@ export class VerticalWritingView extends ItemView {
         // Derive cursor position from the diff (end of the restored/deleted text)
         const srcOffset = this.deriveUndoRedoCursor(prevContent, newContent);
         const changedDivs = editorEl.applyFromCm6(prevContent, newContent, srcOffset);
-        editorEl.scrollCursorIntoView('nearest', 'nearest');
         if (changedDivs === null) {
-            // hasCleanDivStructure failed → full rebuild; apply tate-scroll-restoring so
-            // the new divs have their contain-intrinsic-block-size cache populated.
+            // hasCleanDivStructure failed → full rebuild. beginScrollRestoring adds
+            // tate-scroll-restoring synchronously (class is pending before any layout).
+            // Scroll is deferred to rAF 1 so the forced layout flush runs with the class
+            // active → content-visibility:visible → accurate sizes → cache written.
+            // Class removed in rAF 2 (two-rAF pattern ensures Frame N's layout sees class).
             const gen = this.beginScrollRestoring();
-            this.scheduleScrollRestoringCleanup(gen);
+            requestAnimationFrame(() => {
+                if (this.scrollRestoringGeneration !== gen) return;
+                this.hideLoadingSpinner();
+                editorEl.scrollCursorIntoView('nearest', 'nearest');
+                requestAnimationFrame(() => {
+                    if (this.scrollRestoringGeneration === gen)
+                        editorEl.el.classList.remove('tate-scroll-restoring');
+                });
+            });
         } else {
+            // Add tate-layout-refreshing synchronously first so the subsequent layout flush
+            // from scrollCursorIntoView sees accurate sizes for changed divs and writes their
+            // contain-intrinsic-block-size cache.
             this.scheduleLayoutRefresh(changedDivs);
+            editorEl.scrollCursorIntoView('nearest', 'nearest');
         }
         // Update last committed content to reflect the new CM6 state.
         // Without this, onExternalModify() would misfire on the CM6 autosave modify event,
