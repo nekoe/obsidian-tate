@@ -2454,7 +2454,7 @@ var SearchPanel = class {
     this.panelEl = panel;
   }
   runSearch(scroll = true) {
-    var _a, _b, _c, _d, _e, _f;
+    var _a, _b, _c;
     const query = (_b = (_a = this.inputEl) == null ? void 0 : _a.value) != null ? _b : "";
     this.clearHighlights();
     const prevIndex = this.currentIndex;
@@ -2463,7 +2463,6 @@ var SearchPanel = class {
     this.currentIndex = -1;
     if (!query) {
       this.updateCount();
-      (_c = this.inputEl) == null ? void 0 : _c.classList.remove("tate-search-no-match");
       return;
     }
     const editorEl = this.editorElementRef.el;
@@ -2479,16 +2478,14 @@ var SearchPanel = class {
       if (m[0].length === 0) re.lastIndex++;
     }
     if (this.matches.length === 0) {
-      (_d = this.inputEl) == null ? void 0 : _d.classList.add("tate-search-no-match");
       this.updateCount();
       return;
     }
-    (_e = this.inputEl) == null ? void 0 : _e.classList.remove("tate-search-no-match");
     this.applyHitHighlights();
     if (prevIndex >= 0 && prevIndex < this.matches.length) {
       this.setFocus(prevIndex, false, scroll);
     } else {
-      this.setFocus(this.findFirstIndexAtOrAfter((_f = this.prSearchOffset) != null ? _f : 0), false, scroll);
+      this.setFocus(this.findFirstIndexAtOrAfter((_c = this.prSearchOffset) != null ? _c : 0), false, scroll);
     }
   }
   // Returns the index of the first match whose visible-text start is >= offset.
@@ -2563,9 +2560,12 @@ var SearchPanel = class {
     var _a;
     if (!this.countEl) return;
     if (this.matches.length === 0) {
-      this.countEl.textContent = ((_a = this.inputEl) == null ? void 0 : _a.value) ? "0/0" : "";
+      const hasQuery = !!((_a = this.inputEl) == null ? void 0 : _a.value);
+      this.countEl.textContent = hasQuery ? "No results" : "";
+      this.countEl.classList.toggle("tate-search-no-match", hasQuery);
     } else {
       this.countEl.textContent = `${this.currentIndex + 1}/${this.matches.length}`;
+      this.countEl.classList.remove("tate-search-no-match");
     }
   }
 };
