@@ -264,10 +264,12 @@ export class SearchPanel {
 
         // Re-search (user keeps typing): stay on the same index if still valid.
         // First search: focus the nearest hit at or after the cursor position.
+        // isNavigation mirrors scroll: when we scroll to a hit, we also move the DOM
+        // cursor there so focus always follows the viewport.
         if (prevIndex >= 0 && prevIndex < this.matches.length) {
-            this.setFocus(prevIndex, false, scroll);
+            this.setFocus(prevIndex, scroll, scroll);
         } else {
-            this.setFocus(this.findFirstIndexAtOrAfter(this.prSearchOffset ?? 0), false, scroll);
+            this.setFocus(this.findFirstIndexAtOrAfter(this.prSearchOffset ?? 0), scroll, scroll);
         }
     }
 
@@ -286,9 +288,9 @@ export class SearchPanel {
         this.setFocus(next, true, true);
     }
 
-    // isNavigation: true = explicit Enter/button nav (move DOM cursor, update lastNavigatedOffset,
-    //               restore focus to input).  false = typing in search field or content change.
-    // triggerScroll: false when called from onContentChanged() — user is editing; no scroll.
+    // isNavigation: true = move DOM cursor to the hit, update lastNavigatedOffset, restore
+    //               focus to input.  Always equals triggerScroll (scroll ↔ cursor move together).
+    // triggerScroll: false only when called from onContentChanged() — user is editing; no scroll.
     private setFocus(index: number, isNavigation: boolean, triggerScroll: boolean): void {
         this.currentIndex = index;
         this.updateCount();

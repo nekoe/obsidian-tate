@@ -2483,9 +2483,9 @@ var SearchPanel = class {
     }
     this.applyHitHighlights();
     if (prevIndex >= 0 && prevIndex < this.matches.length) {
-      this.setFocus(prevIndex, false, scroll);
+      this.setFocus(prevIndex, scroll, scroll);
     } else {
-      this.setFocus(this.findFirstIndexAtOrAfter((_c = this.prSearchOffset) != null ? _c : 0), false, scroll);
+      this.setFocus(this.findFirstIndexAtOrAfter((_c = this.prSearchOffset) != null ? _c : 0), scroll, scroll);
     }
   }
   // Returns the index of the first match whose visible-text start is >= offset.
@@ -2501,9 +2501,9 @@ var SearchPanel = class {
     const next = (this.currentIndex + delta + this.matches.length) % this.matches.length;
     this.setFocus(next, true, true);
   }
-  // isNavigation: true = explicit Enter/button nav (move DOM cursor, update lastNavigatedOffset,
-  //               restore focus to input).  false = typing in search field or content change.
-  // triggerScroll: false when called from onContentChanged() — user is editing; no scroll.
+  // isNavigation: true = move DOM cursor to the hit, update lastNavigatedOffset, restore
+  //               focus to input.  Always equals triggerScroll (scroll ↔ cursor move together).
+  // triggerScroll: false only when called from onContentChanged() — user is editing; no scroll.
   setFocus(index, isNavigation, triggerScroll) {
     var _a;
     this.currentIndex = index;
