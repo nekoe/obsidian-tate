@@ -2212,6 +2212,7 @@ var EditorElement = class {
         }
         break;
       }
+      if (range.comparePoint(node, 0) >= 0) break;
       if (!this.isInsideRt(node)) {
         count += this.isInsideAnchorSpan(node) ? ((_b = node.textContent) != null ? _b : "").replace(/\u200B/g, "").length : node.length;
       }

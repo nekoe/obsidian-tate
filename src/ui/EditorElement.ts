@@ -622,6 +622,9 @@ export class EditorElement {
                 }
                 break;
             }
+            // When startContainer is an Element (e.g. cursor at start of an empty <div><br></div>),
+            // stop once we reach a text node at or past the cursor position.
+            if (range.comparePoint(node, 0) >= 0) break;
             if (!this.isInsideRt(node)) {
                 count += this.isInsideAnchorSpan(node)
                     ? (node.textContent ?? '').replace(/\u200B/g, '').length
