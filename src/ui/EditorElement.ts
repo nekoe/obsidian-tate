@@ -481,28 +481,47 @@ export class EditorElement {
             return null;
         }
 
-        // Adjust paragraph count without touching unchanged trailing divs
-        while (el.children.length < nextLines.length) {
-            el.appendChild(document.createElement('div'));
-        }
-        while (el.children.length > nextLines.length) {
-            el.removeChild(el.lastChild!);
+        // Skip matching prefix lines.
+        const P = prevLines.length;
+        const N = nextLines.length;
+        let lo = 0;
+        while (lo < P && lo < N && prevLines[lo] === nextLines[lo]) lo++;
+
+        // Skip matching suffix lines, clamped so prefix and suffix don't overlap.
+        let suf = 0;
+        while (suf < P - lo && suf < N - lo && prevLines[P - 1 - suf] === nextLines[N - 1 - suf]) suf++;
+
+        // [lo, hiPrev) in prevLines and [lo, hiNext) in nextLines are the changed middle.
+        const hiPrev = P - suf;
+        const hiNext = N - suf;
+
+        // Insert or remove divs in the middle so the total count matches N.
+        // Suffix divs (hiPrev..P-1) are correct and must not be touched.
+        const suffixAnchor = (el.children[hiPrev] as HTMLElement) ?? null;
+        const insertCount = hiNext - hiPrev;
+        if (insertCount > 0) {
+            for (let i = 0; i < insertCount; i++)
+                el.insertBefore(document.createElement('div'), suffixAnchor);
+        } else {
+            for (let i = 0; i < -insertCount; i++)
+                el.removeChild(el.children[lo]);
         }
 
+        // Update changed middle divs.
         const changedDivs: HTMLDivElement[] = [];
-        for (let i = 0; i < nextLines.length; i++) {
-            if (prevLines[i] === nextLines[i]) {
-                // Defensive: a prior paste may have left a <div></div> (empty div without <br>)
-                // for an empty line. The content is identical so the diff skips it, but the
-                // missing <br> makes the column invisible. Restore it here.
-                if (nextLines[i] === '') ensureBrPlaceholder(el.children[i] as HTMLElement);
-                continue;
-            }
+        for (let i = lo; i < hiNext; i++) {
             const div = el.children[i] as HTMLDivElement;
             const html = parseInlineToHtml(nextLines[i]) || '<br>';
             div.replaceChildren(sanitizeHTMLToDom(html));
             changedDivs.push(div);
         }
+
+        // Defensive: unchanged empty lines may lack a <br> placeholder due to prior paste.
+        for (let i = 0; i < lo; i++)
+            if (nextLines[i] === '') ensureBrPlaceholder(el.children[i] as HTMLElement);
+        for (let i = hiNext; i < N; i++)
+            if (nextLines[i] === '') ensureBrPlaceholder(el.children[i] as HTMLElement);
+
         return changedDivs;
     }
 

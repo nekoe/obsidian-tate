@@ -2090,6 +2090,7 @@ var EditorElement = class {
   // Updates paragraph divs to match nextContent, replacing only divs whose line changed.
   // Returns the changed/added divs, or null if hasCleanDivStructure failed (full rebuild).
   patchParagraphs(prevContent, nextContent) {
+    var _a;
     const prevLines = prevContent.split("\n");
     const nextLines = nextContent ? nextContent.split("\n") : [""];
     const el = this.el;
@@ -2097,23 +2098,34 @@ var EditorElement = class {
       el.replaceChildren((0, import_obsidian3.sanitizeHTMLToDom)(parseToHtml(nextContent)));
       return null;
     }
-    while (el.children.length < nextLines.length) {
-      el.appendChild(document.createElement("div"));
-    }
-    while (el.children.length > nextLines.length) {
-      el.removeChild(el.lastChild);
+    const P = prevLines.length;
+    const N = nextLines.length;
+    let lo = 0;
+    while (lo < P && lo < N && prevLines[lo] === nextLines[lo]) lo++;
+    let suf = 0;
+    while (suf < P - lo && suf < N - lo && prevLines[P - 1 - suf] === nextLines[N - 1 - suf]) suf++;
+    const hiPrev = P - suf;
+    const hiNext = N - suf;
+    const suffixAnchor = (_a = el.children[hiPrev]) != null ? _a : null;
+    const insertCount = hiNext - hiPrev;
+    if (insertCount > 0) {
+      for (let i = 0; i < insertCount; i++)
+        el.insertBefore(document.createElement("div"), suffixAnchor);
+    } else {
+      for (let i = 0; i < -insertCount; i++)
+        el.removeChild(el.children[lo]);
     }
     const changedDivs = [];
-    for (let i = 0; i < nextLines.length; i++) {
-      if (prevLines[i] === nextLines[i]) {
-        if (nextLines[i] === "") ensureBrPlaceholder(el.children[i]);
-        continue;
-      }
+    for (let i = lo; i < hiNext; i++) {
       const div = el.children[i];
       const html = parseInlineToHtml(nextLines[i]) || "<br>";
       div.replaceChildren((0, import_obsidian3.sanitizeHTMLToDom)(html));
       changedDivs.push(div);
     }
+    for (let i = 0; i < lo; i++)
+      if (nextLines[i] === "") ensureBrPlaceholder(el.children[i]);
+    for (let i = hiNext; i < N; i++)
+      if (nextLines[i] === "") ensureBrPlaceholder(el.children[i]);
     return changedDivs;
   }
   // Returns true iff el.childNodes consists of exactly expectedCount <div> elements.
