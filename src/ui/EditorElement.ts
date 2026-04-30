@@ -532,43 +532,53 @@ export class EditorElement {
         this.setVisibleOffset(offset);
     }
 
-    /** Scrolls the current cursor position into view. Defaults to centering; pass 'nearest' for minimal scroll.
-     *  Uses Range.getBoundingClientRect() rather than element.scrollIntoView() so that long paragraphs
-     *  spanning multiple columns scroll to the cursor's exact column, not to the paragraph boundary. */
+    /** Scrolls the current cursor position into view. Defaults to centering; pass 'nearest' for minimal scroll. */
     scrollCursorIntoView(block: ScrollLogicalPosition = 'center', _inline: ScrollLogicalPosition = 'center'): void {
         const sel = window.getSelection();
         if (!sel || sel.rangeCount === 0) return;
-        const range = sel.getRangeAt(0);
+        this.scrollRangeIntoView(sel.getRangeAt(0), block);
+    }
 
-        const container = this.el.parentElement; // .tate-container (overflow-x: auto)
+    /** Scrolls an arbitrary Range into view using block:'center'. Used by SearchPanel to scroll
+     *  to search hits without scrolling to the paragraph boundary for long multi-column paragraphs. */
+    scrollToRange(range: Range): void {
+        this.scrollRangeIntoView(range, 'center');
+    }
+
+    /** Scrolls a Range into view by computing the horizontal scroll offset from the range's
+     *  bounding rect rather than calling element.scrollIntoView(). For long paragraphs that span
+     *  multiple columns, element.scrollIntoView() scrolls to the element boundary (paragraph center
+     *  or edge) instead of the column containing the range. The rect-based approach is exact.
+     *  Also forces a layout flush via getBoundingClientRect(), which — when tate-scroll-restoring
+     *  or tate-layout-refreshing is active — runs with content-visibility:visible on the relevant
+     *  divs, so the returned rect reflects actual (not cached) sizes. */
+    private scrollRangeIntoView(range: Range, block: ScrollLogicalPosition): void {
+        const container = this.el.parentElement; // .tate-scroll-area (overflow-x: auto)
         if (!container) return;
 
-        // Force a layout flush to get accurate cursor coordinates. When tate-scroll-restoring
-        // or tate-layout-refreshing is active, this flush runs with content-visibility:visible
-        // on the relevant divs, so the returned rect reflects actual (not cached) sizes.
-        const cursorRect = range.getBoundingClientRect();
-        if (cursorRect.width === 0 && cursorRect.height === 0) {
-            // Cursor not yet laid out — fall back to element-based scroll.
+        const rect = range.getBoundingClientRect();
+        if (rect.width === 0 && rect.height === 0) {
+            // Range not yet laid out — fall back to element-based scroll.
             const node = range.startContainer;
-            (node instanceof Element ? node : node.parentElement)?.scrollIntoView({ block, inline: _inline });
+            (node instanceof Element ? node : node.parentElement)?.scrollIntoView({ block, inline: 'nearest' });
             return;
         }
 
         const containerRect = container.getBoundingClientRect();
         const viewWidth = container.clientWidth;
-        // Convert cursor viewport x-coordinates to the container's scroll coordinate space:
+        // Convert range viewport x-coordinates to the container's scroll coordinate space:
         //   absolute_x = viewport_x - container_left + scrollLeft
-        const absLeft  = cursorRect.left  - containerRect.left + container.scrollLeft;
-        const absRight = cursorRect.right - containerRect.left + container.scrollLeft;
+        const absLeft  = rect.left  - containerRect.left + container.scrollLeft;
+        const absRight = rect.right - containerRect.left + container.scrollLeft;
 
         let newScrollLeft: number;
         if (block === 'nearest') {
             const visLeft  = container.scrollLeft;
             const visRight = container.scrollLeft + viewWidth;
-            if (absLeft >= visLeft && absRight <= visRight) return; // cursor already fully visible
+            if (absLeft >= visLeft && absRight <= visRight) return; // already fully visible
             newScrollLeft = absLeft < visLeft ? absLeft : absRight - viewWidth;
         } else {
-            // 'center': place cursor at the horizontal midpoint of the viewport.
+            // 'center': place the range at the horizontal midpoint of the viewport.
             newScrollLeft = absLeft - (viewWidth - (absRight - absLeft)) / 2;
         }
 

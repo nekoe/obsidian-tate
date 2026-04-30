@@ -1,6 +1,14 @@
-/* Vertical writing view container */
+/* Vertical writing view container (non-scrolling; holds spinner and search panel) */
 .tate-container {
     position: relative;
+    width: 100%;
+    height: 100%;
+}
+
+/* Inner scroll wrapper: the editor lives here so that position:absolute children of
+   tate-container (spinner, search panel) are anchored to the visible area and do not
+   move when the editor content is scrolled horizontally. */
+.tate-scroll-area {
     width: 100%;
     height: 100%;
     overflow-x: auto;
@@ -107,11 +115,11 @@
 }
 
 /* Scrollbar styling */
-.tate-container::-webkit-scrollbar {
+.tate-scroll-area::-webkit-scrollbar {
     height: 8px;
 }
 
-.tate-container::-webkit-scrollbar-thumb {
+.tate-scroll-area::-webkit-scrollbar-thumb {
     background-color: var(--scrollbar-thumb-bg);
     border-radius: 4px;
 }
@@ -119,4 +127,93 @@
 .tate-kofi-banner {
     margin-top: 2em;
     text-align: right;
+}
+
+/* Temporarily applied after a search-scroll to force a main-thread repaint so CSS
+   Custom Highlights appear on paragraphs that just scrolled into view. Changes
+   outline-style from none→solid, which cannot be optimized away as a no-op paint. */
+.tate-editor.tate-search-repaint {
+    outline: 1px solid transparent;
+}
+
+
+/* Search panel: position:absolute within tate-container (position:relative, non-scrolling).
+   tate-container no longer has overflow-x:auto; the inner tate-scroll-area handles scroll.
+   This ensures right/top offsets anchor to the visible edge and the panel never moves
+   when the editor content scrolls horizontally. */
+.tate-search-panel {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 8px;
+    background: var(--background-primary);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 6px;
+    box-shadow: var(--shadow-s);
+    z-index: 100;
+}
+
+.tate-search-input {
+    width: 320px;
+    padding: 2px 6px;
+    background: var(--background-modifier-form-field);
+    color: var(--text-normal);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 4px;
+    font-size: var(--font-ui-small);
+    outline: none;
+}
+
+.tate-search-input:focus {
+    border-color: var(--interactive-accent);
+    box-shadow: 0 0 0 2px var(--background-modifier-border-focus);
+}
+
+.tate-search-count {
+    font-size: var(--font-ui-small);
+    color: var(--text-muted);
+    width: 5.5em;
+    padding-left: 1px;
+    text-align: left;
+    white-space: nowrap;
+    overflow: hidden;
+}
+
+.tate-search-count.tate-search-no-match {
+    color: #b33030;
+}
+
+.tate-search-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    background: transparent;
+    color: var(--text-muted);
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 14px;
+}
+
+.tate-search-btn:hover {
+    background: var(--background-modifier-hover);
+    color: var(--text-normal);
+}
+
+/* CSS Custom Highlight API: all search hits */
+::highlight(tate-search-hit) {
+    background-color: var(--text-highlight-bg, rgba(255, 208, 0, 0.4));
+    color: inherit;
+}
+
+/* CSS Custom Highlight API: currently focused hit. */
+::highlight(tate-search-focus) {
+    background-color: #e8559a;
+    color: #ffffff;
 }

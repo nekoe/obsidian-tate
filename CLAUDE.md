@@ -95,6 +95,9 @@ See the design documents in `docs/design/` for details:
 - [IME Performance on Large Files (content-visibility: auto, contain-intrinsic-block-size)](docs/design/20260425_content_visibility_ime_performance.md)
 - [Scroll Restore with content-visibility: auto (tate-scroll-restoring class, two-rAF pattern)](docs/design/20260425_scroll_restore_content_visibility.md)
 - [Undo/Redo: Differential Paragraph Update (patchParagraphs, scroll jump fix)](docs/design/20260425_undo_redo_patch_paragraphs.md)
+- [Loading Spinner During Scroll Restore](docs/design/20260426_loading_spinner.md)
+- [Search Panel: Incremental Search with CSS Custom Highlight API](docs/design/20260428_search_panel.md)
+- [Proactive Layout Cache Refresh for content-visibility:auto (tate-layout-refreshing, two-rAF pattern)](docs/design/20260429_proactive_layout_cache_refresh.md)
 
 ## Settings
 

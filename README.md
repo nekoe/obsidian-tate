@@ -54,6 +54,19 @@ Controls which characters are forbidden at the start or end of a line (punctuati
 | `Loose` | Newspaper style — relaxed rules that favor tighter wrapping |
 | `Anywhere` | No restrictions — break anywhere |
 
+### Incremental Search
+
+Run `Search in vertical view` from the command palette to open the search panel. As you type, all matches are highlighted instantly and the nearest hit at or after your cursor position is focused.
+
+| Action | Key / Button |
+|--------|-------------|
+| Open search panel | Command palette: `Search in vertical view` |
+| Next hit | **Enter** or ↓ button |
+| Previous hit | **Shift+Enter** or ↑ button |
+| Close panel | **Esc** or × button |
+
+Closing the panel restores the cursor to the last navigated hit, or to the position it was at when the panel was opened if no navigation occurred.
+
 ### Other Features
 
 - **Bidirectional real-time sync:** Edits and Undo/Redo operations stay in sync with the Obsidian Markdown view in real time.

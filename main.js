@@ -28,10 +28,10 @@ __export(main_exports, {
   default: () => TatePlugin
 });
 module.exports = __toCommonJS(main_exports);
-var import_obsidian5 = require("obsidian");
+var import_obsidian6 = require("obsidian");
 
 // src/view.ts
-var import_obsidian4 = require("obsidian");
+var import_obsidian5 = require("obsidian");
 
 // src/sync/SyncCoordinator.ts
 var SyncCoordinator = class {
@@ -2138,26 +2138,38 @@ var EditorElement = class {
   setViewCursorOffset(offset) {
     this.setVisibleOffset(offset);
   }
-  /** Scrolls the current cursor position into view. Defaults to centering; pass 'nearest' for minimal scroll.
-   *  Uses Range.getBoundingClientRect() rather than element.scrollIntoView() so that long paragraphs
-   *  spanning multiple columns scroll to the cursor's exact column, not to the paragraph boundary. */
+  /** Scrolls the current cursor position into view. Defaults to centering; pass 'nearest' for minimal scroll. */
   scrollCursorIntoView(block = "center", _inline = "center") {
-    var _a;
     const sel = window.getSelection();
     if (!sel || sel.rangeCount === 0) return;
-    const range = sel.getRangeAt(0);
+    this.scrollRangeIntoView(sel.getRangeAt(0), block);
+  }
+  /** Scrolls an arbitrary Range into view using block:'center'. Used by SearchPanel to scroll
+   *  to search hits without scrolling to the paragraph boundary for long multi-column paragraphs. */
+  scrollToRange(range) {
+    this.scrollRangeIntoView(range, "center");
+  }
+  /** Scrolls a Range into view by computing the horizontal scroll offset from the range's
+   *  bounding rect rather than calling element.scrollIntoView(). For long paragraphs that span
+   *  multiple columns, element.scrollIntoView() scrolls to the element boundary (paragraph center
+   *  or edge) instead of the column containing the range. The rect-based approach is exact.
+   *  Also forces a layout flush via getBoundingClientRect(), which — when tate-scroll-restoring
+   *  or tate-layout-refreshing is active — runs with content-visibility:visible on the relevant
+   *  divs, so the returned rect reflects actual (not cached) sizes. */
+  scrollRangeIntoView(range, block) {
+    var _a;
     const container = this.el.parentElement;
     if (!container) return;
-    const cursorRect = range.getBoundingClientRect();
-    if (cursorRect.width === 0 && cursorRect.height === 0) {
+    const rect = range.getBoundingClientRect();
+    if (rect.width === 0 && rect.height === 0) {
       const node = range.startContainer;
-      (_a = node instanceof Element ? node : node.parentElement) == null ? void 0 : _a.scrollIntoView({ block, inline: _inline });
+      (_a = node instanceof Element ? node : node.parentElement) == null ? void 0 : _a.scrollIntoView({ block, inline: "nearest" });
       return;
     }
     const containerRect = container.getBoundingClientRect();
     const viewWidth = container.clientWidth;
-    const absLeft = cursorRect.left - containerRect.left + container.scrollLeft;
-    const absRight = cursorRect.right - containerRect.left + container.scrollLeft;
+    const absLeft = rect.left - containerRect.left + container.scrollLeft;
+    const absRight = rect.right - containerRect.left + container.scrollLeft;
     let newScrollLeft;
     if (block === "nearest") {
       const visLeft = container.scrollLeft;
@@ -2269,9 +2281,323 @@ var EditorElement = class {
   }
 };
 
+// src/ui/SearchPanel.ts
+var import_obsidian4 = require("obsidian");
+function extractVisibleText(editorEl) {
+  var _a;
+  const segments = [];
+  let text = "";
+  const walker = document.createTreeWalker(editorEl, NodeFilter.SHOW_TEXT);
+  let node = walker.nextNode();
+  while (node) {
+    if (!isInsideRtNode(node, editorEl)) {
+      const visible = ((_a = node.textContent) != null ? _a : "").replace(/\u200B/g, "");
+      if (visible.length > 0) {
+        segments.push({ node, start: text.length, length: visible.length });
+        text += visible;
+      }
+    }
+    node = walker.nextNode();
+  }
+  return { text, segments };
+}
+function createRangeForMatch(segments, matchStart, matchEnd) {
+  let startNode = null;
+  let startOffset = 0;
+  let endNode = null;
+  let endOffset = 0;
+  for (const seg of segments) {
+    const segEnd = seg.start + seg.length;
+    if (startNode === null && matchStart < segEnd) {
+      startNode = seg.node;
+      startOffset = visibleToRawOffset(seg.node, matchStart - seg.start);
+    }
+    if (endNode === null && matchEnd <= segEnd) {
+      endNode = seg.node;
+      endOffset = visibleToRawOffset(seg.node, matchEnd - seg.start);
+      break;
+    }
+  }
+  if (!startNode || !endNode) return null;
+  const range = document.createRange();
+  range.setStart(startNode, startOffset);
+  range.setEnd(endNode, endOffset);
+  return range;
+}
+function visibleToRawOffset(node, visibleOffset) {
+  var _a;
+  const text = (_a = node.textContent) != null ? _a : "";
+  let visible = 0;
+  for (let i = 0; i < text.length; i++) {
+    if (visible === visibleOffset) return i;
+    if (text[i] !== "\u200B") visible++;
+  }
+  return text.length;
+}
+function escapeRegex(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+var SearchPanel = class {
+  constructor(editorElementRef, container, app) {
+    this.editorElementRef = editorElementRef;
+    this.container = container;
+    this.app = app;
+    this.panelEl = null;
+    this.inputEl = null;
+    this.countEl = null;
+    this.matches = [];
+    // Visible-text start offset for each match (parallel to matches[]).
+    // Used by findFirstIndexAtOrAfter() to seed the initial focus from prSearchOffset.
+    this.matchStarts = [];
+    this.currentIndex = -1;
+    // Cursor offset (visible) when the panel was opened; restored if no navigation occurred.
+    this.prSearchOffset = null;
+    // Offset of the last navigated hit; used as the restore target after close.
+    this.lastNavigatedOffset = null;
+    // True while the editor has focus due to a user click (not a programmatic setFocus call).
+    // When true: tate-search-focus is hidden, and close() skips cursor restore.
+    this.editorFocused = false;
+    this.searchScope = new import_obsidian4.Scope(app.scope);
+    editorElementRef.el.addEventListener("mousedown", () => {
+      if (!this.isOpen) return;
+      this.editorFocused = true;
+      this.clearFocusHighlight();
+    });
+    this.searchScope.register([], "Enter", (evt) => {
+      if (evt.isComposing) return;
+      if (this.editorFocused) return;
+      this.navigate(1);
+      return false;
+    });
+    this.searchScope.register(["Shift"], "Enter", (evt) => {
+      if (evt.isComposing) return;
+      if (this.editorFocused) return;
+      this.navigate(-1);
+      return false;
+    });
+    this.searchScope.register([], "Escape", (evt) => {
+      if (evt.isComposing) return;
+      this.close();
+      return false;
+    });
+  }
+  get isOpen() {
+    return this.panelEl !== null;
+  }
+  open(initialOffset) {
+    var _a, _b;
+    if (this.isOpen) {
+      (_a = this.inputEl) == null ? void 0 : _a.focus();
+      return;
+    }
+    this.prSearchOffset = initialOffset;
+    this.lastNavigatedOffset = null;
+    this.editorFocused = false;
+    this.matches = [];
+    this.matchStarts = [];
+    this.currentIndex = -1;
+    this.buildPanel();
+    this.app.keymap.pushScope(this.searchScope);
+    (_b = this.inputEl) == null ? void 0 : _b.focus();
+  }
+  close() {
+    var _a, _b;
+    if (!this.isOpen) return null;
+    this.app.keymap.popScope(this.searchScope);
+    this.clearHighlights();
+    (_a = this.panelEl) == null ? void 0 : _a.remove();
+    this.panelEl = null;
+    this.inputEl = null;
+    this.countEl = null;
+    this.matches = [];
+    this.currentIndex = -1;
+    const wasEditorFocused = this.editorFocused;
+    const restoreOffset = wasEditorFocused ? null : (_b = this.lastNavigatedOffset) != null ? _b : this.prSearchOffset;
+    this.prSearchOffset = null;
+    this.lastNavigatedOffset = null;
+    this.editorFocused = false;
+    this.matchStarts = [];
+    if (!wasEditorFocused) {
+      if (restoreOffset !== null) {
+        this.editorElementRef.setViewCursorOffset(restoreOffset);
+      }
+      this.editorElementRef.el.focus();
+    }
+    return restoreOffset;
+  }
+  onContentChanged() {
+    if (!this.isOpen) return;
+    this.runSearch(false);
+  }
+  buildPanel() {
+    const panel = document.createElement("div");
+    panel.className = "tate-search-panel";
+    const input = document.createElement("input");
+    input.type = "text";
+    input.className = "tate-search-input";
+    input.setAttribute("placeholder", "\u691C\u7D22");
+    input.addEventListener("focus", () => {
+      if (this.editorFocused) {
+        this.lastNavigatedOffset = this.editorElementRef.getViewCursorOffset();
+      }
+      this.editorFocused = false;
+    });
+    input.addEventListener("input", (e) => {
+      if (e.isComposing) return;
+      this.runSearch();
+    });
+    input.addEventListener("compositionend", () => this.runSearch());
+    input.addEventListener("keydown", (e) => {
+      if (e.key !== "Enter" && e.key !== "Escape") e.stopPropagation();
+    });
+    this.inputEl = input;
+    const count = document.createElement("span");
+    count.className = "tate-search-count";
+    count.textContent = "";
+    this.countEl = count;
+    const nextBtn = document.createElement("button");
+    nextBtn.className = "tate-search-btn";
+    nextBtn.setAttribute("aria-label", "\u6B21\u3078");
+    nextBtn.textContent = "\u2193";
+    nextBtn.addEventListener("click", () => this.navigate(1));
+    const prevBtn = document.createElement("button");
+    prevBtn.className = "tate-search-btn";
+    prevBtn.setAttribute("aria-label", "\u524D\u3078");
+    prevBtn.textContent = "\u2191";
+    prevBtn.addEventListener("click", () => this.navigate(-1));
+    const closeBtn = document.createElement("button");
+    closeBtn.className = "tate-search-btn";
+    closeBtn.setAttribute("aria-label", "\u9589\u3058\u308B");
+    closeBtn.textContent = "\xD7";
+    closeBtn.addEventListener("click", () => this.close());
+    panel.append(input, count, nextBtn, prevBtn, closeBtn);
+    this.container.appendChild(panel);
+    this.panelEl = panel;
+  }
+  runSearch(scroll = true) {
+    var _a, _b, _c;
+    const query = (_b = (_a = this.inputEl) == null ? void 0 : _a.value) != null ? _b : "";
+    this.clearHighlights();
+    const prevIndex = this.currentIndex;
+    this.matches = [];
+    this.matchStarts = [];
+    this.currentIndex = -1;
+    if (!query) {
+      this.updateCount();
+      return;
+    }
+    const editorEl = this.editorElementRef.el;
+    const { text, segments } = extractVisibleText(editorEl);
+    const re = new RegExp(escapeRegex(query), "gi");
+    let m;
+    while ((m = re.exec(text)) !== null) {
+      const range = createRangeForMatch(segments, m.index, m.index + m[0].length);
+      if (range) {
+        this.matches.push(range);
+        this.matchStarts.push(m.index);
+      }
+      if (m[0].length === 0) re.lastIndex++;
+    }
+    if (this.matches.length === 0) {
+      this.updateCount();
+      return;
+    }
+    this.applyHitHighlights();
+    if (prevIndex >= 0 && prevIndex < this.matches.length) {
+      this.setFocus(prevIndex, scroll);
+    } else {
+      this.setFocus(this.findFirstIndexAtOrAfter((_c = this.prSearchOffset) != null ? _c : 0), scroll);
+    }
+  }
+  // Returns the index of the first match whose visible-text start is >= offset.
+  // Wraps to 0 if no match is at or after offset (cursor is past all matches).
+  findFirstIndexAtOrAfter(offset) {
+    for (let i = 0; i < this.matchStarts.length; i++) {
+      if (this.matchStarts[i] >= offset) return i;
+    }
+    return 0;
+  }
+  navigate(delta) {
+    if (this.matches.length === 0) return;
+    const next = (this.currentIndex + delta + this.matches.length) % this.matches.length;
+    this.setFocus(next, true);
+  }
+  // scroll=true: move the DOM cursor to the hit, update lastNavigatedOffset, restore
+  //              focus to the input, and scroll the hit into view.
+  // scroll=false: update highlight and count only (called from onContentChanged).
+  setFocus(index, scroll) {
+    var _a;
+    this.currentIndex = index;
+    this.updateCount();
+    this.applyFocusHighlight();
+    const range = this.matches[index];
+    if (!range || !scroll) return;
+    this.editorFocused = false;
+    const sel = window.getSelection();
+    if (sel) {
+      const cursorRange = document.createRange();
+      cursorRange.setStart(range.startContainer, range.startOffset);
+      cursorRange.collapse(true);
+      sel.removeAllRanges();
+      sel.addRange(cursorRange);
+    }
+    this.lastNavigatedOffset = this.editorElementRef.getViewCursorOffset();
+    (_a = this.inputEl) == null ? void 0 : _a.focus();
+    this.scrollRangeIntoView(range);
+  }
+  scrollRangeIntoView(range) {
+    this.editorElementRef.scrollToRange(range);
+    requestAnimationFrame(() => {
+      this.editorElementRef.el.classList.add("tate-search-repaint");
+      this.applyHitHighlights();
+      this.applyFocusHighlight();
+      requestAnimationFrame(() => {
+        this.editorElementRef.el.classList.remove("tate-search-repaint");
+      });
+    });
+  }
+  applyHitHighlights() {
+    if (typeof CSS === "undefined" || !CSS.highlights) return;
+    CSS.highlights.set("tate-search-hit", new Highlight(...this.matches));
+  }
+  applyFocusHighlight() {
+    if (typeof CSS === "undefined" || !CSS.highlights) return;
+    if (this.editorFocused) return;
+    const focused = this.matches[this.currentIndex];
+    if (focused) {
+      const h = new Highlight(focused);
+      h.priority = 1;
+      CSS.highlights.set("tate-search-focus", h);
+    } else {
+      CSS.highlights.delete("tate-search-focus");
+    }
+  }
+  clearFocusHighlight() {
+    if (typeof CSS === "undefined" || !CSS.highlights) return;
+    CSS.highlights.delete("tate-search-focus");
+  }
+  clearHighlights() {
+    if (typeof CSS === "undefined" || !CSS.highlights) return;
+    CSS.highlights.delete("tate-search-hit");
+    CSS.highlights.delete("tate-search-focus");
+  }
+  updateCount() {
+    var _a;
+    if (!this.countEl) return;
+    if (this.matches.length === 0) {
+      const hasQuery = !!((_a = this.inputEl) == null ? void 0 : _a.value);
+      this.countEl.textContent = hasQuery ? "No results" : "";
+      this.countEl.classList.toggle("tate-search-no-match", hasQuery);
+    } else {
+      this.countEl.textContent = `${this.currentIndex + 1}/${this.matches.length}`;
+      this.countEl.classList.remove("tate-search-no-match");
+    }
+  }
+};
+
 // src/view.ts
 var TATE_VIEW_TYPE = "tate-vertical-writing";
-var _VerticalWritingView = class _VerticalWritingView extends import_obsidian4.ItemView {
+var _VerticalWritingView = class _VerticalWritingView extends import_obsidian5.ItemView {
   constructor(leaf, plugin) {
     super(leaf);
     this.plugin = plugin;
@@ -2294,7 +2620,12 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian4.I
     // Fallback for save paths that run while the editor is unfocused: getViewCursorOffset()
     // returns 0 when the editor lacks focus, so this field preserves the last valid offset.
     this.lastKnownViewOffset = null;
-    this.escScope = new import_obsidian4.Scope(this.app.scope);
+    // Tracks whether escScope is currently on the keymap stack to prevent double-push.
+    // active-leaf-change and notifyActivated() can both trigger activation; the flag
+    // ensures pushScope/popScope are always balanced regardless of call order.
+    this.escScopeActive = false;
+    this.searchPanel = null;
+    this.escScope = new import_obsidian5.Scope(this.app.scope);
   }
   getViewType() {
     return TATE_VIEW_TYPE;
@@ -2309,9 +2640,11 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian4.I
     const container = this.containerEl.children[1];
     container.empty();
     container.addClass("tate-container");
-    const editorEl = new EditorElement(container);
+    const scrollArea = container.createEl("div", { cls: "tate-scroll-area" });
+    const editorEl = new EditorElement(scrollArea);
     this.editorEl = editorEl;
     editorEl.applySettings(this.plugin.settings);
+    this.searchPanel = new SearchPanel(editorEl, container, this.app);
     const spinnerEl = container.createEl("div", { cls: "tate-loading-spinner" });
     this.spinnerEl = spinnerEl;
     const syncCoordinator = new SyncCoordinator(
@@ -2342,15 +2675,19 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian4.I
       editorEl.handleCopy(e);
     });
     this.registerDomEvent(editorEl.el, "cut", (e) => {
+      var _a;
       if (!this.guardCm6(e)) return;
       editorEl.handleCut(e);
       this.commitToCm6();
+      (_a = this.searchPanel) == null ? void 0 : _a.onContentChanged();
     });
     this.registerDomEvent(editorEl.el, "paste", (e) => {
+      var _a;
       if (!this.guardCm6(e)) return;
       const newDivs = editorEl.handlePaste(e);
       this.commitToCm6();
       this.scheduleLayoutRefresh(newDivs);
+      (_a = this.searchPanel) == null ? void 0 : _a.onContentChanged();
     });
     this.registerDomEvent(editorEl.el, "beforeinput", (e) => {
       if (!this.guardCm6(e)) return;
@@ -2363,22 +2700,27 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian4.I
       editorEl.onBeforeInput(e);
     });
     this.registerDomEvent(editorEl.el, "input", (e) => {
+      var _a, _b, _c, _d;
       const inputEvent = e;
       if (!inputEvent.isComposing) editorEl.normalizeEmptyDom();
       if (!inputEvent.isComposing) {
         if (inputEvent.inputType === "insertParagraph") {
           editorEl.handleParagraphInsert();
           this.commitToCm6();
+          (_a = this.searchPanel) == null ? void 0 : _a.onContentChanged();
           return;
         }
         const annotated = editorEl.handleRubyCompletion() || editorEl.handleTcyCompletion() || editorEl.handleBoutenCompletion();
         if (annotated) {
           this.commitToCm6();
+          (_b = this.searchPanel) == null ? void 0 : _b.onContentChanged();
         } else if (inputEvent.inputType === "deleteByCut") {
           editorEl.cleanupEmptyParagraphDivs();
           this.commitToCm6();
+          (_c = this.searchPanel) == null ? void 0 : _c.onContentChanged();
         } else if (inputEvent.inputType === "insertText" || inputEvent.inputType.startsWith("deleteContent")) {
           this.scheduleCommit();
+          (_d = this.searchPanel) == null ? void 0 : _d.onContentChanged();
         }
         editorEl.handleCursorAnchorInput();
       }
@@ -2388,6 +2730,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian4.I
       editorEl.onCompositionStart();
     });
     this.registerDomEvent(editorEl.el, "compositionend", () => {
+      var _a;
       editorEl.handleRubyCompletion();
       editorEl.handleTcyCompletion();
       editorEl.handleBoutenCompletion();
@@ -2395,6 +2738,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian4.I
       editorEl.handleCursorAnchorInput();
       editorEl.handleBoutenPostCollapseInput();
       this.commitToCm6();
+      (_a = this.searchPanel) == null ? void 0 : _a.onContentChanged();
     });
     this.registerDomEvent(document, "selectionchange", () => {
       const contentChanged = editorEl.handleSelectionChange();
@@ -2438,12 +2782,12 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian4.I
     });
     this.registerEvent(
       this.app.vault.on("modify", (file) => {
-        if (file instanceof import_obsidian4.TFile) void syncCoordinator.onExternalModify(file);
+        if (file instanceof import_obsidian5.TFile) void syncCoordinator.onExternalModify(file);
       })
     );
     this.registerEvent(
       this.app.vault.on("delete", (file) => {
-        if (file instanceof import_obsidian4.TFile) {
+        if (file instanceof import_obsidian5.TFile) {
           void this.plugin.deleteCursorPosition(file.path);
           syncCoordinator.onFileDelete(file);
         }
@@ -2451,7 +2795,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian4.I
     );
     this.registerEvent(
       this.app.vault.on("rename", (file, oldPath) => {
-        if (file instanceof import_obsidian4.TFile) {
+        if (file instanceof import_obsidian5.TFile) {
           this.plugin.renameCursorPosition(oldPath, file.path);
           syncCoordinator.onFileRename(file, oldPath);
         }
@@ -2460,6 +2804,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian4.I
     this.registerEvent(
       this.app.workspace.on("file-open", (file) => {
         if (file === syncCoordinator.currentFile) return;
+        this.closeSearch();
         if (!file) {
           syncCoordinator.clearCurrentFile();
           editorEl.clearContent();
@@ -2496,7 +2841,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian4.I
         if (!syncCoordinator.currentFile) return;
         const stillOpen = this.app.workspace.getLeavesOfType("markdown").some((leaf) => {
           const mv = leaf.view;
-          return mv instanceof import_obsidian4.MarkdownView && mv.file === syncCoordinator.currentFile;
+          return mv instanceof import_obsidian5.MarkdownView && mv.file === syncCoordinator.currentFile;
         });
         if (!stillOpen) {
           if (this.lastKnownViewOffset !== null) {
@@ -2519,33 +2864,9 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian4.I
       this.app.workspace.on("active-leaf-change", (leaf) => {
         if (leaf === null) return;
         if (leaf === this.leaf) {
-          this.app.keymap.pushScope(this.escScope);
-          this.plugin.updateCharCount(countChars(this.lastCommittedContent));
-          const el = this.editorEl;
-          if (el) {
-            el.el.focus({ preventScroll: true });
-            if (this.pendingCursorOffset !== null) {
-              const gen = this.scrollRestoringGeneration;
-              const offset = this.pendingCursorOffset;
-              this.pendingCursorOffset = null;
-              el.setViewCursorOffset(offset);
-              this.lastKnownViewOffset = offset;
-              requestAnimationFrame(() => {
-                if (this.scrollRestoringGeneration !== gen) return;
-                this.hideLoadingSpinner();
-                el.setViewCursorOffset(offset);
-                el.scrollCursorIntoView();
-                requestAnimationFrame(() => {
-                  if (this.scrollRestoringGeneration === gen)
-                    el.el.classList.remove("tate-scroll-restoring");
-                });
-              });
-            } else if (this.lastKnownViewOffset !== null) {
-              el.setViewCursorOffset(this.lastKnownViewOffset);
-            }
-          }
+          this.onThisLeafActivated();
         } else {
-          this.app.keymap.popScope(this.escScope);
+          this.popEscScope();
           if (!this.app.workspace.getLeavesOfType(TATE_VIEW_TYPE).includes(leaf)) {
             this.plugin.updateCharCount(null);
           }
@@ -2554,7 +2875,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian4.I
     );
     await this.loadInitialFile(syncCoordinator);
     if (this.app.workspace.getActiveViewOfType(_VerticalWritingView) === this) {
-      this.app.keymap.pushScope(this.escScope);
+      this.pushEscScope();
     }
   }
   async loadInitialFile(syncCoordinator) {
@@ -2576,7 +2897,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian4.I
       return;
     }
     for (const leaf of this.app.workspace.getLeavesOfType("markdown")) {
-      if (leaf.view instanceof import_obsidian4.MarkdownView && leaf.view.file) {
+      if (leaf.view instanceof import_obsidian5.MarkdownView && leaf.view.file) {
         const file = leaf.view.file;
         const gen = this.beginScrollRestoring();
         await syncCoordinator.loadFile(file);
@@ -2637,12 +2958,13 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian4.I
     }
   }
   async onClose() {
-    var _a;
-    this.app.keymap.popScope(this.escScope);
+    var _a, _b;
+    (_a = this.searchPanel) == null ? void 0 : _a.close();
+    this.popEscScope();
     this.commitToCm6();
     const p = this.saveCursorForQuit();
     if (p) await p;
-    (_a = this.syncCoordinator) == null ? void 0 : _a.dispose();
+    (_b = this.syncCoordinator) == null ? void 0 : _b.dispose();
     this.spinnerEl = null;
     if (!this.app.workspace.getActiveViewOfType(_VerticalWritingView)) {
       this.plugin.updateCharCount(null);
@@ -2704,10 +3026,72 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian4.I
     var _a;
     (_a = this.editorEl) == null ? void 0 : _a.applySettings(settings);
   }
+  pushEscScope() {
+    if (this.escScopeActive) return;
+    this.app.keymap.pushScope(this.escScope);
+    this.escScopeActive = true;
+  }
+  popEscScope() {
+    if (!this.escScopeActive) return;
+    this.app.keymap.popScope(this.escScope);
+    this.escScopeActive = false;
+  }
+  // Body of the "this leaf became active" branch, shared between active-leaf-change
+  // and notifyActivated() (called when revealLeaf doesn't fire active-leaf-change).
+  onThisLeafActivated() {
+    this.pushEscScope();
+    this.plugin.updateCharCount(countChars(this.lastCommittedContent));
+    const el = this.editorEl;
+    if (el) {
+      el.el.focus({ preventScroll: true });
+      if (this.pendingCursorOffset !== null) {
+        const gen = this.scrollRestoringGeneration;
+        const offset = this.pendingCursorOffset;
+        this.pendingCursorOffset = null;
+        el.setViewCursorOffset(offset);
+        this.lastKnownViewOffset = offset;
+        requestAnimationFrame(() => {
+          if (this.scrollRestoringGeneration !== gen) return;
+          this.hideLoadingSpinner();
+          el.setViewCursorOffset(offset);
+          el.scrollCursorIntoView();
+          requestAnimationFrame(() => {
+            if (this.scrollRestoringGeneration === gen)
+              el.el.classList.remove("tate-scroll-restoring");
+          });
+        });
+      } else if (this.lastKnownViewOffset !== null) {
+        el.setViewCursorOffset(this.lastKnownViewOffset);
+      }
+    }
+  }
+  /** Called by activateView() when revealLeaf doesn't trigger active-leaf-change.
+   *  Idempotent: pushEscScope() is guarded by escScopeActive, so calling this
+   *  and then receiving a genuine active-leaf-change is safe. */
+  notifyActivated() {
+    this.onThisLeafActivated();
+  }
+  openSearch() {
+    const el = this.editorEl;
+    if (!el || !this.searchPanel) return;
+    if (el.isInlineExpanded()) {
+      const contentChanged = el.collapseForEnter();
+      if (contentChanged) this.commitToCm6();
+    }
+    const offset = el.getViewCursorOffset();
+    this.searchPanel.open(offset);
+  }
+  closeSearch() {
+    if (!this.searchPanel) return;
+    const restoreOffset = this.searchPanel.close();
+    if (restoreOffset !== null) {
+      this.lastKnownViewOffset = restoreOffset;
+    }
+  }
   applyRuby() {
     if (!this.editorEl) return;
     if (!this.editorEl.wrapSelectionWithRuby()) {
-      new import_obsidian4.Notice("\u30C6\u30AD\u30B9\u30C8\u3092\u9078\u629E\u3057\u3066\u304F\u3060\u3055\u3044");
+      new import_obsidian5.Notice("\u30C6\u30AD\u30B9\u30C8\u3092\u9078\u629E\u3057\u3066\u304F\u3060\u3055\u3044");
     }
   }
   applyTcy() {
@@ -2719,7 +3103,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian4.I
   applyAnnotation(wrap) {
     if (!this.editorEl) return;
     if (!wrap(this.editorEl)) {
-      new import_obsidian4.Notice("\u30C6\u30AD\u30B9\u30C8\u3092\u9078\u629E\u3057\u3066\u304F\u3060\u3055\u3044");
+      new import_obsidian5.Notice("\u30C6\u30AD\u30B9\u30C8\u3092\u9078\u629E\u3057\u3066\u304F\u3060\u3055\u3044");
     } else {
       this.commitToCm6();
     }
@@ -2732,7 +3116,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian4.I
     if (!file) return null;
     for (const leaf of this.app.workspace.getLeavesOfType("markdown")) {
       const mv = leaf.view;
-      if (mv instanceof import_obsidian4.MarkdownView && mv.file === file) {
+      if (mv instanceof import_obsidian5.MarkdownView && mv.file === file) {
         return mv.editor;
       }
     }
@@ -2743,7 +3127,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian4.I
   guardCm6(e) {
     if (this.getCm6Editor()) return true;
     e.preventDefault();
-    new import_obsidian4.Notice("\u7E26\u66F8\u304D\u30A8\u30C7\u30A3\u30BF\u3092\u4F7F\u7528\u3059\u308B\u306B\u306F\u3001\u5BFE\u5FDC\u3059\u308B Markdown \u30D3\u30E5\u30FC\u3092\u958B\u3044\u3066\u304F\u3060\u3055\u3044");
+    new import_obsidian5.Notice("\u7E26\u66F8\u304D\u30A8\u30C7\u30A3\u30BF\u3092\u4F7F\u7528\u3059\u308B\u306B\u306F\u3001\u5BFE\u5FDC\u3059\u308B Markdown \u30D3\u30E5\u30FC\u3092\u958B\u3044\u3066\u304F\u3060\u3055\u3044");
     return false;
   }
   /** Schedules a debounced commit. Resets the timer on each call so the commit fires
@@ -2855,7 +3239,7 @@ function countChars(source) {
 }
 
 // src/main.ts
-var TatePlugin = class extends import_obsidian5.Plugin {
+var TatePlugin = class extends import_obsidian6.Plugin {
   constructor() {
     super(...arguments);
     this.settings = DEFAULT_SETTINGS;
@@ -2868,7 +3252,7 @@ var TatePlugin = class extends import_obsidian5.Plugin {
     this.statusBarItem = this.addStatusBarItem();
     this.statusBarItem.hide();
     const iconEl = this.statusBarItem.createEl("span", { cls: "tate-status-icon" });
-    (0, import_obsidian5.setIcon)(iconEl, "tally-3");
+    (0, import_obsidian6.setIcon)(iconEl, "tally-3");
     this.charCountEl = this.statusBarItem.createEl("span");
     this.registerView(
       TATE_VIEW_TYPE,
@@ -2877,22 +3261,51 @@ var TatePlugin = class extends import_obsidian5.Plugin {
     this.addCommand({
       id: "open-view",
       name: "\u7E26\u66F8\u304D\u30D3\u30E5\u30FC\u3092\u958B\u304F",
-      callback: () => this.activateView()
+      checkCallback: (checking) => {
+        if (this.getActiveTateView()) return false;
+        if (!checking) void this.activateView();
+        return true;
+      }
+    });
+    this.addCommand({
+      id: "search",
+      name: "\u691C\u7D22",
+      checkCallback: (checking) => {
+        const view = this.getActiveTateView();
+        if (!view) return false;
+        if (!checking) view.openSearch();
+        return true;
+      }
     });
     this.addCommand({
       id: "add-ruby",
       name: "\u9078\u629E\u30C6\u30AD\u30B9\u30C8\u306B\u30EB\u30D3\u3092\u8A2D\u5B9A (ruby)",
-      callback: () => this.dispatchToView((v) => v.applyRuby())
+      checkCallback: (checking) => {
+        const view = this.getActiveTateView();
+        if (!view) return false;
+        if (!checking) view.applyRuby();
+        return true;
+      }
     });
     this.addCommand({
       id: "add-tcy",
       name: "\u9078\u629E\u30C6\u30AD\u30B9\u30C8\u3092\u7E26\u4E2D\u6A2A\u306B\u3059\u308B (tate-chu-yoko: tcy)",
-      callback: () => this.dispatchToView((v) => v.applyTcy())
+      checkCallback: (checking) => {
+        const view = this.getActiveTateView();
+        if (!view) return false;
+        if (!checking) view.applyTcy();
+        return true;
+      }
     });
     this.addCommand({
       id: "add-bouten",
       name: "\u9078\u629E\u30C6\u30AD\u30B9\u30C8\u306B\u508D\u70B9\u3092\u4ED8\u3051\u308B (bouten)",
-      callback: () => this.dispatchToView((v) => v.applyBouten())
+      checkCallback: (checking) => {
+        const view = this.getActiveTateView();
+        if (!view) return false;
+        if (!checking) view.applyBouten();
+        return true;
+      }
     });
     this.addSettingTab(new TateSettingTab(this.app, this));
     this.registerEvent(
@@ -2952,18 +3365,14 @@ var TatePlugin = class extends import_obsidian5.Plugin {
       }
     });
   }
-  dispatchToView(action) {
-    const leaves = this.app.workspace.getLeavesOfType(TATE_VIEW_TYPE);
-    if (leaves.length === 0) {
-      new import_obsidian5.Notice("\u7E26\u66F8\u304D\u30D3\u30E5\u30FC\u304C\u958B\u3044\u3066\u3044\u307E\u305B\u3093");
-      return;
-    }
-    action(leaves[0].view);
+  getActiveTateView() {
+    return this.app.workspace.getActiveViewOfType(VerticalWritingView);
   }
   async activateView() {
     const existing = this.app.workspace.getLeavesOfType(TATE_VIEW_TYPE);
     if (existing.length > 0) {
       void this.app.workspace.revealLeaf(existing[0]);
+      existing[0].view.notifyActivated();
       return;
     }
     const leaf = this.app.workspace.getLeaf("tab");

@@ -1,4 +1,4 @@
-import { Notice, Plugin, WorkspaceLeaf, setIcon } from 'obsidian';
+import { Plugin, WorkspaceLeaf, setIcon } from 'obsidian';
 import { TATE_VIEW_TYPE, VerticalWritingView } from './view';
 import { DEFAULT_SETTINGS, TatePluginSettings, TateSettingTab } from './settings';
 
@@ -27,25 +27,55 @@ export default class TatePlugin extends Plugin {
         this.addCommand({
             id: 'open-view',
             name: '縦書きビューを開く',
-            callback: () => this.activateView(),
+            checkCallback: (checking) => {
+                if (this.getActiveTateView()) return false;
+                if (!checking) void this.activateView();
+                return true;
+            },
+        });
+
+        this.addCommand({
+            id: 'search',
+            name: '検索',
+            checkCallback: (checking) => {
+                const view = this.getActiveTateView();
+                if (!view) return false;
+                if (!checking) view.openSearch();
+                return true;
+            },
         });
 
         this.addCommand({
             id: 'add-ruby',
             name: '選択テキストにルビを設定 (ruby)',
-            callback: () => this.dispatchToView(v => v.applyRuby()),
+            checkCallback: (checking) => {
+                const view = this.getActiveTateView();
+                if (!view) return false;
+                if (!checking) view.applyRuby();
+                return true;
+            },
         });
 
         this.addCommand({
             id: 'add-tcy',
             name: '選択テキストを縦中横にする (tate-chu-yoko: tcy)',
-            callback: () => this.dispatchToView(v => v.applyTcy()),
+            checkCallback: (checking) => {
+                const view = this.getActiveTateView();
+                if (!view) return false;
+                if (!checking) view.applyTcy();
+                return true;
+            },
         });
 
         this.addCommand({
             id: 'add-bouten',
             name: '選択テキストに傍点を付ける (bouten)',
-            callback: () => this.dispatchToView(v => v.applyBouten()),
+            checkCallback: (checking) => {
+                const view = this.getActiveTateView();
+                if (!view) return false;
+                if (!checking) view.applyBouten();
+                return true;
+            },
         });
 
         this.addSettingTab(new TateSettingTab(this.app, this));
@@ -121,19 +151,20 @@ export default class TatePlugin extends Plugin {
         });
     }
 
-    private dispatchToView(action: (view: VerticalWritingView) => void): void {
-        const leaves = this.app.workspace.getLeavesOfType(TATE_VIEW_TYPE);
-        if (leaves.length === 0) {
-            new Notice('縦書きビューが開いていません');
-            return;
-        }
-        action(leaves[0].view as VerticalWritingView);
+    private getActiveTateView(): VerticalWritingView | null {
+        return this.app.workspace.getActiveViewOfType(VerticalWritingView);
     }
 
     private async activateView(): Promise<void> {
         const existing = this.app.workspace.getLeavesOfType(TATE_VIEW_TYPE);
         if (existing.length > 0) {
             void this.app.workspace.revealLeaf(existing[0]);
+            // revealLeaf does not always fire active-leaf-change when re-revealing an
+            // existing leaf, so manually trigger the activation logic (focus, cursor
+            // restore, spinner cleanup). notifyActivated() is idempotent: if
+            // active-leaf-change does fire afterwards, the escScope guard prevents a
+            // double push.
+            (existing[0].view as VerticalWritingView).notifyActivated();
             return;
         }
         const leaf = this.app.workspace.getLeaf('tab');
