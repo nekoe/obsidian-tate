@@ -50,26 +50,56 @@ Instead of rebuilding all paragraph divs, diff `prevContent` and `content` line 
 line and replace only the `<div>` elements whose source line changed.
 
 ```typescript
-private patchParagraphs(prevContent: string, nextContent: string): void {
+private patchParagraphs(prevContent: string, nextContent: string): HTMLDivElement[] | null {
     const prevLines = prevContent.split('\n');
     const nextLines = nextContent ? nextContent.split('\n') : [''];
     const el = this.el;
 
     if (!this.hasCleanDivStructure(prevLines.length)) {
         el.replaceChildren(sanitizeHTMLToDom(parseToHtml(nextContent)));
-        return;
+        return null;
     }
 
-    while (el.children.length < nextLines.length)
-        el.appendChild(document.createElement('div'));
-    while (el.children.length > nextLines.length)
-        el.removeChild(el.lastChild!);
+    // Skip matching prefix lines.
+    const P = prevLines.length;
+    const N = nextLines.length;
+    let lo = 0;
+    while (lo < P && lo < N && prevLines[lo] === nextLines[lo]) lo++;
 
-    for (let i = 0; i < nextLines.length; i++) {
-        if (prevLines[i] === nextLines[i]) continue;
-        const div = el.children[i] as HTMLElement;
+    // Skip matching suffix lines, clamped so prefix and suffix don't overlap.
+    let suf = 0;
+    while (suf < P - lo && suf < N - lo && prevLines[P - 1 - suf] === nextLines[N - 1 - suf]) suf++;
+
+    // [lo, hiPrev) in prevLines and [lo, hiNext) in nextLines are the changed middle.
+    const hiPrev = P - suf;
+    const hiNext = N - suf;
+
+    // Insert or remove divs in the middle so the total count matches N.
+    const suffixAnchor = (el.children[hiPrev] as HTMLElement) ?? null;
+    const insertCount = hiNext - hiPrev;
+    if (insertCount > 0) {
+        for (let i = 0; i < insertCount; i++)
+            el.insertBefore(document.createElement('div'), suffixAnchor);
+    } else {
+        for (let i = 0; i < -insertCount; i++)
+            el.removeChild(el.children[lo]);
+    }
+
+    // Update changed middle divs.
+    const changedDivs: HTMLDivElement[] = [];
+    for (let i = lo; i < hiNext; i++) {
+        const div = el.children[i] as HTMLDivElement;
         div.replaceChildren(sanitizeHTMLToDom(parseInlineToHtml(nextLines[i]) || '<br>'));
+        changedDivs.push(div);
     }
+
+    // Defensive: unchanged empty lines may lack a <br> placeholder due to prior paste.
+    for (let i = 0; i < lo; i++)
+        if (nextLines[i] === '') ensureBrPlaceholder(el.children[i] as HTMLElement);
+    for (let i = hiNext; i < N; i++)
+        if (nextLines[i] === '') ensureBrPlaceholder(el.children[i] as HTMLElement);
+
+    return changedDivs;
 }
 
 // Returns true iff el.childNodes consists of exactly expectedCount <div> elements.
@@ -193,9 +223,9 @@ to O(cursor_paragraph_index) in the common case.
 
 | Case | Behavior |
 |---|---|
-| Newline inserted | Paragraph count increases by 1; a new `<div>` is appended and all subsequent lines are re-evaluated. |
-| Newline deleted | Paragraph count decreases by 1; the last `<div>` is removed and the merged line is updated. |
-| Large paste or multi-line Undo | Multiple lines differ; each changed `<div>` is updated individually. Still faster than `replaceChildren` unless all lines change. |
+| Newline inserted at position k | `lo=k`, `suf=P-k`; one `<div>` is inserted before the suffix anchor and its content is set. Suffix divs are untouched. O(1) DOM ops. |
+| Newline deleted at position k | `lo=k`, `suf=P-k-1`; one `<div>` is removed from position `lo`. Suffix divs slide left by one. O(1) DOM ops. |
+| Large paste or multi-line Undo | Prefix and suffix compress the changed window; each `<div>` inside the window is inserted/removed/updated individually. Still faster than `replaceChildren` unless all lines change. |
 | Empty content | `nextContent.split('\n')` → `['']`; produces one `<div>` containing `<br>`, matching `parseToHtml('')`. |
 | No actual change (undo stack empty) | `doUndoRedo` returns early before calling `applyFromCm6`; `patchParagraphs` is never reached. |
 | Paste fallback left dirty DOM | `hasCleanDivStructure` returns false; falls back to full `replaceChildren`. |
