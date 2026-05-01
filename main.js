@@ -3204,6 +3204,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian5.I
    *  cm6.getCursor() is not used: after undo, getCursor() returns the position set by the
    *  last setCursor() call before the undone transaction, which may be unrelated to the edit site. */
   doUndoRedo(editorEl, isRedo) {
+    var _a;
     const cm6 = this.getCm6Editor();
     if (!cm6) return;
     this.commitToCm6();
@@ -3231,6 +3232,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian5.I
     }
     this.lastCommittedContent = newContent;
     this.plugin.updateCharCount(countChars(newContent));
+    (_a = this.searchPanel) == null ? void 0 : _a.onContentChanged();
   }
   /** Derives the appropriate cursor position from the content diff before and after undo/redo.
    *  Returns the end of the changed region in next (offset in next).

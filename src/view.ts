@@ -739,6 +739,7 @@ export class VerticalWritingView extends ItemView {
         // causing the tate view DOM to reset and the cursor to jump during input right after undo.
         this.lastCommittedContent = newContent;
         this.plugin.updateCharCount(countChars(newContent));
+        this.searchPanel?.onContentChanged();
     }
 
     /** Derives the appropriate cursor position from the content diff before and after undo/redo.
