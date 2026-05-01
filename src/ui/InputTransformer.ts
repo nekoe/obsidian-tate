@@ -8,6 +8,7 @@ const OPEN_BRACKETS = new Set([
     '\u3010', // 【
     '\u3014', // 〔
     '\uFF08', // （
+    '\uFF3B', // ［
     '\uFF5B', // ｛
     '\u3008', // 〈
     '\u300A', // 《

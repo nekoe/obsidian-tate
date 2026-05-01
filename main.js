@@ -1549,6 +1549,8 @@ var OPEN_BRACKETS = /* @__PURE__ */ new Set([
   // 〔
   "\uFF08",
   // （
+  "\uFF3B",
+  // ［
   "\uFF5B",
   // ｛
   "\u3008",
