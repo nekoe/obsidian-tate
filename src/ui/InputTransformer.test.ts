@@ -78,6 +78,10 @@ function makeEvent(data: string, isComposing = false): { event: InputEvent; wasP
     return { event, wasPrevented: () => prevented };
 }
 
+function makeCompositionEvent(data: string): CompositionEvent {
+    return { data } as unknown as CompositionEvent;
+}
+
 function settings(overrides: Partial<Settings> = {}): Settings {
     return { ...DEFAULT, ...overrides };
 }
@@ -291,15 +295,25 @@ describe('handleCompositionEnd', () => {
         root = makeRoot();
     });
 
-    it('removes leading space when IME-confirmed bracket follows 　', () => {
+    it('removes leading space when IME-confirmed single bracket follows 　', () => {
         const transformer = new InputTransformer(root, settings({ removeBracketIndent: true }));
         const [para, textNode] = makeTextPara(root, '　「');
-        // Cursor after 「 (offset 2)
         setCursorInText(textNode, 2);
 
-        transformer.handleCompositionEnd();
+        transformer.handleCompositionEnd(makeCompositionEvent('「'));
 
         expect(para.textContent).toBe('「');
+    });
+
+    it('removes leading space when IME-confirmed string starts with bracket (multi-char: 「あいうえお)', () => {
+        // '　「あいうえお' = 7 chars; cursor at offset 7 (after last char)
+        const transformer = new InputTransformer(root, settings({ removeBracketIndent: true }));
+        const [para, textNode] = makeTextPara(root, '　「あいうえお');
+        setCursorInText(textNode, 7);
+
+        transformer.handleCompositionEnd(makeCompositionEvent('「あいうえお'));
+
+        expect(para.textContent).toBe('「あいうえお');
     });
 
     it('does NOT remove space when removeBracketIndent=false', () => {
@@ -307,19 +321,19 @@ describe('handleCompositionEnd', () => {
         const [para, textNode] = makeTextPara(root, '　「');
         setCursorInText(textNode, 2);
 
-        transformer.handleCompositionEnd();
+        transformer.handleCompositionEnd(makeCompositionEvent('「'));
 
         expect(para.textContent).toBe('　「');
     });
 
-    it('does NOT remove space when char before cursor is not a bracket', () => {
+    it('does NOT remove space when confirmed string does not start with bracket', () => {
         const transformer = new InputTransformer(root, settings({ removeBracketIndent: true }));
-        const [para, textNode] = makeTextPara(root, '　あ');
-        setCursorInText(textNode, 2);
+        const [para, textNode] = makeTextPara(root, '　あいうえお');
+        setCursorInText(textNode, 6);
 
-        transformer.handleCompositionEnd();
+        transformer.handleCompositionEnd(makeCompositionEvent('あいうえお'));
 
-        expect(para.textContent).toBe('　あ');
+        expect(para.textContent).toBe('　あいうえお');
     });
 
     it('does NOT remove space when text before bracket contains non-space characters', () => {
@@ -327,7 +341,7 @@ describe('handleCompositionEnd', () => {
         const [para, textNode] = makeTextPara(root, 'あ「');
         setCursorInText(textNode, 2);
 
-        transformer.handleCompositionEnd();
+        transformer.handleCompositionEnd(makeCompositionEvent('「'));
 
         expect(para.textContent).toBe('あ「');
     });
@@ -337,7 +351,7 @@ describe('handleCompositionEnd', () => {
         const [para, textNode] = makeTextPara(root, '「');
         setCursorInText(textNode, 1);
 
-        transformer.handleCompositionEnd();
+        transformer.handleCompositionEnd(makeCompositionEvent('「'));
 
         expect(para.textContent).toBe('「');
     });
@@ -352,7 +366,7 @@ describe('handleCompositionEnd', () => {
         para.appendChild(bracketNode);
         setCursorInText(bracketNode, 1);
 
-        transformer.handleCompositionEnd();
+        transformer.handleCompositionEnd(makeCompositionEvent('「'));
 
         expect(para.textContent).toBe('「');
     });

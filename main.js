@@ -1585,10 +1585,13 @@ var InputTransformer = class {
       this.insertText(range, "\u3000");
     }
   }
-  // Called on compositionend. Removes one leading full-width space when the confirmed character
-  // is a full-width opening bracket preceded only by full-width spaces in the paragraph.
-  handleCompositionEnd() {
+  // Called on compositionend. Removes one leading full-width space when the IME-confirmed string
+  // starts with a full-width opening bracket preceded only by full-width spaces in the paragraph.
+  // Accepts the CompositionEvent so multi-character confirmations (e.g. \u300c\u3042\u3044\u3046) are handled
+  // correctly: the first character of event.data is checked, not just the character before cursor.
+  handleCompositionEnd(e) {
     if (!this.settings.removeBracketIndent) return;
+    if (!e.data || !OPEN_BRACKETS.has(e.data[0])) return;
     const sel = window.getSelection();
     if (!sel || sel.rangeCount === 0) return;
     const range = sel.getRangeAt(0);
@@ -1596,11 +1599,10 @@ var InputTransformer = class {
     const { startContainer, startOffset } = range;
     if (startContainer.nodeType !== Node.TEXT_NODE) return;
     const textNode = startContainer;
-    if (startOffset === 0) return;
-    const charBefore = textNode.data[startOffset - 1];
-    if (!OPEN_BRACKETS.has(charBefore)) return;
+    const compositionStart = startOffset - e.data.length;
+    if (compositionStart < 0) return;
     const bracketRange = document.createRange();
-    bracketRange.setStart(textNode, startOffset - 1);
+    bracketRange.setStart(textNode, compositionStart);
     bracketRange.collapse(true);
     const textBeforeBracket = this.getTextBeforeCursorInParagraph(bracketRange);
     if (textBeforeBracket.length === 0) return;
@@ -1701,9 +1703,10 @@ var InputTransformer = class {
     let firstText = walker.nextNode();
     while (firstText && firstText.data.length === 0) firstText = walker.nextNode();
     if (!firstText || firstText.data[0] !== "\u3000") return;
+    const offsetBeforeDelete = cursorRange.startContainer === firstText ? cursorRange.startOffset : -1;
     firstText.deleteData(0, 1);
-    if (cursorRange.startContainer === firstText) {
-      const newOffset = Math.max(0, cursorRange.startOffset - 1);
+    if (offsetBeforeDelete > 0) {
+      const newOffset = offsetBeforeDelete - 1;
       const r = document.createRange();
       r.setStart(firstText, newOffset);
       r.collapse(true);
@@ -2063,8 +2066,8 @@ var EditorElement = class {
     return this.inlineEditor.handleBoutenPostCollapseInput();
   }
   // Called on compositionend (registered from view.ts), before commitToCm6.
-  onCompositionEnd() {
-    this.inputTransformer.handleCompositionEnd();
+  onCompositionEnd(e) {
+    this.inputTransformer.handleCompositionEnd(e);
   }
   // Resets the burst flag after a commit. Does NOT clear boutenGuard.
   afterCommit() {
@@ -2742,12 +2745,12 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian5.I
       if (!this.getCm6Editor()) return;
       editorEl.onCompositionStart();
     });
-    this.registerDomEvent(editorEl.el, "compositionend", () => {
+    this.registerDomEvent(editorEl.el, "compositionend", (e) => {
       var _a;
       editorEl.handleRubyCompletion();
       editorEl.handleTcyCompletion();
       editorEl.handleBoutenCompletion();
-      editorEl.onCompositionEnd();
+      editorEl.onCompositionEnd(e);
       editorEl.handleCursorAnchorInput();
       editorEl.handleBoutenPostCollapseInput();
       this.commitToCm6();

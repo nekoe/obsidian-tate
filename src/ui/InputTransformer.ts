@@ -49,10 +49,13 @@ export class InputTransformer {
         }
     }
 
-    // Called on compositionend. Removes one leading full-width space when the confirmed character
-    // is a full-width opening bracket preceded only by full-width spaces in the paragraph.
-    handleCompositionEnd(): void {
+    // Called on compositionend. Removes one leading full-width space when the IME-confirmed string
+    // starts with a full-width opening bracket preceded only by full-width spaces in the paragraph.
+    // Accepts the CompositionEvent so multi-character confirmations (e.g. \u300c\u3042\u3044\u3046) are handled
+    // correctly: the first character of event.data is checked, not just the character before cursor.
+    handleCompositionEnd(e: CompositionEvent): void {
         if (!this.settings.removeBracketIndent) return;
+        if (!e.data || !OPEN_BRACKETS.has(e.data[0])) return;
 
         const sel = window.getSelection();
         if (!sel || sel.rangeCount === 0) return;
@@ -62,14 +65,14 @@ export class InputTransformer {
         const { startContainer, startOffset } = range;
         if (startContainer.nodeType !== Node.TEXT_NODE) return;
         const textNode = startContainer as Text;
-        if (startOffset === 0) return;
 
-        const charBefore = textNode.data[startOffset - 1];
-        if (!OPEN_BRACKETS.has(charBefore)) return;
+        // Cursor is after the entire confirmed string; step back to where it began.
+        const compositionStart = startOffset - e.data.length;
+        if (compositionStart < 0) return;
 
-        // Build a collapsed range just before the bracket to get text preceding it in the paragraph.
+        // Build a collapsed range just before the composition to get text preceding it.
         const bracketRange = document.createRange();
-        bracketRange.setStart(textNode, startOffset - 1);
+        bracketRange.setStart(textNode, compositionStart);
         bracketRange.collapse(true);
         const textBeforeBracket = this.getTextBeforeCursorInParagraph(bracketRange);
 
@@ -205,11 +208,17 @@ export class InputTransformer {
         while (firstText && firstText.data.length === 0) firstText = walker.nextNode() as Text | null;
         if (!firstText || firstText.data[0] !== '\u3000') return;
 
+        // Capture the offset before deleteData: some browsers auto-decrement live Range offsets
+        // when text is deleted (per DOM spec), others do not. Saving the pre-deletion value and
+        // then applying the -1 shift manually gives consistent results in both environments.
+        const offsetBeforeDelete = cursorRange.startContainer === firstText
+            ? cursorRange.startOffset
+            : -1;
+
         firstText.deleteData(0, 1);
 
-        // Adjust cursor if it was inside the same text node (offset shifts left by 1).
-        if (cursorRange.startContainer === firstText) {
-            const newOffset = Math.max(0, cursorRange.startOffset - 1);
+        if (offsetBeforeDelete > 0) {
+            const newOffset = offsetBeforeDelete - 1;
             const r = document.createRange();
             r.setStart(firstText, newOffset);
             r.collapse(true);

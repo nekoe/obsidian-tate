@@ -429,8 +429,8 @@ export class EditorElement {
     }
 
     // Called on compositionend (registered from view.ts), before commitToCm6.
-    onCompositionEnd(): void {
-        this.inputTransformer.handleCompositionEnd();
+    onCompositionEnd(e: CompositionEvent): void {
+        this.inputTransformer.handleCompositionEnd(e);
     }
 
     // Resets the burst flag after a commit. Does NOT clear boutenGuard.
