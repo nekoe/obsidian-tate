@@ -28,6 +28,9 @@ export class EditorElement {
     }
 
     setValue(content: string, preserveCursor: boolean): void {
+        // Normalize CRLF/CR to LF so that the HTML parser inside sanitizeHTMLToDom does not
+        // convert \r to \n and inject spurious empty lines into the DOM.
+        content = content.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
         // Reset expansion state and selection cache on external update (must run before the early return)
         this.inlineEditor.reset();
         // Also require childNodes.length > 0: parseToHtml('') returns '<div><br></div>', so
@@ -148,7 +151,9 @@ export class EditorElement {
     // Single-line paste into a visible cursor div returns [] (cache updates naturally on-screen).
     handlePaste(e: ClipboardEvent): HTMLDivElement[] {
         e.preventDefault();
-        const text = e.clipboardData?.getData('text/plain') ?? '';
+        // Normalize CRLF/CR to LF before splitting; otherwise \r remains at each line end,
+        // and the HTML parser inside sanitizeHTMLToDom converts it to \n, doubling newlines.
+        const text = (e.clipboardData?.getData('text/plain') ?? '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
         if (!text) return [];
 
         const sel = window.getSelection();

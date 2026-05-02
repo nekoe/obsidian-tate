@@ -1762,6 +1762,7 @@ var EditorElement = class {
     return Array.from(this.el.childNodes).map((n) => serializeNode(n, this.el)).join("");
   }
   setValue(content, preserveCursor) {
+    content = content.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
     this.inlineEditor.reset();
     if (this.getValue() === content && this.el.childNodes.length > 0) return;
     if (preserveCursor && document.activeElement === this.el) {
@@ -1845,7 +1846,7 @@ var EditorElement = class {
   handlePaste(e) {
     var _a, _b;
     e.preventDefault();
-    const text = (_b = (_a = e.clipboardData) == null ? void 0 : _a.getData("text/plain")) != null ? _b : "";
+    const text = ((_b = (_a = e.clipboardData) == null ? void 0 : _a.getData("text/plain")) != null ? _b : "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
     if (!text) return [];
     const sel = window.getSelection();
     if (!sel || sel.rangeCount === 0) return [];
