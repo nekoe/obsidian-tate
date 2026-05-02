@@ -2941,8 +2941,8 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian5.I
     var _a;
     const file = (_a = this.syncCoordinator) == null ? void 0 : _a.currentFile;
     const el = this.editorEl;
-    if (!file || (el == null ? void 0 : el.isInlineExpanded())) return null;
-    const offset = el && document.activeElement === el.el ? el.getViewCursorOffset() : this.lastKnownViewOffset;
+    if (!file) return null;
+    const offset = el && document.activeElement === el.el && !el.isInlineExpanded() ? el.getViewCursorOffset() : this.lastKnownViewOffset;
     if (offset === null) return null;
     return this.plugin.saveCursorPosition(file.path, offset);
   }

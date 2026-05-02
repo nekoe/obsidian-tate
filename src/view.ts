@@ -392,8 +392,11 @@ export class VerticalWritingView extends ItemView {
     saveCursorForQuit(): Promise<void> | null {
         const file = this.syncCoordinator?.currentFile;
         const el = this.editorEl;
-        if (!file || el?.isInlineExpanded()) return null;
-        const offset = (el && document.activeElement === el.el)
+        if (!file) return null;
+        // When inline expanded, getViewCursorOffset() would return an offset inside the raw
+        // editing span, which does not map to a valid collapsed view offset. Fall back to
+        // lastKnownViewOffset (captured just before the expansion triggered) in that case.
+        const offset = (el && document.activeElement === el.el && !el.isInlineExpanded())
             ? el.getViewCursorOffset()
             : this.lastKnownViewOffset;
         if (offset === null) return null;
