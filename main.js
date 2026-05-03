@@ -3021,6 +3021,9 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian5.I
     const p = this.saveCursorForQuit();
     if (p) await p;
     (_b = this.syncCoordinator) == null ? void 0 : _b.dispose();
+    this.syncCoordinator = null;
+    this.editorEl = null;
+    this.lastCommittedContent = "";
     this.spinnerEl = null;
     if (!this.app.workspace.getActiveViewOfType(_VerticalWritingView)) {
       this.plugin.updateCharCount(null);

@@ -469,6 +469,9 @@ export class VerticalWritingView extends ItemView {
         const p = this.saveCursorForQuit();
         if (p) await p;
         this.syncCoordinator?.dispose();
+        this.syncCoordinator = null;
+        this.editorEl = null;
+        this.lastCommittedContent = '';
         this.spinnerEl = null; // DOM is destroyed by Obsidian; clear reference
         if (!this.app.workspace.getActiveViewOfType(VerticalWritingView)) {
             this.plugin.updateCharCount(null);
