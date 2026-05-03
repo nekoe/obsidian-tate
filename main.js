@@ -478,7 +478,7 @@ function esc(text) {
 function serializeNode(node, rootEl) {
   var _a, _b, _c, _d, _e, _f, _g;
   if (node.nodeType === Node.TEXT_NODE) {
-    return (_a = node.textContent) != null ? _a : "";
+    return ((_a = node.textContent) != null ? _a : "").replace(/ /g, " ");
   }
   if (!(node instanceof HTMLElement)) return "";
   switch (node.tagName) {

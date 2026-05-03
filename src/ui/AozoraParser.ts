@@ -156,7 +156,10 @@ function esc(text: string): string {
  */
 export function serializeNode(node: Node, rootEl: HTMLElement): string {
     if (node.nodeType === Node.TEXT_NODE) {
-        return node.textContent ?? '';
+        // Normalize &nbsp; (U+00A0) to a regular space. Chrome's contenteditable inserts
+        // U+00A0 at the start/end of split paragraphs (e.g. after Enter) to prevent
+        // leading/trailing whitespace from being collapsed by HTML rendering rules.
+        return (node.textContent ?? '').replace(/ /g, ' ');
     }
     if (!(node instanceof HTMLElement)) return '';
 
