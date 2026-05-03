@@ -478,7 +478,7 @@ function esc(text) {
 function serializeNode(node, rootEl) {
   var _a, _b, _c, _d, _e, _f, _g;
   if (node.nodeType === Node.TEXT_NODE) {
-    return ((_a = node.textContent) != null ? _a : "").replace(/ /g, " ");
+    return (_a = node.textContent) != null ? _a : "";
   }
   if (!(node instanceof HTMLElement)) return "";
   switch (node.tagName) {
@@ -2057,7 +2057,30 @@ var EditorElement = class {
   }
   // Called after Enter (insertParagraph input event) from view.ts.
   handleParagraphInsert() {
+    this.stripLeadingNbspFromCurrentParagraph();
     this.inputTransformer.handleParagraphInsert();
+  }
+  stripLeadingNbspFromCurrentParagraph() {
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return;
+    const range = sel.getRangeAt(0);
+    const div = this.findParagraphDiv(range.startContainer);
+    if (!div) return;
+    const walker = document.createTreeWalker(div, NodeFilter.SHOW_TEXT);
+    let first = walker.nextNode();
+    while (first && first.data.length === 0) first = walker.nextNode();
+    if (!first || first.data[0] !== "\xA0") return;
+    let count = 0;
+    while (count < first.data.length && first.data[count] === "\xA0") count++;
+    const cursorOffset = range.startContainer === first ? range.startOffset : -1;
+    first.deleteData(0, count);
+    if (cursorOffset > 0) {
+      const r = document.createRange();
+      r.setStart(first, Math.max(0, cursorOffset - count));
+      r.collapse(true);
+      sel.removeAllRanges();
+      sel.addRange(r);
+    }
   }
   // Called on compositionstart (registered from view.ts).
   onCompositionStart() {

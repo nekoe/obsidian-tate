@@ -419,7 +419,39 @@ export class EditorElement {
 
     // Called after Enter (insertParagraph input event) from view.ts.
     handleParagraphInsert(): void {
+        // Chrome inserts U+00A0 at the start of the new paragraph after splitting on Enter,
+        // to prevent leading content from being visually trimmed by HTML whitespace rules.
+        // Strip it before commit — it is a rendering artifact, not part of the user's text.
+        this.stripLeadingNbspFromCurrentParagraph();
         this.inputTransformer.handleParagraphInsert();
+    }
+
+    private stripLeadingNbspFromCurrentParagraph(): void {
+        const sel = window.getSelection();
+        if (!sel || sel.rangeCount === 0) return;
+        const range = sel.getRangeAt(0);
+        const div = this.findParagraphDiv(range.startContainer);
+        if (!div) return;
+
+        const walker = document.createTreeWalker(div, NodeFilter.SHOW_TEXT);
+        let first = walker.nextNode() as Text | null;
+        while (first && first.data.length === 0) first = walker.nextNode() as Text | null;
+        if (!first || first.data[0] !== '\xa0') return;
+
+        let count = 0;
+        while (count < first.data.length && first.data[count] === '\xa0') count++;
+
+        // Save cursor offset before mutation in case the cursor is inside this text node.
+        const cursorOffset = range.startContainer === first ? range.startOffset : -1;
+        first.deleteData(0, count);
+
+        if (cursorOffset > 0) {
+            const r = document.createRange();
+            r.setStart(first, Math.max(0, cursorOffset - count));
+            r.collapse(true);
+            sel.removeAllRanges();
+            sel.addRange(r);
+        }
     }
 
     // Called on compositionstart (registered from view.ts).
