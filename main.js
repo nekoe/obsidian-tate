@@ -2639,6 +2639,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian5.I
     // Fallback for save paths that run while the editor is unfocused: getViewCursorOffset()
     // returns 0 when the editor lacks focus, so this field preserves the last valid offset.
     this.lastKnownViewOffset = null;
+    this.selectionChangeRafId = null;
     // Tracks whether escScope is currently on the keymap stack to prevent double-push.
     // active-leaf-change and notifyActivated() can both trigger activation; the flag
     // ensures pushScope/popScope are always balanced regardless of call order.
@@ -2763,7 +2764,13 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian5.I
       const contentChanged = editorEl.handleSelectionChange();
       if (contentChanged) this.commitToCm6();
       if (document.activeElement === editorEl.el && !editorEl.isInlineExpanded()) {
-        this.lastKnownViewOffset = editorEl.getViewCursorOffset();
+        if (this.selectionChangeRafId !== null) cancelAnimationFrame(this.selectionChangeRafId);
+        this.selectionChangeRafId = requestAnimationFrame(() => {
+          this.selectionChangeRafId = null;
+          if (document.activeElement === editorEl.el && !editorEl.isInlineExpanded()) {
+            this.lastKnownViewOffset = editorEl.getViewCursorOffset();
+          }
+        });
       }
     });
     this.registerDomEvent(editorEl.el, "mousedown", () => {
@@ -2980,6 +2987,10 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian5.I
     var _a, _b;
     (_a = this.searchPanel) == null ? void 0 : _a.close();
     this.popEscScope();
+    if (this.selectionChangeRafId !== null) {
+      cancelAnimationFrame(this.selectionChangeRafId);
+      this.selectionChangeRafId = null;
+    }
     this.commitToCm6();
     const p = this.saveCursorForQuit();
     if (p) await p;

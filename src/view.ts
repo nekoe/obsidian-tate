@@ -29,6 +29,7 @@ export class VerticalWritingView extends ItemView {
     // Fallback for save paths that run while the editor is unfocused: getViewCursorOffset()
     // returns 0 when the editor lacks focus, so this field preserves the last valid offset.
     private lastKnownViewOffset: number | null = null;
+    private selectionChangeRafId: number | null = null;
     // Keymap scope pushed while this view is the active leaf. Intercepts Escape before
     // Obsidian's global handler, which would otherwise switch the active leaf to a
     // navigation=true view (e.g. MarkdownView). See docs/design/20260424_esc_key_scope.md.
@@ -194,8 +195,17 @@ export class VerticalWritingView extends ItemView {
             if (contentChanged) this.commitToCm6(); // Commit only if collapse changed content
             // Track the cursor offset while the editor has focus so it can be restored after
             // focus() resets the caret on view re-activation.
+            // Multiple selectionchange events can fire in a single frame (e.g. auto-indent inserts
+            // text via insertText(), triggering one event per DOM mutation). Debounce with rAF so
+            // only the final cursor position per frame is captured, avoiding redundant O(N) scans.
             if (document.activeElement === editorEl.el && !editorEl.isInlineExpanded()) {
-                this.lastKnownViewOffset = editorEl.getViewCursorOffset();
+                if (this.selectionChangeRafId !== null) cancelAnimationFrame(this.selectionChangeRafId);
+                this.selectionChangeRafId = requestAnimationFrame(() => {
+                    this.selectionChangeRafId = null;
+                    if (document.activeElement === editorEl.el && !editorEl.isInlineExpanded()) {
+                        this.lastKnownViewOffset = editorEl.getViewCursorOffset();
+                    }
+                });
             }
         });
         this.registerDomEvent(editorEl.el, 'mousedown', () => {
@@ -443,6 +453,10 @@ export class VerticalWritingView extends ItemView {
     async onClose(): Promise<void> {
         this.searchPanel?.close();
         this.popEscScope();
+        if (this.selectionChangeRafId !== null) {
+            cancelAnimationFrame(this.selectionChangeRafId);
+            this.selectionChangeRafId = null;
+        }
         // Flush any uncommitted changes to CM6 before closing
         this.commitToCm6();
         const p = this.saveCursorForQuit();
