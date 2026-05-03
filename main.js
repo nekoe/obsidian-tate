@@ -2718,6 +2718,9 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian5.I
         return;
       }
       editorEl.onBeforeInput(e);
+      if (e.defaultPrevented && e.inputType === "insertText" && !e.isComposing) {
+        this.scheduleCommit();
+      }
     });
     this.registerDomEvent(editorEl.el, "input", (e) => {
       var _a, _b, _c, _d;

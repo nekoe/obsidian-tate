@@ -141,6 +141,13 @@ export class VerticalWritingView extends ItemView {
                 return;
             }
             editorEl.onBeforeInput(e);
+            // InputTransformer may call e.preventDefault() and perform direct DOM mutations
+            // (e.g. half→full-width space conversion, auto-indent, bracket de-indent).
+            // When default is prevented the browser cancels the corresponding input event,
+            // so scheduleCommit() would never be called. Schedule it here instead.
+            if (e.defaultPrevented && e.inputType === 'insertText' && !e.isComposing) {
+                this.scheduleCommit();
+            }
         });
         this.registerDomEvent(editorEl.el, 'input', (e: Event) => {
             const inputEvent = e as InputEvent;
