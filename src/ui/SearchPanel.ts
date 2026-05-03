@@ -1,5 +1,6 @@
 import { App, Scope } from 'obsidian';
 import type { EditorElement } from './EditorElement';
+import type { ParagraphVirtualizer } from './ParagraphVirtualizer';
 import { isInsideRtNode } from './domHelpers';
 
 // ---- Visible text extraction ----
@@ -106,6 +107,7 @@ export class SearchPanel {
         private readonly editorElementRef: EditorElement,
         private readonly container: HTMLElement,
         private readonly app: App,
+        private readonly virtualizer?: ParagraphVirtualizer,
     ) {
         this.searchScope = new Scope(app.scope);
 
@@ -152,6 +154,9 @@ export class SearchPanel {
         this.matches = [];
         this.matchStarts = [];
         this.currentIndex = -1;
+        // Suppress freeze while the panel is open so DOM ranges remain valid.
+        // thawAll() is deferred to runSearch() — no need to thaw before the user types a query.
+        this.virtualizer?.suppressFreeze(true);
         this.buildPanel();
         this.app.keymap.pushScope(this.searchScope);
         this.inputEl?.focus();
@@ -162,6 +167,8 @@ export class SearchPanel {
 
         this.app.keymap.popScope(this.searchScope);
         this.clearHighlights();
+        // Re-enable freezing after closing (IntersectionObserver will gradually freeze off-screen divs).
+        this.virtualizer?.suppressFreeze(false);
 
         this.panelEl?.remove();
         this.panelEl = null;
@@ -272,6 +279,10 @@ export class SearchPanel {
             this.updateCount();
             return;
         }
+
+        // Thaw all paragraphs before extracting visible text, so frozen divs don't produce
+        // empty ranges. suppressFreeze(true) prevents re-freezing while the panel is open.
+        this.virtualizer?.thawAll();
 
         const editorEl = this.editorElementRef.el;
         const { text, segments } = extractVisibleText(editorEl);

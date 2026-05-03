@@ -28,10 +28,10 @@ __export(main_exports, {
   default: () => TatePlugin
 });
 module.exports = __toCommonJS(main_exports);
-var import_obsidian6 = require("obsidian");
+var import_obsidian7 = require("obsidian");
 
 // src/view.ts
-var import_obsidian5 = require("obsidian");
+var import_obsidian6 = require("obsidian");
 
 // src/sync/SyncCoordinator.ts
 var SyncCoordinator = class {
@@ -631,6 +631,19 @@ function rawOffsetForExpand(el, node, offset) {
     return offset;
   }
 }
+function computeDivViewLen(div, rootEl) {
+  var _a;
+  let count = 0;
+  const walker = document.createTreeWalker(div, NodeFilter.SHOW_TEXT);
+  let node = walker.nextNode();
+  while (node) {
+    if (!isInsideRtNode(node, rootEl)) {
+      count += findCursorAnchorAncestor(node, rootEl) ? ((_a = node.textContent) != null ? _a : "").replace(/​/g, "").length : node.length;
+    }
+    node = walker.nextNode();
+  }
+  return count;
+}
 function getExtraCharsFromAnnotation(rawText) {
   const patterns = [
     /［＃「([^「」\n]+)」は縦中横］/,
@@ -780,6 +793,10 @@ var CursorAnchorManager = class {
   constructor(el) {
     this.el = el;
     this.pendingAnchorSkip = null;
+    this.virtualizer = null;
+  }
+  setVirtualizer(v) {
+    this.virtualizer = v;
   }
   // Sets the skip direction based on the navigation key that was just pressed.
   setSkipDirection(key) {
@@ -902,6 +919,7 @@ var CursorAnchorManager = class {
   // Returns the first non-<rt> text position after the anchor.
   // Checks siblings within the same paragraph first; falls back to the next paragraph.
   findPositionAfterAnchor(anchor) {
+    var _a;
     let sibling = anchor.nextSibling;
     while (sibling) {
       if (sibling.nodeType === Node.TEXT_NODE) {
@@ -921,6 +939,7 @@ var CursorAnchorManager = class {
     if (!parentDiv) return null;
     let next = parentDiv.nextSibling;
     while (next) {
+      if (next instanceof HTMLElement) (_a = this.virtualizer) == null ? void 0 : _a.thawDiv(next);
       const walker = document.createTreeWalker(next, NodeFilter.SHOW_TEXT);
       let node = walker.nextNode();
       while (node) {
@@ -936,6 +955,7 @@ var CursorAnchorManager = class {
   // which causes selectionchange to trigger expandForEditing on the ruby.
   // Falls back to the last text of the previous paragraph if nothing is found on the same line.
   findPositionBeforeAnchor(anchor) {
+    var _a;
     let prev = anchor.previousSibling;
     while (prev) {
       if (prev.nodeType === Node.TEXT_NODE) {
@@ -951,6 +971,7 @@ var CursorAnchorManager = class {
     if (!parentDiv) return null;
     let prevDiv = parentDiv.previousSibling;
     while (prevDiv) {
+      if (prevDiv instanceof HTMLElement) (_a = this.virtualizer) == null ? void 0 : _a.thawDiv(prevDiv);
       const walker = document.createTreeWalker(prevDiv, NodeFilter.SHOW_TEXT);
       let lastText = null;
       let node = walker.nextNode();
@@ -1157,6 +1178,9 @@ var InlineEditor = class {
     this.anchorManager = new CursorAnchorManager(el);
     this.liveConverter = new LiveConverter(el);
     this.expander = new InlineExpander(el);
+  }
+  setVirtualizer(v) {
+    this.anchorManager.setVirtualizer(v);
   }
   setExpandSettings(ruby, tcy, bouten) {
     this.expandRuby = ruby;
@@ -1750,6 +1774,7 @@ var InputTransformer = class {
 // src/ui/EditorElement.ts
 var EditorElement = class {
   constructor(container) {
+    this.virtualizer = null;
     this.el = container.createEl("div");
     this.el.addClass("tate-editor");
     this.el.setAttribute("contenteditable", "true");
@@ -1758,10 +1783,23 @@ var EditorElement = class {
     this.inlineEditor = new InlineEditor(this.el);
     this.inputTransformer = new InputTransformer(this.el, DEFAULT_SETTINGS);
   }
+  // Sets the virtualizer. Called from view.ts after creating the EditorElement.
+  setVirtualizer(v) {
+    this.virtualizer = v;
+    this.inlineEditor.setVirtualizer(v);
+  }
   getValue() {
-    return Array.from(this.el.childNodes).map((n) => serializeNode(n, this.el)).join("");
+    const virt = this.virtualizer;
+    return Array.from(this.el.childNodes).map((n) => {
+      if (virt && n instanceof HTMLElement && virt.isFrozen(n)) {
+        const src = virt.getSrcLine(n);
+        return n.previousElementSibling !== null ? "\n" + src : src;
+      }
+      return serializeNode(n, this.el);
+    }).join("");
   }
   setValue(content, preserveCursor) {
+    var _a;
     content = content.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
     this.inlineEditor.reset();
     if (this.getValue() === content && this.el.childNodes.length > 0) return;
@@ -1772,6 +1810,7 @@ var EditorElement = class {
     } else {
       this.el.replaceChildren((0, import_obsidian3.sanitizeHTMLToDom)(parseToHtml(content)));
     }
+    (_a = this.virtualizer) == null ? void 0 : _a.observeAll();
   }
   // ---- Inline expand/collapse (call from selectionchange) ----
   handleSelectionChange() {
@@ -2119,12 +2158,13 @@ var EditorElement = class {
   // Updates paragraph divs to match nextContent, replacing only divs whose line changed.
   // Returns the changed/added divs, or null if hasCleanDivStructure failed (full rebuild).
   patchParagraphs(prevContent, nextContent) {
-    var _a;
+    var _a, _b, _c, _d;
     const prevLines = prevContent.split("\n");
     const nextLines = nextContent ? nextContent.split("\n") : [""];
     const el = this.el;
     if (!this.hasCleanDivStructure(prevLines.length)) {
       el.replaceChildren((0, import_obsidian3.sanitizeHTMLToDom)(parseToHtml(nextContent)));
+      (_a = this.virtualizer) == null ? void 0 : _a.observeAll();
       return null;
     }
     const P = prevLines.length;
@@ -2135,7 +2175,7 @@ var EditorElement = class {
     while (suf < P - lo && suf < N - lo && prevLines[P - 1 - suf] === nextLines[N - 1 - suf]) suf++;
     const hiPrev = P - suf;
     const hiNext = N - suf;
-    const suffixAnchor = (_a = el.children[hiPrev]) != null ? _a : null;
+    const suffixAnchor = (_b = el.children[hiPrev]) != null ? _b : null;
     const insertCount = hiNext - hiPrev;
     if (insertCount > 0) {
       for (let i = 0; i < insertCount; i++)
@@ -2147,8 +2187,10 @@ var EditorElement = class {
     const changedDivs = [];
     for (let i = lo; i < hiNext; i++) {
       const div = el.children[i];
+      (_c = this.virtualizer) == null ? void 0 : _c.unfrostDiv(div);
       const html = parseInlineToHtml(nextLines[i]) || "<br>";
       div.replaceChildren((0, import_obsidian3.sanitizeHTMLToDom)(html));
+      (_d = this.virtualizer) == null ? void 0 : _d.observeOne(div);
       changedDivs.push(div);
     }
     for (let i = 0; i < lo; i++)
@@ -2237,89 +2279,99 @@ var EditorElement = class {
   }
   // ---- Cursor operations (offset managed in visible character count, excluding <rt> and U+200B) ----
   getVisibleOffset() {
-    var _a, _b;
+    var _a, _b, _c, _d;
     const sel = window.getSelection();
     if (!sel || sel.rangeCount === 0) return 0;
     const range = sel.getRangeAt(0);
+    let cursorDiv = null;
+    let node = range.startContainer;
+    while (node && node !== this.el) {
+      if (node instanceof HTMLElement && node.parentElement === this.el) {
+        cursorDiv = node;
+        break;
+      }
+      node = node.parentElement;
+    }
     let count = 0;
-    const walker = document.createTreeWalker(this.el, NodeFilter.SHOW_TEXT);
-    let node = walker.nextNode();
-    while (node) {
-      if (node === range.startContainer) {
-        if (!this.isInsideRt(node)) {
-          const text = (_a = node.textContent) != null ? _a : "";
-          const beforeCursor = this.isInsideAnchorSpan(node) ? text.slice(0, range.startOffset).replace(/\u200B/g, "").length : range.startOffset;
-          count += beforeCursor;
+    for (const child of Array.from(this.el.children)) {
+      if (child === cursorDiv) break;
+      count += ((_a = this.virtualizer) == null ? void 0 : _a.isFrozen(child)) ? this.virtualizer.getViewLen(child) : computeDivViewLen(child, this.el);
+    }
+    if (!cursorDiv || ((_b = this.virtualizer) == null ? void 0 : _b.isFrozen(cursorDiv))) return count;
+    const walker = document.createTreeWalker(cursorDiv, NodeFilter.SHOW_TEXT);
+    let textNode = walker.nextNode();
+    while (textNode) {
+      if (textNode === range.startContainer) {
+        if (!isInsideRtNode(textNode, this.el)) {
+          const text = (_c = textNode.textContent) != null ? _c : "";
+          count += findCursorAnchorAncestor(textNode, this.el) ? text.slice(0, range.startOffset).replace(/\u200B/g, "").length : range.startOffset;
         }
         break;
       }
-      if (range.comparePoint(node, 0) >= 0) break;
-      if (!this.isInsideRt(node)) {
-        count += this.isInsideAnchorSpan(node) ? ((_b = node.textContent) != null ? _b : "").replace(/\u200B/g, "").length : node.length;
+      if (range.comparePoint(textNode, 0) >= 0) break;
+      if (!isInsideRtNode(textNode, this.el)) {
+        count += findCursorAnchorAncestor(textNode, this.el) ? ((_d = textNode.textContent) != null ? _d : "").replace(/\u200B/g, "").length : textNode.length;
       }
-      node = walker.nextNode();
+      textNode = walker.nextNode();
     }
     return count;
   }
   setVisibleOffset(offset) {
-    var _a, _b;
+    var _a, _b, _c;
     const sel = window.getSelection();
     if (!sel) return;
     let remaining = offset;
-    const walker = document.createTreeWalker(this.el, NodeFilter.SHOW_TEXT);
-    let node = walker.nextNode();
-    while (node) {
-      if (!this.isInsideRt(node)) {
-        const visLen = this.isInsideAnchorSpan(node) ? ((_a = node.textContent) != null ? _a : "").replace(/\u200B/g, "").length : node.length;
-        if (remaining <= visLen) {
-          const range2 = document.createRange();
-          let actualOffset;
-          if (this.isInsideAnchorSpan(node)) {
-            const text = (_b = node.textContent) != null ? _b : "";
-            actualOffset = 0;
-            let visible = 0;
-            for (let i = 0; i < text.length; i++) {
-              if (visible === remaining) {
-                actualOffset = i;
-                break;
-              }
-              if (text[i] !== "\u200B") visible++;
-              actualOffset = i + 1;
-            }
-          } else {
-            actualOffset = remaining;
-          }
-          range2.setStart(node, actualOffset);
-          range2.collapse(true);
-          sel.removeAllRanges();
-          sel.addRange(range2);
+    for (const child of Array.from(this.el.children)) {
+      if ((_a = this.virtualizer) == null ? void 0 : _a.isFrozen(child)) {
+        const viewLen = this.virtualizer.getViewLen(child);
+        if (remaining <= viewLen) {
+          this.virtualizer.thawDiv(child);
+          if (!this.virtualizer.isFrozen(child)) this.setVisibleOffset(offset);
           return;
         }
-        remaining -= visLen;
+        remaining -= viewLen;
+        continue;
       }
-      node = walker.nextNode();
+      const walker = document.createTreeWalker(child, NodeFilter.SHOW_TEXT);
+      let node = walker.nextNode();
+      while (node) {
+        if (!isInsideRtNode(node, this.el)) {
+          const isAnchor = !!findCursorAnchorAncestor(node, this.el);
+          const visLen = isAnchor ? ((_b = node.textContent) != null ? _b : "").replace(/\u200B/g, "").length : node.length;
+          if (remaining <= visLen) {
+            const range2 = document.createRange();
+            let actualOffset;
+            if (isAnchor) {
+              const text = (_c = node.textContent) != null ? _c : "";
+              actualOffset = 0;
+              let visible = 0;
+              for (let i = 0; i < text.length; i++) {
+                if (visible === remaining) {
+                  actualOffset = i;
+                  break;
+                }
+                if (text[i] !== "\u200B") visible++;
+                actualOffset = i + 1;
+              }
+            } else {
+              actualOffset = remaining;
+            }
+            range2.setStart(node, actualOffset);
+            range2.collapse(true);
+            sel.removeAllRanges();
+            sel.addRange(range2);
+            return;
+          }
+          remaining -= visLen;
+        }
+        node = walker.nextNode();
+      }
     }
     const range = document.createRange();
     range.selectNodeContents(this.el);
     range.collapse(false);
     sel.removeAllRanges();
     sel.addRange(range);
-  }
-  isInsideRt(node) {
-    let parent = node.parentElement;
-    while (parent && parent !== this.el) {
-      if (parent.tagName === "RT") return true;
-      parent = parent.parentElement;
-    }
-    return false;
-  }
-  isInsideAnchorSpan(node) {
-    let parent = node.parentElement;
-    while (parent && parent !== this.el) {
-      if (parent.classList.contains("tate-cursor-anchor")) return true;
-      parent = parent.parentElement;
-    }
-    return false;
   }
 };
 
@@ -2380,10 +2432,11 @@ function escapeRegex(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 var SearchPanel = class {
-  constructor(editorElementRef, container, app) {
+  constructor(editorElementRef, container, app, virtualizer) {
     this.editorElementRef = editorElementRef;
     this.container = container;
     this.app = app;
+    this.virtualizer = virtualizer;
     this.panelEl = null;
     this.inputEl = null;
     this.countEl = null;
@@ -2427,7 +2480,7 @@ var SearchPanel = class {
     return this.panelEl !== null;
   }
   open(initialOffset) {
-    var _a, _b;
+    var _a, _b, _c;
     if (this.isOpen) {
       (_a = this.inputEl) == null ? void 0 : _a.focus();
       return;
@@ -2438,23 +2491,25 @@ var SearchPanel = class {
     this.matches = [];
     this.matchStarts = [];
     this.currentIndex = -1;
+    (_b = this.virtualizer) == null ? void 0 : _b.suppressFreeze(true);
     this.buildPanel();
     this.app.keymap.pushScope(this.searchScope);
-    (_b = this.inputEl) == null ? void 0 : _b.focus();
+    (_c = this.inputEl) == null ? void 0 : _c.focus();
   }
   close() {
-    var _a, _b;
+    var _a, _b, _c;
     if (!this.isOpen) return null;
     this.app.keymap.popScope(this.searchScope);
     this.clearHighlights();
-    (_a = this.panelEl) == null ? void 0 : _a.remove();
+    (_a = this.virtualizer) == null ? void 0 : _a.suppressFreeze(false);
+    (_b = this.panelEl) == null ? void 0 : _b.remove();
     this.panelEl = null;
     this.inputEl = null;
     this.countEl = null;
     this.matches = [];
     this.currentIndex = -1;
     const wasEditorFocused = this.editorFocused;
-    const restoreOffset = wasEditorFocused ? null : (_b = this.lastNavigatedOffset) != null ? _b : this.prSearchOffset;
+    const restoreOffset = wasEditorFocused ? null : (_c = this.lastNavigatedOffset) != null ? _c : this.prSearchOffset;
     this.prSearchOffset = null;
     this.lastNavigatedOffset = null;
     this.editorFocused = false;
@@ -2517,7 +2572,7 @@ var SearchPanel = class {
     this.panelEl = panel;
   }
   runSearch(scroll = true) {
-    var _a, _b, _c;
+    var _a, _b, _c, _d;
     const query = (_b = (_a = this.inputEl) == null ? void 0 : _a.value) != null ? _b : "";
     this.clearHighlights();
     const prevIndex = this.currentIndex;
@@ -2528,6 +2583,7 @@ var SearchPanel = class {
       this.updateCount();
       return;
     }
+    (_c = this.virtualizer) == null ? void 0 : _c.thawAll();
     const editorEl = this.editorElementRef.el;
     const { text, segments } = extractVisibleText(editorEl);
     const re = new RegExp(escapeRegex(query), "gi");
@@ -2548,7 +2604,7 @@ var SearchPanel = class {
     if (prevIndex >= 0 && prevIndex < this.matches.length) {
       this.setFocus(prevIndex, scroll);
     } else {
-      this.setFocus(this.findFirstIndexAtOrAfter((_c = this.prSearchOffset) != null ? _c : 0), scroll);
+      this.setFocus(this.findFirstIndexAtOrAfter((_d = this.prSearchOffset) != null ? _d : 0), scroll);
     }
   }
   // Returns the index of the first match whose visible-text start is >= offset.
@@ -2637,13 +2693,208 @@ var SearchPanel = class {
   }
 };
 
+// src/ui/ParagraphVirtualizer.ts
+var import_obsidian5 = require("obsidian");
+var FROZEN_CLASS = "tate-frozen";
+var FREEZE_DELAY_MS = 50;
+var ParagraphVirtualizer = class {
+  constructor(editorEl, scrollArea) {
+    this.editorEl = editorEl;
+    this.scrollArea = scrollArea;
+    this.observer = null;
+    this.freezeTimers = /* @__PURE__ */ new Map();
+    this.freezeSuppressed = false;
+  }
+  // Starts the IntersectionObserver and begins observing all current children.
+  attach() {
+    if (this.observer) return;
+    this.observer = new IntersectionObserver(
+      (entries) => this.onIntersection(entries),
+      {
+        root: this.scrollArea,
+        // 440px margin on each side covers ~10 paragraphs (44px each) outside the viewport.
+        rootMargin: "0px 440px 0px 440px",
+        threshold: 0
+      }
+    );
+    this.observeAll();
+  }
+  // Stops the observer and cancels all pending freeze timers.
+  detach() {
+    var _a;
+    (_a = this.observer) == null ? void 0 : _a.disconnect();
+    this.observer = null;
+    for (const timer of this.freezeTimers.values()) clearTimeout(timer);
+    this.freezeTimers.clear();
+  }
+  // Registers all current editorEl children with the observer (call after setValue).
+  observeAll() {
+    if (!this.observer) return;
+    for (const child of Array.from(this.editorEl.children)) {
+      this.observer.observe(child);
+    }
+  }
+  // Registers a single div with the observer (call after patchParagraphs inserts a new div).
+  observeOne(div) {
+    var _a;
+    (_a = this.observer) == null ? void 0 : _a.observe(div);
+  }
+  // Returns true if div is currently frozen (has the tate-frozen class).
+  isFrozen(div) {
+    return div.classList.contains(FROZEN_CLASS);
+  }
+  // Returns the Aozora source line for a div.
+  // Frozen div: reads data-src attribute. Real div: serializes child nodes.
+  getSrcLine(div) {
+    var _a;
+    if (div.classList.contains(FROZEN_CLASS)) {
+      return (_a = div.getAttribute("data-src")) != null ? _a : "";
+    }
+    return Array.from(div.childNodes).map((n) => serializeNode(n, this.editorEl)).join("");
+  }
+  // Returns the visible character count for a div.
+  // Frozen div: reads data-view-len attribute. Real div: walks text nodes.
+  getViewLen(div) {
+    var _a;
+    if (div.classList.contains(FROZEN_CLASS)) {
+      return parseInt((_a = div.getAttribute("data-view-len")) != null ? _a : "0", 10);
+    }
+    return computeDivViewLen(div, this.editorEl);
+  }
+  // Thaws a frozen div: restores real DOM content from data-src and re-registers with observer.
+  thawDiv(div) {
+    var _a;
+    if (!div.classList.contains(FROZEN_CLASS)) return;
+    this.cancelFreeze(div);
+    const src = (_a = div.getAttribute("data-src")) != null ? _a : "";
+    div.classList.remove(FROZEN_CLASS);
+    div.removeAttribute("data-src");
+    div.removeAttribute("data-view-len");
+    div.replaceChildren((0, import_obsidian5.sanitizeHTMLToDom)(parseInlineToHtml(src) || "<br>"));
+    this.observeOne(div);
+  }
+  // Removes frozen state markers without reconstructing DOM (for patchParagraphs, which will
+  // immediately replace children itself — avoids a double replaceChildren).
+  unfrostDiv(div) {
+    if (!div.classList.contains(FROZEN_CLASS)) return;
+    this.cancelFreeze(div);
+    div.classList.remove(FROZEN_CLASS);
+    div.removeAttribute("data-src");
+    div.removeAttribute("data-view-len");
+  }
+  // Thaws the given div and up to neighborCount divs on each side.
+  ensureThawed(div, neighborCount = 10) {
+    this.thawDiv(div);
+    let prev = div.previousElementSibling;
+    for (let i = 0; i < neighborCount && prev; i++, prev = prev.previousElementSibling) {
+      if (prev instanceof HTMLElement) this.thawDiv(prev);
+    }
+    let next = div.nextElementSibling;
+    for (let i = 0; i < neighborCount && next; i++, next = next.nextElementSibling) {
+      if (next instanceof HTMLElement) this.thawDiv(next);
+    }
+  }
+  // Thaws the paragraph containing the cursor and its neighbors. Called on selectionchange.
+  ensureThawedAtCursor() {
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return;
+    let node = sel.getRangeAt(0).startContainer;
+    while (node && node !== this.editorEl) {
+      if (node instanceof HTMLElement && node.parentElement === this.editorEl) {
+        this.ensureThawed(node, 10);
+        return;
+      }
+      node = node.parentElement;
+    }
+  }
+  // Thaws all frozen divs. Called by SearchPanel before running a search.
+  thawAll() {
+    for (const child of Array.from(this.editorEl.children)) {
+      this.thawDiv(child);
+    }
+  }
+  // Toggles freeze suppression. When suppressed, no divs will be frozen.
+  // Used by SearchPanel (suppress while open, resume on close).
+  suppressFreeze(value) {
+    this.freezeSuppressed = value;
+  }
+  // Returns true if the given div may be frozen.
+  shouldFreeze(div) {
+    if (this.freezeSuppressed) return false;
+    if (this.editorEl.classList.contains("tate-scroll-restoring")) return false;
+    if (div.classList.contains("tate-layout-refreshing")) return false;
+    if (!this.editorEl.contains(div)) return false;
+    const sel = window.getSelection();
+    if (sel && sel.rangeCount > 0 && div.contains(sel.getRangeAt(0).startContainer)) return false;
+    if (div.querySelector(".tate-editing")) return false;
+    return true;
+  }
+  // Computes visible text for an Aozora source line (for SearchPanel text extraction on frozen divs).
+  // For every segment: take viewLen visible characters starting at srcStart.
+  // ruby-explicit is the only exception: it has a leading ｜ marker (+1 offset before the base text).
+  buildParagraphVisibleText(src) {
+    const segs = buildSegmentMap(src);
+    const result = [];
+    for (const seg of segs) {
+      if (seg.viewLen === 0) continue;
+      const start = seg.kind === "ruby-explicit" ? seg.srcStart + 1 : seg.srcStart;
+      result.push(src.slice(start, start + seg.viewLen));
+    }
+    return result.join("");
+  }
+  scheduleFreeze(div) {
+    if (div.classList.contains(FROZEN_CLASS)) return;
+    if (this.freezeTimers.has(div)) return;
+    const timer = setTimeout(() => {
+      this.freezeTimers.delete(div);
+      this.freezeDiv(div);
+    }, FREEZE_DELAY_MS);
+    this.freezeTimers.set(div, timer);
+  }
+  cancelFreeze(div) {
+    const timer = this.freezeTimers.get(div);
+    if (timer !== void 0) {
+      clearTimeout(timer);
+      this.freezeTimers.delete(div);
+    }
+  }
+  freezeDiv(div) {
+    if (div.classList.contains(FROZEN_CLASS)) return;
+    if (!this.shouldFreeze(div)) return;
+    const src = this.getSrcLine(div);
+    const viewLen = this.computeViewLen(src);
+    div.replaceChildren();
+    div.classList.add(FROZEN_CLASS);
+    div.setAttribute("data-src", src);
+    div.setAttribute("data-view-len", String(viewLen));
+  }
+  computeViewLen(src) {
+    const segs = buildSegmentMap(src);
+    if (segs.length === 0) return 0;
+    const last = segs[segs.length - 1];
+    return last.viewStart + last.viewLen;
+  }
+  onIntersection(entries) {
+    for (const entry of entries) {
+      const div = entry.target;
+      if (entry.isIntersecting) {
+        this.cancelFreeze(div);
+        if (div.classList.contains(FROZEN_CLASS)) this.thawDiv(div);
+      } else {
+        if (!div.classList.contains(FROZEN_CLASS)) this.scheduleFreeze(div);
+      }
+    }
+  }
+};
+
 // src/view.ts
 var TATE_VIEW_TYPE = "tate-vertical-writing";
-var _VerticalWritingView = class _VerticalWritingView extends import_obsidian5.ItemView {
+var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.ItemView {
   constructor(leaf, plugin) {
     super(leaf);
     this.plugin = plugin;
     this.editorEl = null;
+    this.virtualizer = null;
     this.syncCoordinator = null;
     // Last committed text written to CM6.
     // Used for comparison in onExternalModify to avoid confusion with getValue() which may contain uncommitted IME text.
@@ -2668,7 +2919,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian5.I
     // ensures pushScope/popScope are always balanced regardless of call order.
     this.escScopeActive = false;
     this.searchPanel = null;
-    this.escScope = new import_obsidian5.Scope(this.app.scope);
+    this.escScope = new import_obsidian6.Scope(this.app.scope);
   }
   getViewType() {
     return TATE_VIEW_TYPE;
@@ -2687,7 +2938,11 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian5.I
     const editorEl = new EditorElement(scrollArea);
     this.editorEl = editorEl;
     editorEl.applySettings(this.plugin.settings);
-    this.searchPanel = new SearchPanel(editorEl, container, this.app);
+    const virtualizer = new ParagraphVirtualizer(editorEl.el, scrollArea);
+    this.virtualizer = virtualizer;
+    editorEl.setVirtualizer(virtualizer);
+    virtualizer.attach();
+    this.searchPanel = new SearchPanel(editorEl, container, this.app, virtualizer);
     const spinnerEl = container.createEl("div", { cls: "tate-loading-spinner" });
     this.spinnerEl = spinnerEl;
     const syncCoordinator = new SyncCoordinator(
@@ -2787,6 +3042,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian5.I
       (_a = this.searchPanel) == null ? void 0 : _a.onContentChanged();
     });
     this.registerDomEvent(document, "selectionchange", () => {
+      if (document.activeElement === editorEl.el) virtualizer.ensureThawedAtCursor();
       const contentChanged = editorEl.handleSelectionChange();
       if (contentChanged) this.commitToCm6();
       if (document.activeElement === editorEl.el && !editorEl.isInlineExpanded()) {
@@ -2834,12 +3090,12 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian5.I
     });
     this.registerEvent(
       this.app.vault.on("modify", (file) => {
-        if (file instanceof import_obsidian5.TFile) void syncCoordinator.onExternalModify(file);
+        if (file instanceof import_obsidian6.TFile) void syncCoordinator.onExternalModify(file);
       })
     );
     this.registerEvent(
       this.app.vault.on("delete", (file) => {
-        if (file instanceof import_obsidian5.TFile) {
+        if (file instanceof import_obsidian6.TFile) {
           void this.plugin.deleteCursorPosition(file.path);
           syncCoordinator.onFileDelete(file);
         }
@@ -2847,7 +3103,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian5.I
     );
     this.registerEvent(
       this.app.vault.on("rename", (file, oldPath) => {
-        if (file instanceof import_obsidian5.TFile) {
+        if (file instanceof import_obsidian6.TFile) {
           this.plugin.renameCursorPosition(oldPath, file.path);
           syncCoordinator.onFileRename(file, oldPath);
         }
@@ -2893,7 +3149,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian5.I
         if (!syncCoordinator.currentFile) return;
         const stillOpen = this.app.workspace.getLeavesOfType("markdown").some((leaf) => {
           const mv = leaf.view;
-          return mv instanceof import_obsidian5.MarkdownView && mv.file === syncCoordinator.currentFile;
+          return mv instanceof import_obsidian6.MarkdownView && mv.file === syncCoordinator.currentFile;
         });
         if (!stillOpen) {
           if (this.lastKnownViewOffset !== null) {
@@ -2949,7 +3205,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian5.I
       return;
     }
     for (const leaf of this.app.workspace.getLeavesOfType("markdown")) {
-      if (leaf.view instanceof import_obsidian5.MarkdownView && leaf.view.file) {
+      if (leaf.view instanceof import_obsidian6.MarkdownView && leaf.view.file) {
         const file = leaf.view.file;
         const gen = this.beginScrollRestoring();
         await syncCoordinator.loadFile(file);
@@ -3010,7 +3266,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian5.I
     }
   }
   async onClose() {
-    var _a, _b;
+    var _a, _b, _c;
     (_a = this.searchPanel) == null ? void 0 : _a.close();
     this.popEscScope();
     if (this.selectionChangeRafId !== null) {
@@ -3022,6 +3278,8 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian5.I
     if (p) await p;
     (_b = this.syncCoordinator) == null ? void 0 : _b.dispose();
     this.syncCoordinator = null;
+    (_c = this.virtualizer) == null ? void 0 : _c.detach();
+    this.virtualizer = null;
     this.editorEl = null;
     this.lastCommittedContent = "";
     this.spinnerEl = null;
@@ -3150,7 +3408,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian5.I
   applyRuby() {
     if (!this.editorEl) return;
     if (!this.editorEl.wrapSelectionWithRuby()) {
-      new import_obsidian5.Notice("\u30C6\u30AD\u30B9\u30C8\u3092\u9078\u629E\u3057\u3066\u304F\u3060\u3055\u3044");
+      new import_obsidian6.Notice("\u30C6\u30AD\u30B9\u30C8\u3092\u9078\u629E\u3057\u3066\u304F\u3060\u3055\u3044");
     }
   }
   applyTcy() {
@@ -3162,7 +3420,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian5.I
   applyAnnotation(wrap) {
     if (!this.editorEl) return;
     if (!wrap(this.editorEl)) {
-      new import_obsidian5.Notice("\u30C6\u30AD\u30B9\u30C8\u3092\u9078\u629E\u3057\u3066\u304F\u3060\u3055\u3044");
+      new import_obsidian6.Notice("\u30C6\u30AD\u30B9\u30C8\u3092\u9078\u629E\u3057\u3066\u304F\u3060\u3055\u3044");
     } else {
       this.commitToCm6();
     }
@@ -3175,7 +3433,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian5.I
     if (!file) return null;
     for (const leaf of this.app.workspace.getLeavesOfType("markdown")) {
       const mv = leaf.view;
-      if (mv instanceof import_obsidian5.MarkdownView && mv.file === file) {
+      if (mv instanceof import_obsidian6.MarkdownView && mv.file === file) {
         return mv.editor;
       }
     }
@@ -3186,7 +3444,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian5.I
   guardCm6(e) {
     if (this.getCm6Editor()) return true;
     e.preventDefault();
-    new import_obsidian5.Notice("\u7E26\u66F8\u304D\u30A8\u30C7\u30A3\u30BF\u3092\u4F7F\u7528\u3059\u308B\u306B\u306F\u3001\u5BFE\u5FDC\u3059\u308B Markdown \u30D3\u30E5\u30FC\u3092\u958B\u3044\u3066\u304F\u3060\u3055\u3044");
+    new import_obsidian6.Notice("\u7E26\u66F8\u304D\u30A8\u30C7\u30A3\u30BF\u3092\u4F7F\u7528\u3059\u308B\u306B\u306F\u3001\u5BFE\u5FDC\u3059\u308B Markdown \u30D3\u30E5\u30FC\u3092\u958B\u3044\u3066\u304F\u3060\u3055\u3044");
     return false;
   }
   /** Schedules a debounced commit. Resets the timer on each call so the commit fires
@@ -3300,7 +3558,7 @@ function countChars(source) {
 }
 
 // src/main.ts
-var TatePlugin = class extends import_obsidian6.Plugin {
+var TatePlugin = class extends import_obsidian7.Plugin {
   constructor() {
     super(...arguments);
     this.settings = DEFAULT_SETTINGS;
@@ -3313,7 +3571,7 @@ var TatePlugin = class extends import_obsidian6.Plugin {
     this.statusBarItem = this.addStatusBarItem();
     this.statusBarItem.hide();
     const iconEl = this.statusBarItem.createEl("span", { cls: "tate-status-icon" });
-    (0, import_obsidian6.setIcon)(iconEl, "tally-3");
+    (0, import_obsidian7.setIcon)(iconEl, "tally-3");
     this.charCountEl = this.statusBarItem.createEl("span");
     this.registerView(
       TATE_VIEW_TYPE,

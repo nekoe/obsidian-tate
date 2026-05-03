@@ -7,6 +7,7 @@ import { BoutenGuard } from './BoutenGuard';
 import { CursorAnchorManager } from './CursorAnchorManager';
 import { LiveConverter } from './LiveConverter';
 import { InlineExpander } from './InlineExpander';
+import type { ParagraphVirtualizer } from './ParagraphVirtualizer';
 
 export class InlineEditor {
     // The editing span currently expanded inline. null if not expanded.
@@ -37,6 +38,10 @@ export class InlineEditor {
         this.anchorManager = new CursorAnchorManager(el);
         this.liveConverter = new LiveConverter(el);
         this.expander = new InlineExpander(el);
+    }
+
+    setVirtualizer(v: ParagraphVirtualizer): void {
+        this.anchorManager.setVirtualizer(v);
     }
 
     setExpandSettings(ruby: boolean, tcy: boolean, bouten: boolean): void {

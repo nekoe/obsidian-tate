@@ -4,12 +4,14 @@ import { buildSegmentMap, srcToView } from './SegmentMap';
 import { parseInlineToHtml, parseToHtml, serializeNode } from './AozoraParser';
 import { InlineEditor } from './InlineEditor';
 import { InputTransformer } from './InputTransformer';
-import { isEffectivelyEmpty, clearChildren, ensureBrPlaceholder } from './domHelpers';
+import { isEffectivelyEmpty, clearChildren, ensureBrPlaceholder, computeDivViewLen, isInsideRtNode, findCursorAnchorAncestor } from './domHelpers';
+import type { ParagraphVirtualizer } from './ParagraphVirtualizer';
 
 export class EditorElement {
     readonly el: HTMLDivElement;
     private readonly inlineEditor: InlineEditor;
     private readonly inputTransformer: InputTransformer;
+    private virtualizer: ParagraphVirtualizer | null = null;
 
     constructor(container: HTMLElement) {
         this.el = container.createEl('div');
@@ -21,9 +23,24 @@ export class EditorElement {
         this.inputTransformer = new InputTransformer(this.el, DEFAULT_SETTINGS);
     }
 
+    // Sets the virtualizer. Called from view.ts after creating the EditorElement.
+    setVirtualizer(v: ParagraphVirtualizer): void {
+        this.virtualizer = v;
+        this.inlineEditor.setVirtualizer(v);
+    }
+
     getValue(): string {
+        const virt = this.virtualizer;
         return Array.from(this.el.childNodes)
-            .map(n => serializeNode(n, this.el))
+            .map(n => {
+                if (virt && n instanceof HTMLElement && virt.isFrozen(n)) {
+                    const src = virt.getSrcLine(n);
+                    // Non-first paragraph divs need a leading newline (same as serializeNode DIV logic).
+                    // Use previousElementSibling to ignore bare Text/BR nodes from paste fallback.
+                    return n.previousElementSibling !== null ? '\n' + src : src;
+                }
+                return serializeNode(n, this.el);
+            })
             .join('');
     }
 
@@ -45,6 +62,7 @@ export class EditorElement {
         } else {
             this.el.replaceChildren(sanitizeHTMLToDom(parseToHtml(content)));
         }
+        this.virtualizer?.observeAll();
     }
 
     // ---- Inline expand/collapse (call from selectionchange) ----
@@ -515,6 +533,7 @@ export class EditorElement {
         // so we walk el.childNodes and verify that every node is a <div>.
         if (!this.hasCleanDivStructure(prevLines.length)) {
             el.replaceChildren(sanitizeHTMLToDom(parseToHtml(nextContent)));
+            this.virtualizer?.observeAll();
             return null;
         }
 
@@ -548,8 +567,11 @@ export class EditorElement {
         const changedDivs: HTMLDivElement[] = [];
         for (let i = lo; i < hiNext; i++) {
             const div = el.children[i] as HTMLDivElement;
+            // Strip frozen markers before replacing children (avoids a stale data-src after update).
+            this.virtualizer?.unfrostDiv(div);
             const html = parseInlineToHtml(nextLines[i]) || '<br>';
             div.replaceChildren(sanitizeHTMLToDom(html));
+            this.virtualizer?.observeOne(div);
             changedDivs.push(div);
         }
 
@@ -663,30 +685,51 @@ export class EditorElement {
         const sel = window.getSelection();
         if (!sel || sel.rangeCount === 0) return 0;
         const range = sel.getRangeAt(0);
-        let count = 0;
-        const walker = document.createTreeWalker(this.el, NodeFilter.SHOW_TEXT);
-        let node = walker.nextNode() as Text | null;
 
-        while (node) {
-            if (node === range.startContainer) {
-                if (!this.isInsideRt(node)) {
-                    const text = node.textContent ?? '';
-                    const beforeCursor = this.isInsideAnchorSpan(node)
+        // Find which paragraph div contains the cursor.
+        let cursorDiv: HTMLElement | null = null;
+        let node: Node | null = range.startContainer;
+        while (node && node !== this.el) {
+            if (node instanceof HTMLElement && node.parentElement === this.el) {
+                cursorDiv = node;
+                break;
+            }
+            node = node.parentElement;
+        }
+
+        // Accumulate view lengths of all divs before the cursor div,
+        // skipping frozen divs via data-view-len (O(1) per frozen div).
+        let count = 0;
+        for (const child of Array.from(this.el.children) as HTMLElement[]) {
+            if (child === cursorDiv) break;
+            count += this.virtualizer?.isFrozen(child)
+                ? this.virtualizer.getViewLen(child)
+                : computeDivViewLen(child, this.el);
+        }
+
+        // If the cursor is not inside any child div (e.g. cursor on el itself), return 0.
+        if (!cursorDiv || this.virtualizer?.isFrozen(cursorDiv)) return count;
+
+        // Walk text nodes inside the cursor div to find the exact offset.
+        const walker = document.createTreeWalker(cursorDiv, NodeFilter.SHOW_TEXT);
+        let textNode = walker.nextNode() as Text | null;
+        while (textNode) {
+            if (textNode === range.startContainer) {
+                if (!isInsideRtNode(textNode, this.el)) {
+                    const text = textNode.textContent ?? '';
+                    count += findCursorAnchorAncestor(textNode, this.el)
                         ? text.slice(0, range.startOffset).replace(/\u200B/g, '').length
                         : range.startOffset;
-                    count += beforeCursor;
                 }
                 break;
             }
-            // When startContainer is an Element (e.g. cursor at start of an empty <div><br></div>),
-            // stop once we reach a text node at or past the cursor position.
-            if (range.comparePoint(node, 0) >= 0) break;
-            if (!this.isInsideRt(node)) {
-                count += this.isInsideAnchorSpan(node)
-                    ? (node.textContent ?? '').replace(/\u200B/g, '').length
-                    : node.length;
+            if (range.comparePoint(textNode, 0) >= 0) break;
+            if (!isInsideRtNode(textNode, this.el)) {
+                count += findCursorAnchorAncestor(textNode, this.el)
+                    ? (textNode.textContent ?? '').replace(/\u200B/g, '').length
+                    : textNode.length;
             }
-            node = walker.nextNode() as Text | null;
+            textNode = walker.nextNode() as Text | null;
         }
         return count;
     }
@@ -695,39 +738,57 @@ export class EditorElement {
         const sel = window.getSelection();
         if (!sel) return;
         let remaining = offset;
-        const walker = document.createTreeWalker(this.el, NodeFilter.SHOW_TEXT);
-        let node = walker.nextNode() as Text | null;
 
-        while (node) {
-            if (!this.isInsideRt(node)) {
-                const visLen = this.isInsideAnchorSpan(node)
-                    ? (node.textContent ?? '').replace(/\u200B/g, '').length
-                    : node.length;
-                if (remaining <= visLen) {
-                    const range = document.createRange();
-                    let actualOffset: number;
-                    if (this.isInsideAnchorSpan(node)) {
-                        // Map visible offset to actual offset, skipping U+200B
-                        const text = node.textContent ?? '';
-                        actualOffset = 0;
-                        let visible = 0;
-                        for (let i = 0; i < text.length; i++) {
-                            if (visible === remaining) { actualOffset = i; break; }
-                            if (text[i] !== '\u200B') visible++;
-                            actualOffset = i + 1;
-                        }
-                    } else {
-                        actualOffset = remaining;
-                    }
-                    range.setStart(node, actualOffset);
-                    range.collapse(true);
-                    sel.removeAllRanges();
-                    sel.addRange(range);
+        // Scan paragraph divs first. For frozen divs, skip by getViewLen.
+        // For real divs, walk text nodes to find the exact position.
+        for (const child of Array.from(this.el.children) as HTMLElement[]) {
+            if (this.virtualizer?.isFrozen(child)) {
+                const viewLen = this.virtualizer.getViewLen(child);
+                if (remaining <= viewLen) {
+                    // Offset falls inside this frozen div — thaw it first, then retry once.
+                    // Guard against thaw failure: only retry if the class was actually removed.
+                    this.virtualizer.thawDiv(child);
+                    if (!this.virtualizer.isFrozen(child)) this.setVisibleOffset(offset);
                     return;
                 }
-                remaining -= visLen;
+                remaining -= viewLen;
+                continue;
             }
-            node = walker.nextNode() as Text | null;
+
+            // Real div: walk its text nodes.
+            const walker = document.createTreeWalker(child, NodeFilter.SHOW_TEXT);
+            let node = walker.nextNode() as Text | null;
+            while (node) {
+                if (!isInsideRtNode(node, this.el)) {
+                    const isAnchor = !!findCursorAnchorAncestor(node, this.el);
+                    const visLen = isAnchor
+                        ? (node.textContent ?? '').replace(/\u200B/g, '').length
+                        : node.length;
+                    if (remaining <= visLen) {
+                        const range = document.createRange();
+                        let actualOffset: number;
+                        if (isAnchor) {
+                            const text = node.textContent ?? '';
+                            actualOffset = 0;
+                            let visible = 0;
+                            for (let i = 0; i < text.length; i++) {
+                                if (visible === remaining) { actualOffset = i; break; }
+                                if (text[i] !== '\u200B') visible++;
+                                actualOffset = i + 1;
+                            }
+                        } else {
+                            actualOffset = remaining;
+                        }
+                        range.setStart(node, actualOffset);
+                        range.collapse(true);
+                        sel.removeAllRanges();
+                        sel.addRange(range);
+                        return;
+                    }
+                    remaining -= visLen;
+                }
+                node = walker.nextNode() as Text | null;
+            }
         }
 
         const range = document.createRange();
@@ -735,23 +796,5 @@ export class EditorElement {
         range.collapse(false);
         sel.removeAllRanges();
         sel.addRange(range);
-    }
-
-    private isInsideRt(node: Node): boolean {
-        let parent = node.parentElement;
-        while (parent && parent !== this.el) {
-            if (parent.tagName === 'RT') return true;
-            parent = parent.parentElement;
-        }
-        return false;
-    }
-
-    private isInsideAnchorSpan(node: Node): boolean {
-        let parent = node.parentElement;
-        while (parent && parent !== this.el) {
-            if (parent.classList.contains('tate-cursor-anchor')) return true;
-            parent = parent.parentElement;
-        }
-        return false;
     }
 }

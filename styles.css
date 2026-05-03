@@ -48,6 +48,12 @@
     contain-intrinsic-block-size: auto 44px;
 }
 
+/* Frozen paragraph placeholder: no children, stores Aozora source in data-src.
+   pointer-events:none avoids inadvertent click/selection on the empty element. */
+.tate-editor > div.tate-frozen {
+    pointer-events: none;
+}
+
 /* During cursor/scroll restore, force full layout so scrollIntoView gets accurate
    paragraph positions rather than the 44px fallback estimates. The class is added
    synchronously before the scroll call and removed one rAF later (see view.ts). */

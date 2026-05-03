@@ -3,6 +3,7 @@ import type TatePlugin from './main';
 import { SyncCoordinator } from './sync/SyncCoordinator';
 import { EditorElement } from './ui/EditorElement';
 import { SearchPanel } from './ui/SearchPanel';
+import { ParagraphVirtualizer } from './ui/ParagraphVirtualizer';
 import { buildSegmentMap, viewToSrc } from './ui/SegmentMap';
 import { TatePluginSettings } from './settings';
 
@@ -10,6 +11,7 @@ export const TATE_VIEW_TYPE = 'tate-vertical-writing';
 
 export class VerticalWritingView extends ItemView {
     private editorEl: EditorElement | null = null;
+    private virtualizer: ParagraphVirtualizer | null = null;
     private syncCoordinator: SyncCoordinator | null = null;
     // Last committed text written to CM6.
     // Used for comparison in onExternalModify to avoid confusion with getValue() which may contain uncommitted IME text.
@@ -66,7 +68,14 @@ export class VerticalWritingView extends ItemView {
         this.editorEl = editorEl;
         editorEl.applySettings(this.plugin.settings);
 
-        this.searchPanel = new SearchPanel(editorEl, container, this.app);
+        // Captured as a local variable (same pattern as editorEl) so closures below can
+        // reference it without null-asserting this.virtualizer on every event.
+        const virtualizer = new ParagraphVirtualizer(editorEl.el, scrollArea);
+        this.virtualizer = virtualizer;
+        editorEl.setVirtualizer(virtualizer);
+        virtualizer.attach();
+
+        this.searchPanel = new SearchPanel(editorEl, container, this.app, virtualizer);
 
         const spinnerEl = container.createEl('div', { cls: 'tate-loading-spinner' });
         this.spinnerEl = spinnerEl;
@@ -198,6 +207,8 @@ export class VerticalWritingView extends ItemView {
             this.searchPanel?.onContentChanged();
         });
         this.registerDomEvent(document, 'selectionchange', () => {
+            // Ensure the cursor paragraph and its neighbors are thawed before any DOM access.
+            if (document.activeElement === editorEl.el) virtualizer.ensureThawedAtCursor();
             const contentChanged = editorEl.handleSelectionChange();
             if (contentChanged) this.commitToCm6(); // Commit only if collapse changed content
             // Track the cursor offset while the editor has focus so it can be restored after
@@ -470,6 +481,8 @@ export class VerticalWritingView extends ItemView {
         if (p) await p;
         this.syncCoordinator?.dispose();
         this.syncCoordinator = null;
+        this.virtualizer?.detach();
+        this.virtualizer = null;
         this.editorEl = null;
         this.lastCommittedContent = '';
         this.spinnerEl = null; // DOM is destroyed by Obsidian; clear reference
