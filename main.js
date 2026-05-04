@@ -3046,8 +3046,8 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
     this.virtualizer = null;
     this.syncCoordinator = null;
     // Last committed text written to CM6.
-    // Used by SyncCoordinator.checkAndApplyExternalChange() to avoid confusion with getValue()
-    // which may contain uncommitted IME candidate text.
+    // Passed to SyncCoordinator as getEditorValue() so onModify() and checkAndApplyExternalChange()
+    // compare vault content against committed text, not getValue() which may contain uncommitted IME.
     this.lastCommittedContent = "";
     this.commitTimer = null;
     // Deferred cursor offset: set when a file is loaded while the view is not active.

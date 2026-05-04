@@ -14,8 +14,8 @@ export class VerticalWritingView extends ItemView {
     private virtualizer: ParagraphVirtualizer | null = null;
     private syncCoordinator: SyncCoordinator | null = null;
     // Last committed text written to CM6.
-    // Used by SyncCoordinator.checkAndApplyExternalChange() to avoid confusion with getValue()
-    // which may contain uncommitted IME candidate text.
+    // Passed to SyncCoordinator as getEditorValue() so onModify() and checkAndApplyExternalChange()
+    // compare vault content against committed text, not getValue() which may contain uncommitted IME.
     private lastCommittedContent = '';
     private commitTimer: ReturnType<typeof setTimeout> | null = null;
     private static readonly COMMIT_DEBOUNCE_MS = 500;
