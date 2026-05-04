@@ -2411,7 +2411,7 @@ function extractHybridText(editorEl, virtualizer) {
   let globalOffset = 0;
   for (const child of Array.from(editorEl.children)) {
     if (!(child instanceof HTMLElement)) continue;
-    if (virtualizer == null ? void 0 : virtualizer.isFrozen(child)) {
+    if (virtualizer.isFrozen(child)) {
       const src = (_a = child.getAttribute("data-src")) != null ? _a : "";
       const text = virtualizer.buildParagraphVisibleText(src);
       paragraphs.push({ div: child, frozen: true, globalStart: globalOffset, text, segments: [] });
@@ -2500,7 +2500,7 @@ var SearchPanel = class {
     return this.panelEl !== null;
   }
   open(initialOffset) {
-    var _a, _b, _c;
+    var _a, _b;
     if (this.isOpen) {
       (_a = this.inputEl) == null ? void 0 : _a.focus();
       return;
@@ -2510,25 +2510,25 @@ var SearchPanel = class {
     this.editorFocused = false;
     this.matchEntries = [];
     this.currentIndex = -1;
-    (_b = this.virtualizer) == null ? void 0 : _b.suppressFreeze(true);
+    this.virtualizer.suppressFreeze(true);
     this.buildPanel();
     this.app.keymap.pushScope(this.searchScope);
-    (_c = this.inputEl) == null ? void 0 : _c.focus();
+    (_b = this.inputEl) == null ? void 0 : _b.focus();
   }
   close() {
-    var _a, _b, _c;
+    var _a, _b;
     if (!this.isOpen) return null;
     this.app.keymap.popScope(this.searchScope);
     this.clearHighlights();
-    (_a = this.virtualizer) == null ? void 0 : _a.suppressFreeze(false);
-    (_b = this.panelEl) == null ? void 0 : _b.remove();
+    this.virtualizer.suppressFreeze(false);
+    (_a = this.panelEl) == null ? void 0 : _a.remove();
     this.panelEl = null;
     this.inputEl = null;
     this.countEl = null;
     this.matchEntries = [];
     this.currentIndex = -1;
     const wasEditorFocused = this.editorFocused;
-    const restoreOffset = wasEditorFocused ? null : (_c = this.lastNavigatedOffset) != null ? _c : this.prSearchOffset;
+    const restoreOffset = wasEditorFocused ? null : (_b = this.lastNavigatedOffset) != null ? _b : this.prSearchOffset;
     this.prSearchOffset = null;
     this.lastNavigatedOffset = null;
     this.editorFocused = false;
@@ -2662,7 +2662,7 @@ var SearchPanel = class {
   //              update lastNavigatedOffset, restore focus to the input, and scroll into view.
   // scroll=false: update highlight and count only (called from onContentChanged).
   setFocus(index, scroll) {
-    var _a, _b;
+    var _a;
     this.currentIndex = index;
     this.updateCount();
     this.applyFocusHighlight();
@@ -2673,7 +2673,7 @@ var SearchPanel = class {
     if (entry.kind === "thawed") {
       range = entry.range;
     } else {
-      (_a = this.virtualizer) == null ? void 0 : _a.thawDiv(entry.div);
+      this.virtualizer.thawDiv(entry.div);
       const segments = extractSegmentsFromDiv(entry.div, this.editorElementRef.el);
       const r = createRangeInParagraph(segments, entry.localStart, entry.localEnd);
       if (!r) return;
@@ -2690,18 +2690,17 @@ var SearchPanel = class {
       sel.addRange(cursorRange);
     }
     this.lastNavigatedOffset = this.editorElementRef.getViewCursorOffset();
-    (_b = this.inputEl) == null ? void 0 : _b.focus();
+    (_a = this.inputEl) == null ? void 0 : _a.focus();
     this.scrollRangeIntoView(range);
   }
   // Upgrades FrozenMatchEntries whose divs have since been thawed by the IntersectionObserver.
   // Called in the scrollRangeIntoView rAF callback so hits on divs that entered the viewport
   // after navigation are included in the next highlight paint.
   updateFrozenToThawedEntries() {
-    var _a;
     for (let i = 0; i < this.matchEntries.length; i++) {
       const entry = this.matchEntries[i];
       if (entry.kind !== "frozen") continue;
-      if ((_a = this.virtualizer) == null ? void 0 : _a.isFrozen(entry.div)) continue;
+      if (this.virtualizer.isFrozen(entry.div)) continue;
       const segments = extractSegmentsFromDiv(entry.div, this.editorElementRef.el);
       const range = createRangeInParagraph(segments, entry.localStart, entry.localEnd);
       if (range) {
@@ -2848,8 +2847,10 @@ var ParagraphVirtualizer = class {
   // fresh callback for it. Call after tate-layout-refreshing is removed for a div that was
   // off-screen throughout the mutation, so off-screen divs get their freeze rescheduled with
   // an accurate width (from the contain-intrinsic-block-size cache updated by Frame N).
+  // Skips divs that are no longer in the editor (removed between schedule and fire).
   reobserveOne(div) {
     if (!this.observer) return;
+    if (!this.editorEl.contains(div)) return;
     this.observer.unobserve(div);
     this.observer.observe(div);
   }
@@ -2983,19 +2984,13 @@ var ParagraphVirtualizer = class {
     if (!this.shouldFreeze(div)) return;
     if (!this.seenDivs.has(div)) return;
     const src = this.getSrcLine(div);
-    const viewLen = this.computeViewLen(src);
+    const viewLen = this.buildParagraphVisibleText(src).length;
     const pixelWidth = (_a = this.lastKnownWidths.get(div)) != null ? _a : 0;
     if (pixelWidth > 0) div.style.setProperty("width", `${pixelWidth}px`);
     div.replaceChildren();
     div.classList.add(FROZEN_CLASS);
     div.setAttribute("data-src", src);
     div.setAttribute("data-view-len", String(viewLen));
-  }
-  computeViewLen(src) {
-    const segs = buildSegmentMap(src);
-    if (segs.length === 0) return 0;
-    const last = segs[segs.length - 1];
-    return last.viewStart + last.viewLen;
   }
   onIntersection(entries) {
     for (const entry of entries) {

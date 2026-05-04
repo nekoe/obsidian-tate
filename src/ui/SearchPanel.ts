@@ -71,14 +71,14 @@ function extractSegmentsFromDiv(div: HTMLElement, editorEl: HTMLElement): LocalS
 // Frozen divs are represented by their data-src visible text via virtualizer.
 function extractHybridText(
     editorEl: HTMLDivElement,
-    virtualizer?: ParagraphVirtualizer,
+    virtualizer: ParagraphVirtualizer,
 ): { text: string; paragraphs: ParagraphTextData[] } {
     const paragraphs: ParagraphTextData[] = [];
     let globalOffset = 0;
 
     for (const child of Array.from(editorEl.children)) {
         if (!(child instanceof HTMLElement)) continue;
-        if (virtualizer?.isFrozen(child)) {
+        if (virtualizer.isFrozen(child)) {
             const src = child.getAttribute('data-src') ?? '';
             const text = virtualizer.buildParagraphVisibleText(src);
             paragraphs.push({ div: child, frozen: true, globalStart: globalOffset, text, segments: [] });
@@ -151,7 +151,7 @@ export class SearchPanel {
         private readonly editorElementRef: EditorElement,
         private readonly container: HTMLElement,
         private readonly app: App,
-        private readonly virtualizer?: ParagraphVirtualizer,
+        private readonly virtualizer: ParagraphVirtualizer,
     ) {
         this.searchScope = new Scope(app.scope);
 
@@ -199,7 +199,7 @@ export class SearchPanel {
         this.currentIndex = -1;
         // Suppress freeze while the panel is open so DOM ranges remain valid.
         // No thawAll() needed: frozen divs are searched via data-src without thawing.
-        this.virtualizer?.suppressFreeze(true);
+        this.virtualizer.suppressFreeze(true);
         this.buildPanel();
         this.app.keymap.pushScope(this.searchScope);
         this.inputEl?.focus();
@@ -211,7 +211,7 @@ export class SearchPanel {
         this.app.keymap.popScope(this.searchScope);
         this.clearHighlights();
         // Re-enable freezing after closing (IntersectionObserver will gradually freeze off-screen divs).
-        this.virtualizer?.suppressFreeze(false);
+        this.virtualizer.suppressFreeze(false);
 
         this.panelEl?.remove();
         this.panelEl = null;
@@ -414,7 +414,7 @@ export class SearchPanel {
         if (entry.kind === 'thawed') {
             range = entry.range;
         } else {
-            this.virtualizer?.thawDiv(entry.div);
+            this.virtualizer.thawDiv(entry.div);
             const segments = extractSegmentsFromDiv(entry.div, this.editorElementRef.el);
             const r = createRangeInParagraph(segments, entry.localStart, entry.localEnd);
             if (!r) return;
@@ -448,7 +448,7 @@ export class SearchPanel {
         for (let i = 0; i < this.matchEntries.length; i++) {
             const entry = this.matchEntries[i];
             if (entry.kind !== 'frozen') continue;
-            if (this.virtualizer?.isFrozen(entry.div)) continue;
+            if (this.virtualizer.isFrozen(entry.div)) continue;
             const segments = extractSegmentsFromDiv(entry.div, this.editorElementRef.el);
             const range = createRangeInParagraph(segments, entry.localStart, entry.localEnd);
             if (range) {

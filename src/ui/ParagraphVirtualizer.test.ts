@@ -252,4 +252,107 @@ describe('ParagraphVirtualizer', () => {
             expect(virt.getViewLen(div)).toBe(visText.length);
         });
     });
+
+    // ---- IntersectionObserver lifecycle ----
+
+    describe('IntersectionObserver lifecycle', () => {
+        let ioCallback: IntersectionObserverCallback;
+        let mockObserve: ReturnType<typeof vi.fn>;
+        let mockUnobserve: ReturnType<typeof vi.fn>;
+        let mockDisconnect: ReturnType<typeof vi.fn>;
+        let virtIO: ParagraphVirtualizer;
+
+        beforeEach(() => {
+            mockObserve = vi.fn();
+            mockUnobserve = vi.fn();
+            mockDisconnect = vi.fn();
+            vi.stubGlobal('IntersectionObserver', vi.fn((cb: IntersectionObserverCallback) => {
+                ioCallback = cb;
+                return { observe: mockObserve, unobserve: mockUnobserve, disconnect: mockDisconnect };
+            }));
+            virtIO = new ParagraphVirtualizer(editorEl, scrollArea);
+            virtIO.attach();
+        });
+
+        afterEach(() => {
+            virtIO.detach();
+            vi.unstubAllGlobals();
+            vi.useRealTimers();
+        });
+
+        // Fires a synthetic IntersectionObserver callback entry for the given div.
+        function fireEntry(div: HTMLElement, isIntersecting: boolean, width = 100): void {
+            ioCallback([{
+                target: div,
+                isIntersecting,
+                boundingClientRect: { width } as DOMRectReadOnly,
+                intersectionRect: {} as DOMRectReadOnly,
+                rootBounds: null,
+                intersectionRatio: isIntersecting ? 1 : 0,
+                time: 0,
+            } as IntersectionObserverEntry], {} as IntersectionObserver);
+        }
+
+        it('isIntersecting:true thaws a frozen div and marks it as seen', () => {
+            const div = addFrozenDiv(editorEl, '猫', 1);
+            fireEntry(div, true, 80);
+            expect(div.classList.contains(FROZEN_CLASS)).toBe(false); // thawed
+            // seenDivs populated → div is now eligible for freezing
+            expect(virtIO.shouldFreeze(div)).toBe(true);
+        });
+
+        it('isIntersecting:false captures width, schedules freeze, and freezes after delay', () => {
+            vi.useFakeTimers();
+            const div = addRealDiv(editorEl, '猫');
+            fireEntry(div, true);          // mark as seen
+            fireEntry(div, false, 88);     // leave viewport; schedule freeze with width=88
+            expect(div.classList.contains(FROZEN_CLASS)).toBe(false); // timer not fired yet
+            vi.advanceTimersByTime(51);    // past FREEZE_DELAY_MS (50 ms)
+            expect(div.classList.contains(FROZEN_CLASS)).toBe(true);
+            expect(div.style.width).toBe('88px');
+        });
+
+        it('never-seen div is not frozen even after freeze timer fires', () => {
+            vi.useFakeTimers();
+            const div = addRealDiv(editorEl, '猫');
+            // Fire isIntersecting:false without ever being seen (no prior isIntersecting:true)
+            fireEntry(div, false, 88);
+            vi.advanceTimersByTime(100);
+            expect(div.classList.contains(FROZEN_CLASS)).toBe(false);
+        });
+
+        it('re-entering the viewport cancels a pending freeze', () => {
+            vi.useFakeTimers();
+            const div = addRealDiv(editorEl, '猫');
+            fireEntry(div, true);          // mark as seen
+            fireEntry(div, false, 88);     // schedule freeze
+            fireEntry(div, true);          // cancel freeze before timer fires
+            vi.advanceTimersByTime(100);
+            expect(div.classList.contains(FROZEN_CLASS)).toBe(false);
+        });
+
+        it('observeAll with tate-scroll-restoring captures widths and makes divs freeze-eligible', () => {
+            vi.useFakeTimers();
+            editorEl.classList.add('tate-scroll-restoring');
+            const div = addRealDiv(editorEl, '猫');
+            vi.spyOn(div, 'getBoundingClientRect').mockReturnValue({ width: 120 } as DOMRect);
+            virtIO.observeAll(); // captures width + adds to seenDivs
+            editorEl.classList.remove('tate-scroll-restoring');
+            // Simulate IO firing isIntersecting:false (as reobserveAll triggers after scroll-restore)
+            fireEntry(div, false, 120);
+            vi.advanceTimersByTime(51);
+            expect(div.classList.contains(FROZEN_CLASS)).toBe(true);
+            expect(div.style.width).toBe('120px');
+        });
+
+        it('reobserveOne skips a div that has been removed from the editor', () => {
+            const div = addRealDiv(editorEl, '猫');
+            editorEl.removeChild(div);
+            const observeCallsBefore = mockObserve.mock.calls.length;
+            const unobserveCallsBefore = mockUnobserve.mock.calls.length;
+            virtIO.reobserveOne(div); // should be a no-op for detached div
+            expect(mockObserve.mock.calls.length).toBe(observeCallsBefore);
+            expect(mockUnobserve.mock.calls.length).toBe(unobserveCallsBefore);
+        });
+    });
 });

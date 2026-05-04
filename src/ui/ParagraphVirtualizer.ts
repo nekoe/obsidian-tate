@@ -94,8 +94,10 @@ export class ParagraphVirtualizer {
     // fresh callback for it. Call after tate-layout-refreshing is removed for a div that was
     // off-screen throughout the mutation, so off-screen divs get their freeze rescheduled with
     // an accurate width (from the contain-intrinsic-block-size cache updated by Frame N).
+    // Skips divs that are no longer in the editor (removed between schedule and fire).
     reobserveOne(div: HTMLElement): void {
         if (!this.observer) return;
+        if (!this.editorEl.contains(div)) return;
         this.observer.unobserve(div);
         this.observer.observe(div);
     }
@@ -246,7 +248,7 @@ export class ParagraphVirtualizer {
         // (content-visibility:auto reports the 44px fallback for never-rendered elements).
         if (!this.seenDivs.has(div)) return;
         const src = this.getSrcLine(div);
-        const viewLen = this.computeViewLen(src);
+        const viewLen = this.buildParagraphVisibleText(src).length;
         const pixelWidth = this.lastKnownWidths.get(div) ?? 0;
         // Set style.width before emptying content so both changes are batched into a single
         // layout pass — the div stays at pixelWidth throughout the transition with no size
@@ -259,13 +261,6 @@ export class ParagraphVirtualizer {
         div.classList.add(FROZEN_CLASS);
         div.setAttribute('data-src', src);
         div.setAttribute('data-view-len', String(viewLen));
-    }
-
-    private computeViewLen(src: string): number {
-        const segs = buildSegmentMap(src);
-        if (segs.length === 0) return 0;
-        const last = segs[segs.length - 1];
-        return last.viewStart + last.viewLen;
     }
 
     private onIntersection(entries: IntersectionObserverEntry[]): void {
