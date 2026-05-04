@@ -98,6 +98,7 @@ See the design documents in `docs/design/` for details:
 - [Loading Spinner During Scroll Restore](docs/design/20260426_loading_spinner.md)
 - [Search Panel: Incremental Search with CSS Custom Highlight API](docs/design/20260428_search_panel.md)
 - [Proactive Layout Cache Refresh for content-visibility:auto (tate-layout-refreshing, two-rAF pattern)](docs/design/20260429_proactive_layout_cache_refresh.md)
+- [DOM Virtualization: Frozen Paragraph Placeholders (ParagraphVirtualizer, freeze/thaw lifecycle)](docs/design/20260504_dom_virtualization.md)
 
 ## Settings
 
