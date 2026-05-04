@@ -13,6 +13,15 @@ const FREEZE_DELAY_MS = 50;
 export class ParagraphVirtualizer {
     private observer: IntersectionObserver | null = null;
     private freezeTimers = new Map<HTMLElement, ReturnType<typeof setTimeout>>();
+    // Pixel widths captured in onIntersection (no layout flush needed) and applied as
+    // style.width when freezing, so the scroll container does not change width when a
+    // div's real content is removed.
+    private lastKnownWidths = new Map<HTMLElement, number>();
+    // Divs that have entered the viewport at least once (rendered by the browser).
+    // Only seen divs are eligible for freezing: a never-seen div has no accurate width
+    // measurement (content-visibility:auto returns the 44px fallback for such divs),
+    // so freezing it would produce the wrong style.width and cause a layout shift on thaw.
+    private seenDivs = new Set<HTMLElement>();
     private freezeSuppressed = false;
 
     constructor(
@@ -41,12 +50,37 @@ export class ParagraphVirtualizer {
         this.observer = null;
         for (const timer of this.freezeTimers.values()) clearTimeout(timer);
         this.freezeTimers.clear();
+        this.lastKnownWidths.clear();
+        this.seenDivs.clear();
     }
 
     // Registers all current editorEl children with the observer (call after setValue).
+    // If tate-scroll-restoring is active, content-visibility:visible is in effect for all
+    // divs, so their real widths are available via getBoundingClientRect. Capturing them here
+    // marks every div as seen and stores an accurate width, making all paragraphs immediately
+    // eligible for freezing once the class is removed.
     observeAll(): void {
         if (!this.observer) return;
+        const captureWidths = this.editorEl.classList.contains('tate-scroll-restoring');
         for (const child of Array.from(this.editorEl.children)) {
+            this.observer.observe(child);
+            if (captureWidths && child instanceof HTMLElement) {
+                const w = child.getBoundingClientRect().width;
+                if (w > 0) {
+                    this.seenDivs.add(child);
+                    this.lastKnownWidths.set(child, w);
+                }
+            }
+        }
+    }
+
+    // Unobserves then re-observes all children, forcing the IntersectionObserver to fire
+    // fresh callbacks for every div. Call after tate-scroll-restoring is removed so divs
+    // that are now off-screen (but seenDivs-eligible) get their freeze timers scheduled.
+    reobserveAll(): void {
+        if (!this.observer) return;
+        for (const child of Array.from(this.editorEl.children)) {
+            this.observer.unobserve(child);
             this.observer.observe(child);
         }
     }
@@ -89,6 +123,11 @@ export class ParagraphVirtualizer {
         div.classList.remove(FROZEN_CLASS);
         div.removeAttribute('data-src');
         div.removeAttribute('data-view-len');
+        // Remove the frozen width pin and any stale contain-intrinsic-block-size from a
+        // previous freeze cycle. Both operations and replaceChildren are batched into a
+        // single browser layout pass, so there is no intermediate size flash.
+        div.style.removeProperty('width');
+        div.style.removeProperty('contain-intrinsic-block-size');
         div.replaceChildren(sanitizeHTMLToDom(parseInlineToHtml(src) || '<br>'));
         this.observeOne(div); // re-register so future viewport exits trigger a new freeze
     }
@@ -101,6 +140,8 @@ export class ParagraphVirtualizer {
         div.classList.remove(FROZEN_CLASS);
         div.removeAttribute('data-src');
         div.removeAttribute('data-view-len');
+        div.style.removeProperty('width');
+        div.style.removeProperty('contain-intrinsic-block-size');
     }
 
     // Thaws the given div and up to neighborCount divs on each side.
@@ -185,13 +226,25 @@ export class ParagraphVirtualizer {
             clearTimeout(timer);
             this.freezeTimers.delete(div);
         }
+        this.lastKnownWidths.delete(div);
     }
 
     private freezeDiv(div: HTMLElement): void {
         if (div.classList.contains(FROZEN_CLASS)) return;
         if (!this.shouldFreeze(div)) return;
+        // Never freeze a div that has not been rendered at least once. Its width is unknown
+        // (content-visibility:auto reports the 44px fallback for never-rendered elements).
+        if (!this.seenDivs.has(div)) return;
         const src = this.getSrcLine(div);
         const viewLen = this.computeViewLen(src);
+        const pixelWidth = this.lastKnownWidths.get(div) ?? 0;
+        // Set style.width before emptying content so both changes are batched into a single
+        // layout pass — the div stays at pixelWidth throughout the transition with no size
+        // flash regardless of whether it is inside or outside Chrome's content-visibility
+        // rendering buffer (~3600px). contain-intrinsic-block-size only applies when
+        // content-visibility:auto skips layout (>~3600px away), which is too narrow a
+        // condition to rely on for scroll-container stability.
+        if (pixelWidth > 0) div.style.setProperty('width', `${pixelWidth}px`);
         div.replaceChildren();
         div.classList.add(FROZEN_CLASS);
         div.setAttribute('data-src', src);
@@ -209,10 +262,17 @@ export class ParagraphVirtualizer {
         for (const entry of entries) {
             const div = entry.target as HTMLElement;
             if (entry.isIntersecting) {
+                this.seenDivs.add(div); // mark as rendered; now eligible for future freezing
                 this.cancelFreeze(div);
                 if (div.classList.contains(FROZEN_CLASS)) this.thawDiv(div);
             } else {
-                if (!div.classList.contains(FROZEN_CLASS)) this.scheduleFreeze(div);
+                if (!div.classList.contains(FROZEN_CLASS)) {
+                    // Cache the real pixel width now (no layout flush: boundingClientRect is
+                    // provided by the observer callback) so freezeDiv can pin style.width.
+                    const w = entry.boundingClientRect.width;
+                    if (w > 0) this.lastKnownWidths.set(div, w);
+                    this.scheduleFreeze(div);
+                }
             }
         }
     }

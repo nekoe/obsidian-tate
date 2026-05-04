@@ -457,8 +457,10 @@ export class VerticalWritingView extends ItemView {
                 el.setViewCursorOffset(savedOffset);
                 el.scrollCursorIntoView(); // tate-scroll-restoring still active → real sizes
                 requestAnimationFrame(() => {
-                    if (this.scrollRestoringGeneration === gen)
+                    if (this.scrollRestoringGeneration === gen) {
                         el.el.classList.remove('tate-scroll-restoring');
+                        this.virtualizer?.reobserveAll();
+                    }
                 });
             });
         } else {
@@ -517,6 +519,7 @@ export class VerticalWritingView extends ItemView {
             if (this.scrollRestoringGeneration === gen) {
                 this.editorEl?.el.classList.remove('tate-scroll-restoring');
                 this.hideLoadingSpinner();
+                this.virtualizer?.reobserveAll();
             }
         });
     }
@@ -527,6 +530,7 @@ export class VerticalWritingView extends ItemView {
         ++this.scrollRestoringGeneration;
         this.editorEl?.el.classList.remove('tate-scroll-restoring');
         this.hideLoadingSpinner();
+        this.virtualizer?.reobserveAll();
     }
 
     /** Proactively refreshes the contain-intrinsic-block-size:auto cache for divs that
@@ -587,8 +591,10 @@ export class VerticalWritingView extends ItemView {
                     el.setViewCursorOffset(offset);
                     el.scrollCursorIntoView();
                     requestAnimationFrame(() => {
-                        if (this.scrollRestoringGeneration === gen)
+                        if (this.scrollRestoringGeneration === gen) {
                             el.el.classList.remove('tate-scroll-restoring');
+                            this.virtualizer?.reobserveAll();
+                        }
                     });
                 });
             } else if (this.lastKnownViewOffset !== null) {
@@ -763,8 +769,10 @@ export class VerticalWritingView extends ItemView {
                 this.hideLoadingSpinner();
                 editorEl.scrollCursorIntoView('nearest', 'nearest');
                 requestAnimationFrame(() => {
-                    if (this.scrollRestoringGeneration === gen)
+                    if (this.scrollRestoringGeneration === gen) {
                         editorEl.el.classList.remove('tate-scroll-restoring');
+                        this.virtualizer?.reobserveAll();
+                    }
                 });
             });
         } else {

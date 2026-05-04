@@ -2703,6 +2703,15 @@ var ParagraphVirtualizer = class {
     this.scrollArea = scrollArea;
     this.observer = null;
     this.freezeTimers = /* @__PURE__ */ new Map();
+    // Pixel widths captured in onIntersection (no layout flush needed) and applied as
+    // style.width when freezing, so the scroll container does not change width when a
+    // div's real content is removed.
+    this.lastKnownWidths = /* @__PURE__ */ new Map();
+    // Divs that have entered the viewport at least once (rendered by the browser).
+    // Only seen divs are eligible for freezing: a never-seen div has no accurate width
+    // measurement (content-visibility:auto returns the 44px fallback for such divs),
+    // so freezing it would produce the wrong style.width and cause a layout shift on thaw.
+    this.seenDivs = /* @__PURE__ */ new Set();
     this.freezeSuppressed = false;
   }
   // Starts the IntersectionObserver and begins observing all current children.
@@ -2726,11 +2735,35 @@ var ParagraphVirtualizer = class {
     this.observer = null;
     for (const timer of this.freezeTimers.values()) clearTimeout(timer);
     this.freezeTimers.clear();
+    this.lastKnownWidths.clear();
+    this.seenDivs.clear();
   }
   // Registers all current editorEl children with the observer (call after setValue).
+  // If tate-scroll-restoring is active, content-visibility:visible is in effect for all
+  // divs, so their real widths are available via getBoundingClientRect. Capturing them here
+  // marks every div as seen and stores an accurate width, making all paragraphs immediately
+  // eligible for freezing once the class is removed.
   observeAll() {
     if (!this.observer) return;
+    const captureWidths = this.editorEl.classList.contains("tate-scroll-restoring");
     for (const child of Array.from(this.editorEl.children)) {
+      this.observer.observe(child);
+      if (captureWidths && child instanceof HTMLElement) {
+        const w = child.getBoundingClientRect().width;
+        if (w > 0) {
+          this.seenDivs.add(child);
+          this.lastKnownWidths.set(child, w);
+        }
+      }
+    }
+  }
+  // Unobserves then re-observes all children, forcing the IntersectionObserver to fire
+  // fresh callbacks for every div. Call after tate-scroll-restoring is removed so divs
+  // that are now off-screen (but seenDivs-eligible) get their freeze timers scheduled.
+  reobserveAll() {
+    if (!this.observer) return;
+    for (const child of Array.from(this.editorEl.children)) {
+      this.observer.unobserve(child);
       this.observer.observe(child);
     }
   }
@@ -2770,6 +2803,8 @@ var ParagraphVirtualizer = class {
     div.classList.remove(FROZEN_CLASS);
     div.removeAttribute("data-src");
     div.removeAttribute("data-view-len");
+    div.style.removeProperty("width");
+    div.style.removeProperty("contain-intrinsic-block-size");
     div.replaceChildren((0, import_obsidian5.sanitizeHTMLToDom)(parseInlineToHtml(src) || "<br>"));
     this.observeOne(div);
   }
@@ -2781,6 +2816,8 @@ var ParagraphVirtualizer = class {
     div.classList.remove(FROZEN_CLASS);
     div.removeAttribute("data-src");
     div.removeAttribute("data-view-len");
+    div.style.removeProperty("width");
+    div.style.removeProperty("contain-intrinsic-block-size");
   }
   // Thaws the given div and up to neighborCount divs on each side.
   ensureThawed(div, neighborCount = 10) {
@@ -2857,12 +2894,17 @@ var ParagraphVirtualizer = class {
       clearTimeout(timer);
       this.freezeTimers.delete(div);
     }
+    this.lastKnownWidths.delete(div);
   }
   freezeDiv(div) {
+    var _a;
     if (div.classList.contains(FROZEN_CLASS)) return;
     if (!this.shouldFreeze(div)) return;
+    if (!this.seenDivs.has(div)) return;
     const src = this.getSrcLine(div);
     const viewLen = this.computeViewLen(src);
+    const pixelWidth = (_a = this.lastKnownWidths.get(div)) != null ? _a : 0;
+    if (pixelWidth > 0) div.style.setProperty("width", `${pixelWidth}px`);
     div.replaceChildren();
     div.classList.add(FROZEN_CLASS);
     div.setAttribute("data-src", src);
@@ -2878,10 +2920,15 @@ var ParagraphVirtualizer = class {
     for (const entry of entries) {
       const div = entry.target;
       if (entry.isIntersecting) {
+        this.seenDivs.add(div);
         this.cancelFreeze(div);
         if (div.classList.contains(FROZEN_CLASS)) this.thawDiv(div);
       } else {
-        if (!div.classList.contains(FROZEN_CLASS)) this.scheduleFreeze(div);
+        if (!div.classList.contains(FROZEN_CLASS)) {
+          const w = entry.boundingClientRect.width;
+          if (w > 0) this.lastKnownWidths.set(div, w);
+          this.scheduleFreeze(div);
+        }
       }
     }
   }
@@ -3257,8 +3304,11 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
         el.setViewCursorOffset(savedOffset);
         el.scrollCursorIntoView();
         requestAnimationFrame(() => {
-          if (this.scrollRestoringGeneration === gen)
+          var _a;
+          if (this.scrollRestoringGeneration === gen) {
             el.el.classList.remove("tate-scroll-restoring");
+            (_a = this.virtualizer) == null ? void 0 : _a.reobserveAll();
+          }
         });
       });
     } else {
@@ -3310,20 +3360,22 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
    *  Used when no scroll is needed (no savedOffset or superseded load). */
   scheduleScrollRestoringCleanup(gen) {
     requestAnimationFrame(() => {
-      var _a;
+      var _a, _b;
       if (this.scrollRestoringGeneration === gen) {
         (_a = this.editorEl) == null ? void 0 : _a.el.classList.remove("tate-scroll-restoring");
         this.hideLoadingSpinner();
+        (_b = this.virtualizer) == null ? void 0 : _b.reobserveAll();
       }
     });
   }
   /** Cancels an in-flight scroll-restore cycle immediately (synchronous, no rAF).
    *  Increments the generation to invalidate any pending cleanup rAFs. */
   cancelScrollRestoring() {
-    var _a;
+    var _a, _b;
     ++this.scrollRestoringGeneration;
     (_a = this.editorEl) == null ? void 0 : _a.el.classList.remove("tate-scroll-restoring");
     this.hideLoadingSpinner();
+    (_b = this.virtualizer) == null ? void 0 : _b.reobserveAll();
   }
   /** Proactively refreshes the contain-intrinsic-block-size:auto cache for divs that
    *  were mutated while off-screen (paste, Undo/Redo). Adds tate-layout-refreshing
@@ -3373,8 +3425,11 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
           el.setViewCursorOffset(offset);
           el.scrollCursorIntoView();
           requestAnimationFrame(() => {
-            if (this.scrollRestoringGeneration === gen)
+            var _a;
+            if (this.scrollRestoringGeneration === gen) {
               el.el.classList.remove("tate-scroll-restoring");
+              (_a = this.virtualizer) == null ? void 0 : _a.reobserveAll();
+            }
           });
         });
       } else if (this.lastKnownViewOffset !== null) {
@@ -3521,8 +3576,11 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
         this.hideLoadingSpinner();
         editorEl.scrollCursorIntoView("nearest", "nearest");
         requestAnimationFrame(() => {
-          if (this.scrollRestoringGeneration === gen)
+          var _a2;
+          if (this.scrollRestoringGeneration === gen) {
             editorEl.el.classList.remove("tate-scroll-restoring");
+            (_a2 = this.virtualizer) == null ? void 0 : _a2.reobserveAll();
+          }
         });
       });
     } else {
