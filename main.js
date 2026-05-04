@@ -34,6 +34,7 @@ var import_obsidian7 = require("obsidian");
 var import_obsidian6 = require("obsidian");
 
 // src/sync/SyncCoordinator.ts
+var MAX_SELF_WRITES = 20;
 var SyncCoordinator = class {
   constructor(vault, getEditorValue, setEditorValue) {
     this.vault = vault;
@@ -43,20 +44,42 @@ var SyncCoordinator = class {
     this.loadSeq = 0;
     this.externalCheckSeq = 0;
     this.currentFile = null;
+    // Rolling set of recent self-written contents. CM6 may autosave an intermediate committed
+    // version after we have already advanced to a newer version, causing vault.on('modify')
+    // to fire with stale content. Tracking all recent commits lets onModify() reliably
+    // distinguish self-writes (any version in this set) from external changes (not in this set).
+    this.selfWriteContents = /* @__PURE__ */ new Set();
   }
   async loadFile(file) {
     const seq = ++this.loadSeq;
     this.currentFile = file;
+    this.selfWriteContents.clear();
     const content = await this.vault.read(file);
     if (seq !== this.loadSeq) return;
     this.setEditorValue(content, false);
   }
+  // Records a self-written content so onModify() can identify the resulting vault.on('modify')
+  // event as a self-write and ignore it. Called by view.ts after every commitToCm6().
+  notifySelfWrite(content) {
+    this.selfWriteContents.add(content);
+    if (this.selfWriteContents.size > MAX_SELF_WRITES) {
+      this.selfWriteContents.delete(this.selfWriteContents.values().next().value);
+    }
+  }
+  // Handles vault.on('modify'): ignores self-writes (CM6 autosave), applies external changes
+  // (e.g. Obsidian Sync delivering an edit from another machine while this view is active).
+  async onModify(file) {
+    if (file !== this.currentFile) return;
+    const seq = ++this.externalCheckSeq;
+    const vaultContent = await this.vault.read(file);
+    if (seq !== this.externalCheckSeq || this.currentFile === null) return;
+    if (this.selfWriteContents.has(vaultContent)) return;
+    if (vaultContent === this.getEditorValue()) return;
+    this.setEditorValue(vaultContent, true);
+  }
   // Reads the current file from vault and applies external changes if the content differs.
-  // Called on tate view activation instead of reacting to vault.on('modify').
-  // This avoids a race between vault.read() and concurrent commitToCm6() calls that
-  // was previously triggering spurious full DOM rebuilds during rapid IME input or Undo spam:
-  // while the tate view is active it is the only writer, so vault modify events are always
-  // CM6 autosave noise and can be safely ignored until the view is reactivated.
+  // Called on tate view activation to catch changes made while the view was inactive
+  // (e.g. edits in MarkdownView, or Obsidian Sync delivering changes between sessions).
   async checkAndApplyExternalChange() {
     if (!this.currentFile) return;
     const seq = ++this.externalCheckSeq;
@@ -68,10 +91,12 @@ var SyncCoordinator = class {
   onFileDelete(file) {
     if (file !== this.currentFile) return;
     this.currentFile = null;
+    this.selfWriteContents.clear();
     this.setEditorValue("", false);
   }
   clearCurrentFile() {
     this.currentFile = null;
+    this.selfWriteContents.clear();
     this.loadSeq++;
     this.externalCheckSeq++;
   }
@@ -82,6 +107,7 @@ var SyncCoordinator = class {
   }
   dispose() {
     this.currentFile = null;
+    this.selfWriteContents.clear();
   }
 };
 
@@ -3213,6 +3239,13 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
       }
     });
     this.registerEvent(
+      this.app.vault.on("modify", (file) => {
+        if (file instanceof import_obsidian6.TFile) {
+          void syncCoordinator.onModify(file);
+        }
+      })
+    );
+    this.registerEvent(
       this.app.vault.on("delete", (file) => {
         if (file instanceof import_obsidian6.TFile) {
           void this.plugin.deleteCursorPosition(file.path);
@@ -3598,6 +3631,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
    *  Cursor sync is skipped while tate-editing is expanded (synced via selectionchange on collapse).
    *  Also cancels any pending debounce timer so immediate commit points preempt the timer. */
   commitToCm6() {
+    var _a;
     if (this.commitTimer !== null) {
       clearTimeout(this.commitTimer);
       this.commitTimer = null;
@@ -3625,6 +3659,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
       cm6.offsetToPos(fromEndOld)
     );
     this.lastCommittedContent = content;
+    (_a = this.syncCoordinator) == null ? void 0 : _a.notifySelfWrite(content);
     const segs = buildSegmentMap(content);
     this.plugin.updateCharCount(segs.reduce((sum, seg) => sum + seg.viewLen, 0));
     if (!el.isInlineExpanded()) {

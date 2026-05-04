@@ -260,6 +260,13 @@ export class VerticalWritingView extends ItemView {
         });
 
         this.registerEvent(
+            this.app.vault.on('modify', (file) => {
+                if (file instanceof TFile) {
+                    void syncCoordinator.onModify(file);
+                }
+            })
+        );
+        this.registerEvent(
             this.app.vault.on('delete', (file) => {
                 if (file instanceof TFile) {
                     void this.plugin.deleteCursorPosition(file.path);
@@ -736,8 +743,10 @@ export class VerticalWritingView extends ItemView {
             cm6.offsetToPos(fromStart),
             cm6.offsetToPos(fromEndOld),
         );
-        // Commit complete — update last committed content (prevents false positives in onExternalModify)
+        // Commit complete — record in SyncCoordinator so vault.on('modify') can identify
+        // this CM6 autosave as a self-write and ignore it.
         this.lastCommittedContent = content;
+        this.syncCoordinator?.notifySelfWrite(content);
         const segs = buildSegmentMap(content);
         this.plugin.updateCharCount(segs.reduce((sum, seg) => sum + seg.viewLen, 0));
         // Skip cursor sync while tate-editing is expanded (the cursor is inside raw text,
