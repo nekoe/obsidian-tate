@@ -24,11 +24,18 @@ export class SyncCoordinator {
     async onExternalModify(file: TFile): Promise<void> {
         if (file !== this.currentFile) return;
         const seq = ++this.externalModifySeq;
+        // Snapshot committed content before the async gap. A new commit during vault.read()
+        // advances getEditorValue(), making the post-read equality check fail even for a CM6
+        // autosave of an older commit (e.g. IME confirm → immediate next IME confirm).
+        // Comparing against the snapshot catches that case and prevents a spurious full rebuild.
+        const committedAtDispatch = this.getEditorValue();
         const externalContent = await this.vault.read(file);
         // Discard stale result if another onExternalModify ran concurrently after this await
         if (seq !== this.externalModifySeq || file !== this.currentFile) return;
-        // Skip modify events triggered by CM6 autosave (content is identical)
+        // Skip CM6 autosave events: the vault write may have been queued before a subsequent
+        // commit, so compare against both the current committed content and the snapshot.
         if (externalContent === this.getEditorValue()) return;
+        if (externalContent === committedAtDispatch) return;
         this.setEditorValue(externalContent, true);
     }
 

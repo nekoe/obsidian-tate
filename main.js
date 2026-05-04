@@ -54,9 +54,11 @@ var SyncCoordinator = class {
   async onExternalModify(file) {
     if (file !== this.currentFile) return;
     const seq = ++this.externalModifySeq;
+    const committedAtDispatch = this.getEditorValue();
     const externalContent = await this.vault.read(file);
     if (seq !== this.externalModifySeq || file !== this.currentFile) return;
     if (externalContent === this.getEditorValue()) return;
+    if (externalContent === committedAtDispatch) return;
     this.setEditorValue(externalContent, true);
   }
   onFileDelete(file) {
