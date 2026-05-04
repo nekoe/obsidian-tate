@@ -39,9 +39,9 @@ var SyncCoordinator = class {
     this.vault = vault;
     this.getEditorValue = getEditorValue;
     this.setEditorValue = setEditorValue;
-    // Sequence numbers: discard stale results when loadFile/onExternalModify run concurrently
+    // Sequence numbers: discard stale results when loadFile/checkAndApplyExternalChange run concurrently
     this.loadSeq = 0;
-    this.externalModifySeq = 0;
+    this.externalCheckSeq = 0;
     this.currentFile = null;
   }
   async loadFile(file) {
@@ -51,14 +51,18 @@ var SyncCoordinator = class {
     if (seq !== this.loadSeq) return;
     this.setEditorValue(content, false);
   }
-  async onExternalModify(file) {
-    if (file !== this.currentFile) return;
-    const seq = ++this.externalModifySeq;
-    const committedAtDispatch = this.getEditorValue();
-    const externalContent = await this.vault.read(file);
-    if (seq !== this.externalModifySeq || file !== this.currentFile) return;
+  // Reads the current file from vault and applies external changes if the content differs.
+  // Called on tate view activation instead of reacting to vault.on('modify').
+  // This avoids a race between vault.read() and concurrent commitToCm6() calls that
+  // was previously triggering spurious full DOM rebuilds during rapid IME input or Undo spam:
+  // while the tate view is active it is the only writer, so vault modify events are always
+  // CM6 autosave noise and can be safely ignored until the view is reactivated.
+  async checkAndApplyExternalChange() {
+    if (!this.currentFile) return;
+    const seq = ++this.externalCheckSeq;
+    const externalContent = await this.vault.read(this.currentFile);
+    if (seq !== this.externalCheckSeq || this.currentFile === null) return;
     if (externalContent === this.getEditorValue()) return;
-    if (externalContent === committedAtDispatch) return;
     this.setEditorValue(externalContent, true);
   }
   onFileDelete(file) {
@@ -69,7 +73,7 @@ var SyncCoordinator = class {
   clearCurrentFile() {
     this.currentFile = null;
     this.loadSeq++;
-    this.externalModifySeq++;
+    this.externalCheckSeq++;
   }
   onFileRename(file, oldPath) {
     if (this.currentFile && this.currentFile.path === oldPath) {
@@ -3016,7 +3020,8 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
     this.virtualizer = null;
     this.syncCoordinator = null;
     // Last committed text written to CM6.
-    // Used for comparison in onExternalModify to avoid confusion with getValue() which may contain uncommitted IME text.
+    // Used by SyncCoordinator.checkAndApplyExternalChange() to avoid confusion with getValue()
+    // which may contain uncommitted IME candidate text.
     this.lastCommittedContent = "";
     this.commitTimer = null;
     // Deferred cursor offset: set when a file is loaded while the view is not active.
@@ -3207,11 +3212,6 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
         editorEl.afterNavigation();
       }
     });
-    this.registerEvent(
-      this.app.vault.on("modify", (file) => {
-        if (file instanceof import_obsidian6.TFile) void syncCoordinator.onExternalModify(file);
-      })
-    );
     this.registerEvent(
       this.app.vault.on("delete", (file) => {
         if (file instanceof import_obsidian6.TFile) {
@@ -3484,6 +3484,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
   // Body of the "this leaf became active" branch, shared between active-leaf-change
   // and notifyActivated() (called when revealLeaf doesn't fire active-leaf-change).
   onThisLeafActivated() {
+    var _a;
     this.pushEscScope();
     this.plugin.updateCharCount(countChars(this.lastCommittedContent));
     const el = this.editorEl;
@@ -3501,15 +3502,18 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
           el.setViewCursorOffset(offset);
           el.scrollCursorIntoView();
           requestAnimationFrame(() => {
-            var _a;
+            var _a2;
             if (this.scrollRestoringGeneration === gen) {
               el.el.classList.remove("tate-scroll-restoring");
-              (_a = this.virtualizer) == null ? void 0 : _a.reobserveAll();
+              (_a2 = this.virtualizer) == null ? void 0 : _a2.reobserveAll();
             }
           });
         });
-      } else if (this.lastKnownViewOffset !== null) {
-        el.setViewCursorOffset(this.lastKnownViewOffset);
+      } else {
+        if (this.lastKnownViewOffset !== null) {
+          el.setViewCursorOffset(this.lastKnownViewOffset);
+        }
+        void ((_a = this.syncCoordinator) == null ? void 0 : _a.checkAndApplyExternalChange());
       }
     }
   }

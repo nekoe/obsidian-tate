@@ -1,9 +1,9 @@
 import { TFile, Vault } from 'obsidian';
 
 export class SyncCoordinator {
-    // Sequence numbers: discard stale results when loadFile/onExternalModify run concurrently
+    // Sequence numbers: discard stale results when loadFile/checkAndApplyExternalChange run concurrently
     private loadSeq = 0;
-    private externalModifySeq = 0;
+    private externalCheckSeq = 0;
     currentFile: TFile | null = null;
 
     constructor(
@@ -21,21 +21,19 @@ export class SyncCoordinator {
         this.setEditorValue(content, false);
     }
 
-    async onExternalModify(file: TFile): Promise<void> {
-        if (file !== this.currentFile) return;
-        const seq = ++this.externalModifySeq;
-        // Snapshot committed content before the async gap. A new commit during vault.read()
-        // advances getEditorValue(), making the post-read equality check fail even for a CM6
-        // autosave of an older commit (e.g. IME confirm → immediate next IME confirm).
-        // Comparing against the snapshot catches that case and prevents a spurious full rebuild.
-        const committedAtDispatch = this.getEditorValue();
-        const externalContent = await this.vault.read(file);
-        // Discard stale result if another onExternalModify ran concurrently after this await
-        if (seq !== this.externalModifySeq || file !== this.currentFile) return;
-        // Skip CM6 autosave events: the vault write may have been queued before a subsequent
-        // commit, so compare against both the current committed content and the snapshot.
+    // Reads the current file from vault and applies external changes if the content differs.
+    // Called on tate view activation instead of reacting to vault.on('modify').
+    // This avoids a race between vault.read() and concurrent commitToCm6() calls that
+    // was previously triggering spurious full DOM rebuilds during rapid IME input or Undo spam:
+    // while the tate view is active it is the only writer, so vault modify events are always
+    // CM6 autosave noise and can be safely ignored until the view is reactivated.
+    async checkAndApplyExternalChange(): Promise<void> {
+        if (!this.currentFile) return;
+        const seq = ++this.externalCheckSeq;
+        const externalContent = await this.vault.read(this.currentFile);
+        // Discard if a newer check or a file switch happened during the read
+        if (seq !== this.externalCheckSeq || this.currentFile === null) return;
         if (externalContent === this.getEditorValue()) return;
-        if (externalContent === committedAtDispatch) return;
         this.setEditorValue(externalContent, true);
     }
 
@@ -47,10 +45,10 @@ export class SyncCoordinator {
 
     clearCurrentFile(): void {
         this.currentFile = null;
-        // Increment sequence numbers to discard any in-flight loadFile/onExternalModify results,
-        // preventing a stale async read from overwriting the cleared editor after this call.
+        // Increment sequence numbers to discard any in-flight loadFile/checkAndApplyExternalChange
+        // results, preventing a stale async read from overwriting the cleared editor after this call.
         this.loadSeq++;
-        this.externalModifySeq++;
+        this.externalCheckSeq++;
     }
 
     onFileRename(file: TFile, oldPath: string): void {

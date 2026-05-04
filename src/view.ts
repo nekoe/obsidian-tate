@@ -14,7 +14,8 @@ export class VerticalWritingView extends ItemView {
     private virtualizer: ParagraphVirtualizer | null = null;
     private syncCoordinator: SyncCoordinator | null = null;
     // Last committed text written to CM6.
-    // Used for comparison in onExternalModify to avoid confusion with getValue() which may contain uncommitted IME text.
+    // Used by SyncCoordinator.checkAndApplyExternalChange() to avoid confusion with getValue()
+    // which may contain uncommitted IME candidate text.
     private lastCommittedContent = '';
     private commitTimer: ReturnType<typeof setTimeout> | null = null;
     private static readonly COMMIT_DEBOUNCE_MS = 500;
@@ -258,11 +259,6 @@ export class VerticalWritingView extends ItemView {
             }
         });
 
-        this.registerEvent(
-            this.app.vault.on('modify', (file) => {
-                if (file instanceof TFile) void syncCoordinator.onExternalModify(file);
-            })
-        );
         this.registerEvent(
             this.app.vault.on('delete', (file) => {
                 if (file instanceof TFile) {
@@ -606,9 +602,15 @@ export class VerticalWritingView extends ItemView {
                         }
                     });
                 });
-            } else if (this.lastKnownViewOffset !== null) {
-                // Normal tab switch: restore the cursor to where the user left off.
-                el.setViewCursorOffset(this.lastKnownViewOffset);
+            } else {
+                // Normal tab switch: restore cursor, then check for external file changes
+                // made while this view was inactive (e.g. edits in MarkdownView).
+                // Skipped when pendingCursorOffset is set: the file was just loaded from vault
+                // by loadFile(), so its content is already current.
+                if (this.lastKnownViewOffset !== null) {
+                    el.setViewCursorOffset(this.lastKnownViewOffset);
+                }
+                void this.syncCoordinator?.checkAndApplyExternalChange();
             }
         }
     }
