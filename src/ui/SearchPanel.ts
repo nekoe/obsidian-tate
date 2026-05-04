@@ -198,7 +198,6 @@ export class SearchPanel {
         this.matchEntries = [];
         this.currentIndex = -1;
         // Suppress freeze while the panel is open so DOM ranges remain valid.
-        // No thawAll() needed: frozen divs are searched via data-src without thawing.
         this.virtualizer.suppressFreeze(true);
         this.buildPanel();
         this.app.keymap.pushScope(this.searchScope);

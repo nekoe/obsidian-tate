@@ -183,13 +183,6 @@ export class ParagraphVirtualizer {
         }
     }
 
-    // Thaws all frozen divs. Called by SearchPanel before running a search.
-    thawAll(): void {
-        for (const child of Array.from(this.editorEl.children) as HTMLElement[]) {
-            this.thawDiv(child);
-        }
-    }
-
     // Toggles freeze suppression. When suppressed, no divs will be frozen.
     // Used by SearchPanel (suppress while open, resume on close).
     suppressFreeze(value: boolean): void {
