@@ -35,6 +35,14 @@ var import_obsidian6 = require("obsidian");
 
 // src/sync/SyncCoordinator.ts
 var MAX_SELF_WRITES = 20;
+function fnv1a32(s) {
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619) >>> 0;
+  }
+  return h;
+}
 var SyncCoordinator = class {
   constructor(vault, getEditorValue, setEditorValue) {
     this.vault = vault;
@@ -44,26 +52,28 @@ var SyncCoordinator = class {
     this.loadSeq = 0;
     this.externalCheckSeq = 0;
     this.currentFile = null;
-    // Rolling set of recent self-written contents. CM6 may autosave an intermediate committed
-    // version after we have already advanced to a newer version, causing vault.on('modify')
-    // to fire with stale content. Tracking all recent commits lets onModify() reliably
-    // distinguish self-writes (any version in this set) from external changes (not in this set).
-    this.selfWriteContents = /* @__PURE__ */ new Set();
+    // Rolling set of FNV-1a checksums of recent self-written contents. Storing checksums
+    // instead of full strings avoids retaining large file content in memory (bounded to
+    // MAX_SELF_WRITES × 4 bytes regardless of file size). CM6 may autosave an intermediate
+    // committed version after we have already advanced to a newer version, causing
+    // vault.on('modify') to fire with stale content. Tracking all recent commit checksums
+    // lets onModify() reliably distinguish self-writes from external Sync changes.
+    this.selfWriteChecksums = /* @__PURE__ */ new Set();
   }
   async loadFile(file) {
     const seq = ++this.loadSeq;
     this.currentFile = file;
-    this.selfWriteContents.clear();
+    this.selfWriteChecksums.clear();
     const content = await this.vault.read(file);
     if (seq !== this.loadSeq) return;
     this.setEditorValue(content, false);
   }
-  // Records a self-written content so onModify() can identify the resulting vault.on('modify')
-  // event as a self-write and ignore it. Called by view.ts after every commitToCm6().
+  // Records the checksum of a self-written content so onModify() can identify the resulting
+  // vault.on('modify') event as a self-write and ignore it. Called by view.ts after every commitToCm6().
   notifySelfWrite(content) {
-    this.selfWriteContents.add(content);
-    if (this.selfWriteContents.size > MAX_SELF_WRITES) {
-      this.selfWriteContents.delete(this.selfWriteContents.values().next().value);
+    this.selfWriteChecksums.add(fnv1a32(content));
+    if (this.selfWriteChecksums.size > MAX_SELF_WRITES) {
+      this.selfWriteChecksums.delete(this.selfWriteChecksums.values().next().value);
     }
   }
   // Handles vault.on('modify'): ignores self-writes (CM6 autosave), applies external changes
@@ -73,7 +83,7 @@ var SyncCoordinator = class {
     const seq = ++this.externalCheckSeq;
     const vaultContent = await this.vault.read(file);
     if (seq !== this.externalCheckSeq || this.currentFile === null) return;
-    if (this.selfWriteContents.has(vaultContent)) return;
+    if (this.selfWriteChecksums.has(fnv1a32(vaultContent))) return;
     if (vaultContent === this.getEditorValue()) return;
     this.setEditorValue(vaultContent, true);
   }
@@ -91,12 +101,12 @@ var SyncCoordinator = class {
   onFileDelete(file) {
     if (file !== this.currentFile) return;
     this.currentFile = null;
-    this.selfWriteContents.clear();
+    this.selfWriteChecksums.clear();
     this.setEditorValue("", false);
   }
   clearCurrentFile() {
     this.currentFile = null;
-    this.selfWriteContents.clear();
+    this.selfWriteChecksums.clear();
     this.loadSeq++;
     this.externalCheckSeq++;
   }
@@ -107,7 +117,7 @@ var SyncCoordinator = class {
   }
   dispose() {
     this.currentFile = null;
-    this.selfWriteContents.clear();
+    this.selfWriteChecksums.clear();
   }
 };
 
