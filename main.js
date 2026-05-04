@@ -2377,47 +2377,6 @@ var EditorElement = class {
 
 // src/ui/SearchPanel.ts
 var import_obsidian4 = require("obsidian");
-function extractVisibleText(editorEl) {
-  var _a;
-  const segments = [];
-  let text = "";
-  const walker = document.createTreeWalker(editorEl, NodeFilter.SHOW_TEXT);
-  let node = walker.nextNode();
-  while (node) {
-    if (!isInsideRtNode(node, editorEl)) {
-      const visible = ((_a = node.textContent) != null ? _a : "").replace(/\u200B/g, "");
-      if (visible.length > 0) {
-        segments.push({ node, start: text.length, length: visible.length });
-        text += visible;
-      }
-    }
-    node = walker.nextNode();
-  }
-  return { text, segments };
-}
-function createRangeForMatch(segments, matchStart, matchEnd) {
-  let startNode = null;
-  let startOffset = 0;
-  let endNode = null;
-  let endOffset = 0;
-  for (const seg of segments) {
-    const segEnd = seg.start + seg.length;
-    if (startNode === null && matchStart < segEnd) {
-      startNode = seg.node;
-      startOffset = visibleToRawOffset(seg.node, matchStart - seg.start);
-    }
-    if (endNode === null && matchEnd <= segEnd) {
-      endNode = seg.node;
-      endOffset = visibleToRawOffset(seg.node, matchEnd - seg.start);
-      break;
-    }
-  }
-  if (!startNode || !endNode) return null;
-  const range = document.createRange();
-  range.setStart(startNode, startOffset);
-  range.setEnd(endNode, endOffset);
-  return range;
-}
 function visibleToRawOffset(node, visibleOffset) {
   var _a;
   const text = (_a = node.textContent) != null ? _a : "";
@@ -2427,6 +2386,70 @@ function visibleToRawOffset(node, visibleOffset) {
     if (text[i] !== "\u200B") visible++;
   }
   return text.length;
+}
+function extractSegmentsFromDiv(div, editorEl) {
+  var _a;
+  const segments = [];
+  let localOffset = 0;
+  const walker = document.createTreeWalker(div, NodeFilter.SHOW_TEXT);
+  let node = walker.nextNode();
+  while (node) {
+    if (!isInsideRtNode(node, editorEl)) {
+      const visible = ((_a = node.textContent) != null ? _a : "").replace(/\u200B/g, "");
+      if (visible.length > 0) {
+        segments.push({ node, start: localOffset, length: visible.length });
+        localOffset += visible.length;
+      }
+    }
+    node = walker.nextNode();
+  }
+  return segments;
+}
+function extractHybridText(editorEl, virtualizer) {
+  var _a;
+  const paragraphs = [];
+  let globalOffset = 0;
+  for (const child of Array.from(editorEl.children)) {
+    if (!(child instanceof HTMLElement)) continue;
+    if (virtualizer == null ? void 0 : virtualizer.isFrozen(child)) {
+      const src = (_a = child.getAttribute("data-src")) != null ? _a : "";
+      const text = virtualizer.buildParagraphVisibleText(src);
+      paragraphs.push({ div: child, frozen: true, globalStart: globalOffset, text, segments: [] });
+      globalOffset += text.length;
+    } else {
+      const segments = extractSegmentsFromDiv(child, editorEl);
+      const text = segments.map((s) => {
+        var _a2;
+        return ((_a2 = s.node.textContent) != null ? _a2 : "").replace(/\u200B/g, "");
+      }).join("");
+      paragraphs.push({ div: child, frozen: false, globalStart: globalOffset, text, segments });
+      globalOffset += text.length;
+    }
+  }
+  return { text: paragraphs.map((p) => p.text).join(""), paragraphs };
+}
+function createRangeInParagraph(segments, localStart, localEnd) {
+  let startNode = null;
+  let startOffset = 0;
+  let endNode = null;
+  let endOffset = 0;
+  for (const seg of segments) {
+    const segEnd = seg.start + seg.length;
+    if (startNode === null && localStart < segEnd) {
+      startNode = seg.node;
+      startOffset = visibleToRawOffset(seg.node, localStart - seg.start);
+    }
+    if (endNode === null && localEnd <= segEnd) {
+      endNode = seg.node;
+      endOffset = visibleToRawOffset(seg.node, localEnd - seg.start);
+      break;
+    }
+  }
+  if (!startNode || !endNode) return null;
+  const range = document.createRange();
+  range.setStart(startNode, startOffset);
+  range.setEnd(endNode, endOffset);
+  return range;
 }
 function escapeRegex(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -2440,10 +2463,7 @@ var SearchPanel = class {
     this.panelEl = null;
     this.inputEl = null;
     this.countEl = null;
-    this.matches = [];
-    // Visible-text start offset for each match (parallel to matches[]).
-    // Used by findFirstIndexAtOrAfter() to seed the initial focus from prSearchOffset.
-    this.matchStarts = [];
+    this.matchEntries = [];
     this.currentIndex = -1;
     // Cursor offset (visible) when the panel was opened; restored if no navigation occurred.
     this.prSearchOffset = null;
@@ -2488,8 +2508,7 @@ var SearchPanel = class {
     this.prSearchOffset = initialOffset;
     this.lastNavigatedOffset = null;
     this.editorFocused = false;
-    this.matches = [];
-    this.matchStarts = [];
+    this.matchEntries = [];
     this.currentIndex = -1;
     (_b = this.virtualizer) == null ? void 0 : _b.suppressFreeze(true);
     this.buildPanel();
@@ -2506,14 +2525,13 @@ var SearchPanel = class {
     this.panelEl = null;
     this.inputEl = null;
     this.countEl = null;
-    this.matches = [];
+    this.matchEntries = [];
     this.currentIndex = -1;
     const wasEditorFocused = this.editorFocused;
     const restoreOffset = wasEditorFocused ? null : (_c = this.lastNavigatedOffset) != null ? _c : this.prSearchOffset;
     this.prSearchOffset = null;
     this.lastNavigatedOffset = null;
     this.editorFocused = false;
-    this.matchStarts = [];
     if (!wasEditorFocused) {
       if (restoreOffset !== null) {
         this.editorElementRef.setViewCursorOffset(restoreOffset);
@@ -2572,65 +2590,97 @@ var SearchPanel = class {
     this.panelEl = panel;
   }
   runSearch(scroll = true) {
-    var _a, _b, _c, _d;
+    var _a, _b, _c;
     const query = (_b = (_a = this.inputEl) == null ? void 0 : _a.value) != null ? _b : "";
     this.clearHighlights();
     const prevIndex = this.currentIndex;
-    this.matches = [];
-    this.matchStarts = [];
+    this.matchEntries = [];
     this.currentIndex = -1;
     if (!query) {
       this.updateCount();
       return;
     }
-    (_c = this.virtualizer) == null ? void 0 : _c.thawAll();
     const editorEl = this.editorElementRef.el;
-    const { text, segments } = extractVisibleText(editorEl);
+    const { text, paragraphs } = extractHybridText(editorEl, this.virtualizer);
     const re = new RegExp(escapeRegex(query), "gi");
     let m;
     while ((m = re.exec(text)) !== null) {
-      const range = createRangeForMatch(segments, m.index, m.index + m[0].length);
-      if (range) {
-        this.matches.push(range);
-        this.matchStarts.push(m.index);
+      const matchStart = m.index;
+      const matchEnd = m.index + m[0].length;
+      let para;
+      for (const p of paragraphs) {
+        if (matchStart >= p.globalStart && matchStart < p.globalStart + p.text.length) {
+          para = p;
+          break;
+        }
+      }
+      if (!para) {
+        if (m[0].length === 0) re.lastIndex++;
+        continue;
+      }
+      if (matchEnd > para.globalStart + para.text.length) {
+        if (m[0].length === 0) re.lastIndex++;
+        continue;
+      }
+      const localStart = matchStart - para.globalStart;
+      const localEnd = matchEnd - para.globalStart;
+      if (para.frozen) {
+        this.matchEntries.push({ kind: "frozen", div: para.div, localStart, localEnd, viewStart: matchStart });
+      } else {
+        const range = createRangeInParagraph(para.segments, localStart, localEnd);
+        if (range) {
+          this.matchEntries.push({ kind: "thawed", range, viewStart: matchStart });
+        }
       }
       if (m[0].length === 0) re.lastIndex++;
     }
-    if (this.matches.length === 0) {
+    if (this.matchEntries.length === 0) {
       this.updateCount();
       return;
     }
     this.applyHitHighlights();
-    if (prevIndex >= 0 && prevIndex < this.matches.length) {
+    if (prevIndex >= 0 && prevIndex < this.matchEntries.length) {
       this.setFocus(prevIndex, scroll);
     } else {
-      this.setFocus(this.findFirstIndexAtOrAfter((_d = this.prSearchOffset) != null ? _d : 0), scroll);
+      this.setFocus(this.findFirstIndexAtOrAfter((_c = this.prSearchOffset) != null ? _c : 0), scroll);
     }
   }
-  // Returns the index of the first match whose visible-text start is >= offset.
+  // Returns the index of the first match whose viewStart is >= offset.
   // Wraps to 0 if no match is at or after offset (cursor is past all matches).
   findFirstIndexAtOrAfter(offset) {
-    for (let i = 0; i < this.matchStarts.length; i++) {
-      if (this.matchStarts[i] >= offset) return i;
+    for (let i = 0; i < this.matchEntries.length; i++) {
+      if (this.matchEntries[i].viewStart >= offset) return i;
     }
     return 0;
   }
   navigate(delta) {
-    if (this.matches.length === 0) return;
-    const next = (this.currentIndex + delta + this.matches.length) % this.matches.length;
+    if (this.matchEntries.length === 0) return;
+    const next = (this.currentIndex + delta + this.matchEntries.length) % this.matchEntries.length;
     this.setFocus(next, true);
   }
-  // scroll=true: move the DOM cursor to the hit, update lastNavigatedOffset, restore
-  //              focus to the input, and scroll the hit into view.
+  // scroll=true: thaw frozen match on demand, move the DOM cursor to the hit,
+  //              update lastNavigatedOffset, restore focus to the input, and scroll into view.
   // scroll=false: update highlight and count only (called from onContentChanged).
   setFocus(index, scroll) {
-    var _a;
+    var _a, _b;
     this.currentIndex = index;
     this.updateCount();
     this.applyFocusHighlight();
-    const range = this.matches[index];
-    if (!range || !scroll) return;
+    const entry = this.matchEntries[index];
+    if (!entry || !scroll) return;
     this.editorFocused = false;
+    let range;
+    if (entry.kind === "thawed") {
+      range = entry.range;
+    } else {
+      (_a = this.virtualizer) == null ? void 0 : _a.thawDiv(entry.div);
+      const segments = extractSegmentsFromDiv(entry.div, this.editorElementRef.el);
+      const r = createRangeInParagraph(segments, entry.localStart, entry.localEnd);
+      if (!r) return;
+      range = r;
+      this.matchEntries[index] = { kind: "thawed", range, viewStart: entry.viewStart };
+      this.applyFocusHighlight();
+    }
     const sel = window.getSelection();
     if (sel) {
       const cursorRange = document.createRange();
@@ -2640,13 +2690,30 @@ var SearchPanel = class {
       sel.addRange(cursorRange);
     }
     this.lastNavigatedOffset = this.editorElementRef.getViewCursorOffset();
-    (_a = this.inputEl) == null ? void 0 : _a.focus();
+    (_b = this.inputEl) == null ? void 0 : _b.focus();
     this.scrollRangeIntoView(range);
+  }
+  // Upgrades FrozenMatchEntries whose divs have since been thawed by the IntersectionObserver.
+  // Called in the scrollRangeIntoView rAF callback so hits on divs that entered the viewport
+  // after navigation are included in the next highlight paint.
+  updateFrozenToThawedEntries() {
+    var _a;
+    for (let i = 0; i < this.matchEntries.length; i++) {
+      const entry = this.matchEntries[i];
+      if (entry.kind !== "frozen") continue;
+      if ((_a = this.virtualizer) == null ? void 0 : _a.isFrozen(entry.div)) continue;
+      const segments = extractSegmentsFromDiv(entry.div, this.editorElementRef.el);
+      const range = createRangeInParagraph(segments, entry.localStart, entry.localEnd);
+      if (range) {
+        this.matchEntries[i] = { kind: "thawed", range, viewStart: entry.viewStart };
+      }
+    }
   }
   scrollRangeIntoView(range) {
     this.editorElementRef.scrollToRange(range);
     requestAnimationFrame(() => {
       this.editorElementRef.el.classList.add("tate-search-repaint");
+      this.updateFrozenToThawedEntries();
       this.applyHitHighlights();
       this.applyFocusHighlight();
       requestAnimationFrame(() => {
@@ -2656,14 +2723,19 @@ var SearchPanel = class {
   }
   applyHitHighlights() {
     if (typeof CSS === "undefined" || !CSS.highlights) return;
-    CSS.highlights.set("tate-search-hit", new Highlight(...this.matches));
+    const thawedRanges = this.matchEntries.filter((e) => e.kind === "thawed").map((e) => e.range);
+    if (thawedRanges.length > 0) {
+      CSS.highlights.set("tate-search-hit", new Highlight(...thawedRanges));
+    } else {
+      CSS.highlights.delete("tate-search-hit");
+    }
   }
   applyFocusHighlight() {
     if (typeof CSS === "undefined" || !CSS.highlights) return;
     if (this.editorFocused) return;
-    const focused = this.matches[this.currentIndex];
-    if (focused) {
-      const h = new Highlight(focused);
+    const entry = this.matchEntries[this.currentIndex];
+    if (entry && entry.kind === "thawed") {
+      const h = new Highlight(entry.range);
       h.priority = 1;
       CSS.highlights.set("tate-search-focus", h);
     } else {
@@ -2682,12 +2754,12 @@ var SearchPanel = class {
   updateCount() {
     var _a;
     if (!this.countEl) return;
-    if (this.matches.length === 0) {
+    if (this.matchEntries.length === 0) {
       const hasQuery = !!((_a = this.inputEl) == null ? void 0 : _a.value);
       this.countEl.textContent = hasQuery ? "No results" : "";
       this.countEl.classList.toggle("tate-search-no-match", hasQuery);
     } else {
-      this.countEl.textContent = `${this.currentIndex + 1}/${this.matches.length}`;
+      this.countEl.textContent = `${this.currentIndex + 1}/${this.matchEntries.length}`;
       this.countEl.classList.remove("tate-search-no-match");
     }
   }
