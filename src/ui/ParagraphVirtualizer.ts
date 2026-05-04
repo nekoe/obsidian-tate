@@ -90,6 +90,16 @@ export class ParagraphVirtualizer {
         this.observer?.observe(div);
     }
 
+    // Unobserves then re-observes a single div, forcing the IntersectionObserver to fire a
+    // fresh callback for it. Call after tate-layout-refreshing is removed for a div that was
+    // off-screen throughout the mutation, so off-screen divs get their freeze rescheduled with
+    // an accurate width (from the contain-intrinsic-block-size cache updated by Frame N).
+    reobserveOne(div: HTMLElement): void {
+        if (!this.observer) return;
+        this.observer.unobserve(div);
+        this.observer.observe(div);
+    }
+
     // Returns true if div is currently frozen (has the tate-frozen class).
     isFrozen(div: HTMLElement): boolean {
         return div.classList.contains(FROZEN_CLASS);

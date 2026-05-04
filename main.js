@@ -2844,6 +2844,15 @@ var ParagraphVirtualizer = class {
     var _a;
     (_a = this.observer) == null ? void 0 : _a.observe(div);
   }
+  // Unobserves then re-observes a single div, forcing the IntersectionObserver to fire a
+  // fresh callback for it. Call after tate-layout-refreshing is removed for a div that was
+  // off-screen throughout the mutation, so off-screen divs get their freeze rescheduled with
+  // an accurate width (from the contain-intrinsic-block-size cache updated by Frame N).
+  reobserveOne(div) {
+    if (!this.observer) return;
+    this.observer.unobserve(div);
+    this.observer.observe(div);
+  }
   // Returns true if div is currently frozen (has the tate-frozen class).
   isFrozen(div) {
     return div.classList.contains(FROZEN_CLASS);
@@ -3459,7 +3468,11 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
     divs.forEach((d) => d.classList.add("tate-layout-refreshing"));
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
-        divs.forEach((d) => d.classList.remove("tate-layout-refreshing"));
+        divs.forEach((d) => {
+          var _a;
+          d.classList.remove("tate-layout-refreshing");
+          (_a = this.virtualizer) == null ? void 0 : _a.reobserveOne(d);
+        });
       });
     });
   }

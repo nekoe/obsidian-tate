@@ -543,7 +543,16 @@ export class VerticalWritingView extends ItemView {
         divs.forEach(d => d.classList.add('tate-layout-refreshing'));
         requestAnimationFrame(() => {
             requestAnimationFrame(() => {
-                divs.forEach(d => d.classList.remove('tate-layout-refreshing'));
+                divs.forEach(d => {
+                    d.classList.remove('tate-layout-refreshing');
+                    // Re-trigger the IntersectionObserver for divs that were off-screen throughout
+                    // the mutation (Undo/Redo, paste). Continuously off-screen divs never produce a
+                    // new IO callback, so without this they would stay thawed indefinitely. After
+                    // reobserveOne, the IO fires isIntersecting:false → lastKnownWidths is updated
+                    // with the correct post-mutation width (from the contain-intrinsic-block-size
+                    // cache written by Frame N) → scheduleFreeze re-freezes the div.
+                    this.virtualizer?.reobserveOne(d);
+                });
             });
         });
     }
