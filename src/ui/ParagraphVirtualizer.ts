@@ -16,12 +16,15 @@ export class ParagraphVirtualizer {
     // Pixel widths captured in onIntersection (no layout flush needed) and applied as
     // style.width when freezing, so the scroll container does not change width when a
     // div's real content is removed.
-    private lastKnownWidths = new Map<HTMLElement, number>();
+    // WeakMap: deleted div elements are GC-eligible even if not explicitly removed here
+    // (e.g. after patchParagraphs replaces the DOM without calling unfrostDiv).
+    private lastKnownWidths = new WeakMap<HTMLElement, number>();
     // Divs that have entered the viewport at least once (rendered by the browser).
     // Only seen divs are eligible for freezing: a never-seen div has no accurate width
     // measurement (content-visibility:auto returns the 44px fallback for such divs),
     // so freezing it would produce the wrong style.width and cause a layout shift on thaw.
-    private seenDivs = new Set<HTMLElement>();
+    // WeakSet: same GC rationale as lastKnownWidths.
+    private seenDivs = new WeakSet<HTMLElement>();
     private freezeSuppressed = false;
     // Set to false while the tate view is not the active leaf. Prevents freezing of
     // viewport-visible divs that receive isIntersecting:false callbacks when the tab
@@ -55,8 +58,9 @@ export class ParagraphVirtualizer {
         this.observer = null;
         for (const timer of this.freezeTimers.values()) clearTimeout(timer);
         this.freezeTimers.clear();
-        this.lastKnownWidths.clear();
-        this.seenDivs.clear();
+        // WeakMap/WeakSet have no .clear() — reassign to drop all references.
+        this.lastKnownWidths = new WeakMap();
+        this.seenDivs = new WeakSet();
         this.viewActive = true;
     }
 
@@ -67,6 +71,10 @@ export class ParagraphVirtualizer {
     // eligible for freezing once the class is removed.
     observeAll(): void {
         if (!this.observer) return;
+        // Disconnect first so the observer releases all references to the previous set of divs
+        // (e.g. after setValue replaceChildren). Without this, the observer holds a strong
+        // reference to every previously-observed element, blocking GC after large deletions.
+        this.observer.disconnect();
         const captureWidths = this.editorEl.classList.contains('tate-scroll-restoring');
         for (const child of Array.from(this.editorEl.children)) {
             this.observer.observe(child);

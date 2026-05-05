@@ -2819,12 +2819,15 @@ var ParagraphVirtualizer = class {
     // Pixel widths captured in onIntersection (no layout flush needed) and applied as
     // style.width when freezing, so the scroll container does not change width when a
     // div's real content is removed.
-    this.lastKnownWidths = /* @__PURE__ */ new Map();
+    // WeakMap: deleted div elements are GC-eligible even if not explicitly removed here
+    // (e.g. after patchParagraphs replaces the DOM without calling unfrostDiv).
+    this.lastKnownWidths = /* @__PURE__ */ new WeakMap();
     // Divs that have entered the viewport at least once (rendered by the browser).
     // Only seen divs are eligible for freezing: a never-seen div has no accurate width
     // measurement (content-visibility:auto returns the 44px fallback for such divs),
     // so freezing it would produce the wrong style.width and cause a layout shift on thaw.
-    this.seenDivs = /* @__PURE__ */ new Set();
+    // WeakSet: same GC rationale as lastKnownWidths.
+    this.seenDivs = /* @__PURE__ */ new WeakSet();
     this.freezeSuppressed = false;
     // Set to false while the tate view is not the active leaf. Prevents freezing of
     // viewport-visible divs that receive isIntersecting:false callbacks when the tab
@@ -2853,8 +2856,8 @@ var ParagraphVirtualizer = class {
     this.observer = null;
     for (const timer of this.freezeTimers.values()) clearTimeout(timer);
     this.freezeTimers.clear();
-    this.lastKnownWidths.clear();
-    this.seenDivs.clear();
+    this.lastKnownWidths = /* @__PURE__ */ new WeakMap();
+    this.seenDivs = /* @__PURE__ */ new WeakSet();
     this.viewActive = true;
   }
   // Registers all current editorEl children with the observer (call after setValue).
@@ -2864,6 +2867,7 @@ var ParagraphVirtualizer = class {
   // eligible for freezing once the class is removed.
   observeAll() {
     if (!this.observer) return;
+    this.observer.disconnect();
     const captureWidths = this.editorEl.classList.contains("tate-scroll-restoring");
     for (const child of Array.from(this.editorEl.children)) {
       this.observer.observe(child);
