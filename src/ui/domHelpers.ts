@@ -156,6 +156,23 @@ export function rawOffsetForExpand(el: HTMLElement, node: Node, offset: number):
     }
 }
 
+// Counts visible characters in a paragraph div, excluding <rt> content and U+200B placeholders.
+// Used by EditorElement and ParagraphVirtualizer to compute per-div viewLen consistently.
+export function computeDivViewLen(div: HTMLElement, rootEl: HTMLElement): number {
+    let count = 0;
+    const walker = document.createTreeWalker(div, NodeFilter.SHOW_TEXT);
+    let node = walker.nextNode() as Text | null;
+    while (node) {
+        if (!isInsideRtNode(node, rootEl)) {
+            count += findCursorAnchorAncestor(node, rootEl)
+                ? (node.textContent ?? '').replace(/​/g, '').length
+                : node.length;
+        }
+        node = walker.nextNode() as Text | null;
+    }
+    return count;
+}
+
 export function getExtraCharsFromAnnotation(rawText: string): string {
     const patterns = [
         /［＃「([^「」\n]+)」は縦中横］/,

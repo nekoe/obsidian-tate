@@ -2,13 +2,19 @@ import {
     createCursorAnchor, findCursorAnchorAncestor,
     isInsideRtNode, findLastBaseTextInElement,
 } from './domHelpers';
+import type { ParagraphVirtualizer } from './ParagraphVirtualizer';
 
 // Manages cursor anchor spans (U+200B placeholder spans inserted at end-of-line after annotation
 // elements) and the pending-skip direction used to make the invisible placeholder transparent.
 export class CursorAnchorManager {
     private pendingAnchorSkip: 'forward' | 'backward' | null = null;
+    private virtualizer: ParagraphVirtualizer | null = null;
 
     constructor(private readonly el: HTMLDivElement) {}
+
+    setVirtualizer(v: ParagraphVirtualizer): void {
+        this.virtualizer = v;
+    }
 
     // Sets the skip direction based on the navigation key that was just pressed.
     setSkipDirection(key: string): void {
@@ -168,6 +174,7 @@ export class CursorAnchorManager {
         if (!parentDiv) return null;
         let next = parentDiv.nextSibling;
         while (next) {
+            if (next instanceof HTMLElement) this.virtualizer?.thawDiv(next);
             const walker = document.createTreeWalker(next, NodeFilter.SHOW_TEXT);
             let node = walker.nextNode() as Text | null;
             while (node) {
@@ -200,6 +207,7 @@ export class CursorAnchorManager {
         if (!parentDiv) return null;
         let prevDiv = parentDiv.previousSibling;
         while (prevDiv) {
+            if (prevDiv instanceof HTMLElement) this.virtualizer?.thawDiv(prevDiv);
             const walker = document.createTreeWalker(prevDiv, NodeFilter.SHOW_TEXT);
             let lastText: Text | null = null;
             let node = walker.nextNode() as Text | null;

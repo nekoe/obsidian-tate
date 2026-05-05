@@ -1,68 +1,40 @@
 import { App, Scope } from 'obsidian';
 import type { EditorElement } from './EditorElement';
+import type { ParagraphVirtualizer } from './ParagraphVirtualizer';
 import { isInsideRtNode } from './domHelpers';
 
-// ---- Visible text extraction ----
+// ---- Match entry types ----
 
-interface TextSegment {
+interface ThawedMatchEntry {
+    kind: 'thawed';
+    range: Range;
+    viewStart: number; // visible-text offset of match start in combined text
+}
+
+interface FrozenMatchEntry {
+    kind: 'frozen';
+    div: HTMLElement;
+    localStart: number; // visible offset within this paragraph
+    localEnd: number;
+    viewStart: number; // visible-text offset in combined text
+}
+
+type MatchEntry = ThawedMatchEntry | FrozenMatchEntry;
+
+// ---- Text extraction helpers ----
+
+interface LocalSegment {
     node: Text;
-    start: number; // offset in visible text where this node begins
-    length: number; // number of visible chars in this node (excluding U+200B)
+    start: number; // local visible offset within this paragraph
+    length: number;
 }
 
-interface VisibleText {
-    text: string;
-    segments: TextSegment[];
-}
-
-function extractVisibleText(editorEl: HTMLDivElement): VisibleText {
-    const segments: TextSegment[] = [];
-    let text = '';
-    const walker = document.createTreeWalker(editorEl, NodeFilter.SHOW_TEXT);
-    let node = walker.nextNode() as Text | null;
-    while (node) {
-        if (!isInsideRtNode(node, editorEl)) {
-            // Strip U+200B (cursor anchor placeholders) from visible text
-            const visible = (node.textContent ?? '').replace(/\u200B/g, '');
-            if (visible.length > 0) {
-                segments.push({ node, start: text.length, length: visible.length });
-                text += visible;
-            }
-        }
-        node = walker.nextNode() as Text | null;
-    }
-    return { text, segments };
-}
-
-// ---- Range building ----
-
-function createRangeForMatch(
-    segments: TextSegment[],
-    matchStart: number,
-    matchEnd: number,
-): Range | null {
-    let startNode: Text | null = null;
-    let startOffset = 0;
-    let endNode: Text | null = null;
-    let endOffset = 0;
-
-    for (const seg of segments) {
-        const segEnd = seg.start + seg.length;
-        if (startNode === null && matchStart < segEnd) {
-            startNode = seg.node;
-            startOffset = visibleToRawOffset(seg.node, matchStart - seg.start);
-        }
-        if (endNode === null && matchEnd <= segEnd) {
-            endNode = seg.node;
-            endOffset = visibleToRawOffset(seg.node, matchEnd - seg.start);
-            break;
-        }
-    }
-    if (!startNode || !endNode) return null;
-    const range = document.createRange();
-    range.setStart(startNode, startOffset);
-    range.setEnd(endNode, endOffset);
-    return range;
+interface ParagraphTextData {
+    div: HTMLElement;
+    frozen: boolean;
+    globalStart: number; // where this paragraph's visible text starts in the combined string
+    text: string;        // visible text for this paragraph
+    segments: LocalSegment[]; // populated for thawed divs; empty for frozen
 }
 
 // Maps a visible character offset (excluding U+200B) to the raw text node offset.
@@ -74,6 +46,82 @@ function visibleToRawOffset(node: Text, visibleOffset: number): number {
         if (text[i] !== '\u200B') visible++;
     }
     return text.length;
+}
+
+// Extracts text segments from a single thawed paragraph div.
+function extractSegmentsFromDiv(div: HTMLElement, editorEl: HTMLElement): LocalSegment[] {
+    const segments: LocalSegment[] = [];
+    let localOffset = 0;
+    const walker = document.createTreeWalker(div, NodeFilter.SHOW_TEXT);
+    let node = walker.nextNode() as Text | null;
+    while (node) {
+        if (!isInsideRtNode(node, editorEl)) {
+            const visible = (node.textContent ?? '').replace(/\u200B/g, '');
+            if (visible.length > 0) {
+                segments.push({ node, start: localOffset, length: visible.length });
+                localOffset += visible.length;
+            }
+        }
+        node = walker.nextNode() as Text | null;
+    }
+    return segments;
+}
+
+// Builds per-paragraph text data without thawing frozen divs.
+// Frozen divs are represented by their data-src visible text via virtualizer.
+function extractHybridText(
+    editorEl: HTMLDivElement,
+    virtualizer: ParagraphVirtualizer,
+): { text: string; paragraphs: ParagraphTextData[] } {
+    const paragraphs: ParagraphTextData[] = [];
+    let globalOffset = 0;
+
+    for (const child of Array.from(editorEl.children)) {
+        if (!(child instanceof HTMLElement)) continue;
+        if (virtualizer.isFrozen(child)) {
+            const src = child.getAttribute('data-src') ?? '';
+            const text = virtualizer.buildParagraphVisibleText(src);
+            paragraphs.push({ div: child, frozen: true, globalStart: globalOffset, text, segments: [] });
+            globalOffset += text.length;
+        } else {
+            const segments = extractSegmentsFromDiv(child, editorEl);
+            const text = segments.map(s => (s.node.textContent ?? '').replace(/\u200B/g, '')).join('');
+            paragraphs.push({ div: child, frozen: false, globalStart: globalOffset, text, segments });
+            globalOffset += text.length;
+        }
+    }
+
+    return { text: paragraphs.map(p => p.text).join(''), paragraphs };
+}
+
+// Creates a DOM Range for a match within a single thawed paragraph.
+function createRangeInParagraph(
+    segments: LocalSegment[],
+    localStart: number,
+    localEnd: number,
+): Range | null {
+    let startNode: Text | null = null;
+    let startOffset = 0;
+    let endNode: Text | null = null;
+    let endOffset = 0;
+
+    for (const seg of segments) {
+        const segEnd = seg.start + seg.length;
+        if (startNode === null && localStart < segEnd) {
+            startNode = seg.node;
+            startOffset = visibleToRawOffset(seg.node, localStart - seg.start);
+        }
+        if (endNode === null && localEnd <= segEnd) {
+            endNode = seg.node;
+            endOffset = visibleToRawOffset(seg.node, localEnd - seg.start);
+            break;
+        }
+    }
+    if (!startNode || !endNode) return null;
+    const range = document.createRange();
+    range.setStart(startNode, startOffset);
+    range.setEnd(endNode, endOffset);
+    return range;
 }
 
 function escapeRegex(s: string): string {
@@ -89,10 +137,7 @@ export class SearchPanel {
 
     private readonly searchScope: Scope;
 
-    private matches: Range[] = [];
-    // Visible-text start offset for each match (parallel to matches[]).
-    // Used by findFirstIndexAtOrAfter() to seed the initial focus from prSearchOffset.
-    private matchStarts: number[] = [];
+    private matchEntries: MatchEntry[] = [];
     private currentIndex = -1;
     // Cursor offset (visible) when the panel was opened; restored if no navigation occurred.
     private prSearchOffset: number | null = null;
@@ -106,6 +151,7 @@ export class SearchPanel {
         private readonly editorElementRef: EditorElement,
         private readonly container: HTMLElement,
         private readonly app: App,
+        private readonly virtualizer: ParagraphVirtualizer,
     ) {
         this.searchScope = new Scope(app.scope);
 
@@ -149,9 +195,10 @@ export class SearchPanel {
         this.prSearchOffset = initialOffset;
         this.lastNavigatedOffset = null;
         this.editorFocused = false;
-        this.matches = [];
-        this.matchStarts = [];
+        this.matchEntries = [];
         this.currentIndex = -1;
+        // Suppress freeze while the panel is open so DOM ranges remain valid.
+        this.virtualizer.suppressFreeze(true);
         this.buildPanel();
         this.app.keymap.pushScope(this.searchScope);
         this.inputEl?.focus();
@@ -162,12 +209,14 @@ export class SearchPanel {
 
         this.app.keymap.popScope(this.searchScope);
         this.clearHighlights();
+        // Re-enable freezing after closing (IntersectionObserver will gradually freeze off-screen divs).
+        this.virtualizer.suppressFreeze(false);
 
         this.panelEl?.remove();
         this.panelEl = null;
         this.inputEl = null;
         this.countEl = null;
-        this.matches = [];
+        this.matchEntries = [];
         this.currentIndex = -1;
 
         const wasEditorFocused = this.editorFocused;
@@ -175,7 +224,6 @@ export class SearchPanel {
         this.prSearchOffset = null;
         this.lastNavigatedOffset = null;
         this.editorFocused = false;
-        this.matchStarts = [];
 
         // Restore cursor and give focus back to the editor.  This must happen inside
         // close() rather than in the caller because ESC and the × button call close()
@@ -264,8 +312,7 @@ export class SearchPanel {
         const query = this.inputEl?.value ?? '';
         this.clearHighlights();
         const prevIndex = this.currentIndex;
-        this.matches = [];
-        this.matchStarts = [];
+        this.matchEntries = [];
         this.currentIndex = -1;
 
         if (!query) {
@@ -273,20 +320,50 @@ export class SearchPanel {
             return;
         }
 
+        // Build combined visible text without thawing frozen divs.
+        // Frozen divs contribute their visible text via buildParagraphVisibleText(data-src).
         const editorEl = this.editorElementRef.el;
-        const { text, segments } = extractVisibleText(editorEl);
+        const { text, paragraphs } = extractHybridText(editorEl, this.virtualizer);
         const re = new RegExp(escapeRegex(query), 'gi');
         let m: RegExpExecArray | null;
         while ((m = re.exec(text)) !== null) {
-            const range = createRangeForMatch(segments, m.index, m.index + m[0].length);
-            if (range) {
-                this.matches.push(range);
-                this.matchStarts.push(m.index);
+            const matchStart = m.index;
+            const matchEnd = m.index + m[0].length;
+
+            // Find the paragraph containing the match start.
+            let para: ParagraphTextData | undefined;
+            for (const p of paragraphs) {
+                if (matchStart >= p.globalStart && matchStart < p.globalStart + p.text.length) {
+                    para = p;
+                    break;
+                }
             }
+            if (!para) { if (m[0].length === 0) re.lastIndex++; continue; }
+
+            // Skip matches that span paragraph boundaries — they cannot be represented
+            // as a single Range (cross-paragraph Ranges are impractical with frozen divs).
+            if (matchEnd > para.globalStart + para.text.length) {
+                if (m[0].length === 0) re.lastIndex++;
+                continue;
+            }
+
+            const localStart = matchStart - para.globalStart;
+            const localEnd = matchEnd - para.globalStart;
+
+            if (para.frozen) {
+                // Frozen div: store div + local offsets; thaw on demand when navigated to.
+                this.matchEntries.push({ kind: 'frozen', div: para.div, localStart, localEnd, viewStart: matchStart });
+            } else {
+                const range = createRangeInParagraph(para.segments, localStart, localEnd);
+                if (range) {
+                    this.matchEntries.push({ kind: 'thawed', range, viewStart: matchStart });
+                }
+            }
+
             if (m[0].length === 0) re.lastIndex++;
         }
 
-        if (this.matches.length === 0) {
+        if (this.matchEntries.length === 0) {
             this.updateCount();
             return;
         }
@@ -294,42 +371,57 @@ export class SearchPanel {
 
         // Re-search (user keeps typing): stay on the same index if still valid.
         // First search: focus the nearest hit at or after the cursor position.
-        if (prevIndex >= 0 && prevIndex < this.matches.length) {
+        if (prevIndex >= 0 && prevIndex < this.matchEntries.length) {
             this.setFocus(prevIndex, scroll);
         } else {
             this.setFocus(this.findFirstIndexAtOrAfter(this.prSearchOffset ?? 0), scroll);
         }
     }
 
-    // Returns the index of the first match whose visible-text start is >= offset.
+    // Returns the index of the first match whose viewStart is >= offset.
     // Wraps to 0 if no match is at or after offset (cursor is past all matches).
     private findFirstIndexAtOrAfter(offset: number): number {
-        for (let i = 0; i < this.matchStarts.length; i++) {
-            if (this.matchStarts[i] >= offset) return i;
+        for (let i = 0; i < this.matchEntries.length; i++) {
+            if (this.matchEntries[i].viewStart >= offset) return i;
         }
         return 0;
     }
 
     private navigate(delta: 1 | -1): void {
-        if (this.matches.length === 0) return;
-        const next = (this.currentIndex + delta + this.matches.length) % this.matches.length;
+        if (this.matchEntries.length === 0) return;
+        const next = (this.currentIndex + delta + this.matchEntries.length) % this.matchEntries.length;
         this.setFocus(next, true);
     }
 
-    // scroll=true: move the DOM cursor to the hit, update lastNavigatedOffset, restore
-    //              focus to the input, and scroll the hit into view.
+    // scroll=true: thaw frozen match on demand, move the DOM cursor to the hit,
+    //              update lastNavigatedOffset, restore focus to the input, and scroll into view.
     // scroll=false: update highlight and count only (called from onContentChanged).
     private setFocus(index: number, scroll: boolean): void {
         this.currentIndex = index;
         this.updateCount();
         this.applyFocusHighlight();
 
-        const range = this.matches[index];
-        if (!range || !scroll) return;
+        const entry = this.matchEntries[index];
+        if (!entry || !scroll) return;
 
         // Typing or navigation is restoring control to the search input; clear the flag
         // so the focus highlight is shown again and close() will restore the cursor.
         this.editorFocused = false;
+
+        // Resolve the range: thaw frozen div on demand when the user navigates to it.
+        let range: Range;
+        if (entry.kind === 'thawed') {
+            range = entry.range;
+        } else {
+            this.virtualizer.thawDiv(entry.div);
+            const segments = extractSegmentsFromDiv(entry.div, this.editorElementRef.el);
+            const r = createRangeInParagraph(segments, entry.localStart, entry.localEnd);
+            if (!r) return;
+            range = r;
+            // Upgrade entry to thawed so subsequent navigation and highlighting use the live Range.
+            this.matchEntries[index] = { kind: 'thawed', range, viewStart: entry.viewStart };
+            this.applyFocusHighlight();
+        }
 
         // Place the editor cursor at the start of the focused match.
         // sel.addRange() on a contenteditable node steals browser focus.
@@ -348,6 +440,22 @@ export class SearchPanel {
         this.scrollRangeIntoView(range);
     }
 
+    // Upgrades FrozenMatchEntries whose divs have since been thawed by the IntersectionObserver.
+    // Called in the scrollRangeIntoView rAF callback so hits on divs that entered the viewport
+    // after navigation are included in the next highlight paint.
+    private updateFrozenToThawedEntries(): void {
+        for (let i = 0; i < this.matchEntries.length; i++) {
+            const entry = this.matchEntries[i];
+            if (entry.kind !== 'frozen') continue;
+            if (this.virtualizer.isFrozen(entry.div)) continue;
+            const segments = extractSegmentsFromDiv(entry.div, this.editorElementRef.el);
+            const range = createRangeInParagraph(segments, entry.localStart, entry.localEnd);
+            if (range) {
+                this.matchEntries[i] = { kind: 'thawed', range, viewStart: entry.viewStart };
+            }
+        }
+    }
+
     private scrollRangeIntoView(range: Range): void {
         this.editorElementRef.scrollToRange(range);
         // After a compositor-thread scroll, content-visibility:auto paragraphs that just
@@ -360,6 +468,9 @@ export class SearchPanel {
         // next rAF, so it is never visible to the user.
         requestAnimationFrame(() => {
             this.editorElementRef.el.classList.add('tate-search-repaint');
+            // Upgrade any entries whose divs were thawed by the IntersectionObserver
+            // during the scroll (e.g. divs adjacent to the navigated-to paragraph).
+            this.updateFrozenToThawedEntries();
             this.applyHitHighlights();
             this.applyFocusHighlight();
             requestAnimationFrame(() => {
@@ -370,15 +481,23 @@ export class SearchPanel {
 
     private applyHitHighlights(): void {
         if (typeof CSS === 'undefined' || !CSS.highlights) return;
-        CSS.highlights.set('tate-search-hit', new Highlight(...this.matches));
+        // Only thawed entries have live Ranges; frozen entries are off-screen and unhighlighted.
+        const thawedRanges = this.matchEntries
+            .filter((e): e is ThawedMatchEntry => e.kind === 'thawed')
+            .map(e => e.range);
+        if (thawedRanges.length > 0) {
+            CSS.highlights.set('tate-search-hit', new Highlight(...thawedRanges));
+        } else {
+            CSS.highlights.delete('tate-search-hit');
+        }
     }
 
     private applyFocusHighlight(): void {
         if (typeof CSS === 'undefined' || !CSS.highlights) return;
         if (this.editorFocused) return;
-        const focused = this.matches[this.currentIndex];
-        if (focused) {
-            const h = new Highlight(focused);
+        const entry = this.matchEntries[this.currentIndex];
+        if (entry && entry.kind === 'thawed') {
+            const h = new Highlight(entry.range);
             // Must be higher than tate-search-hit (default 0) so the focused style wins
             // when the same range is present in both highlight sets.
             h.priority = 1;
@@ -401,12 +520,12 @@ export class SearchPanel {
 
     private updateCount(): void {
         if (!this.countEl) return;
-        if (this.matches.length === 0) {
+        if (this.matchEntries.length === 0) {
             const hasQuery = !!(this.inputEl?.value);
             this.countEl.textContent = hasQuery ? 'No results' : '';
             this.countEl.classList.toggle('tate-search-no-match', hasQuery);
         } else {
-            this.countEl.textContent = `${this.currentIndex + 1}/${this.matches.length}`;
+            this.countEl.textContent = `${this.currentIndex + 1}/${this.matchEntries.length}`;
             this.countEl.classList.remove('tate-search-no-match');
         }
     }

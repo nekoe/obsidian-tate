@@ -3,6 +3,7 @@ import type TatePlugin from './main';
 import { SyncCoordinator } from './sync/SyncCoordinator';
 import { EditorElement } from './ui/EditorElement';
 import { SearchPanel } from './ui/SearchPanel';
+import { ParagraphVirtualizer } from './ui/ParagraphVirtualizer';
 import { buildSegmentMap, viewToSrc } from './ui/SegmentMap';
 import { TatePluginSettings } from './settings';
 
@@ -10,9 +11,11 @@ export const TATE_VIEW_TYPE = 'tate-vertical-writing';
 
 export class VerticalWritingView extends ItemView {
     private editorEl: EditorElement | null = null;
+    private virtualizer: ParagraphVirtualizer | null = null;
     private syncCoordinator: SyncCoordinator | null = null;
     // Last committed text written to CM6.
-    // Used for comparison in onExternalModify to avoid confusion with getValue() which may contain uncommitted IME text.
+    // Passed to SyncCoordinator as getEditorValue() so onModify() and checkAndApplyExternalChange()
+    // compare vault content against committed text, not getValue() which may contain uncommitted IME.
     private lastCommittedContent = '';
     private commitTimer: ReturnType<typeof setTimeout> | null = null;
     private static readonly COMMIT_DEBOUNCE_MS = 500;
@@ -66,7 +69,14 @@ export class VerticalWritingView extends ItemView {
         this.editorEl = editorEl;
         editorEl.applySettings(this.plugin.settings);
 
-        this.searchPanel = new SearchPanel(editorEl, container, this.app);
+        // Captured as a local variable (same pattern as editorEl) so closures below can
+        // reference it without null-asserting this.virtualizer on every event.
+        const virtualizer = new ParagraphVirtualizer(editorEl.el, scrollArea);
+        this.virtualizer = virtualizer;
+        editorEl.setVirtualizer(virtualizer);
+        virtualizer.attach();
+
+        this.searchPanel = new SearchPanel(editorEl, container, this.app, virtualizer);
 
         const spinnerEl = container.createEl('div', { cls: 'tate-loading-spinner' });
         this.spinnerEl = spinnerEl;
@@ -198,6 +208,8 @@ export class VerticalWritingView extends ItemView {
             this.searchPanel?.onContentChanged();
         });
         this.registerDomEvent(document, 'selectionchange', () => {
+            // Ensure the cursor paragraph and its neighbors are thawed before any DOM access.
+            if (document.activeElement === editorEl.el) virtualizer.ensureThawedAtCursor();
             const contentChanged = editorEl.handleSelectionChange();
             if (contentChanged) this.commitToCm6(); // Commit only if collapse changed content
             // Track the cursor offset while the editor has focus so it can be restored after
@@ -249,7 +261,9 @@ export class VerticalWritingView extends ItemView {
 
         this.registerEvent(
             this.app.vault.on('modify', (file) => {
-                if (file instanceof TFile) void syncCoordinator.onExternalModify(file);
+                if (file instanceof TFile) {
+                    void syncCoordinator.onModify(file);
+                }
             })
         );
         this.registerEvent(
@@ -446,8 +460,10 @@ export class VerticalWritingView extends ItemView {
                 el.setViewCursorOffset(savedOffset);
                 el.scrollCursorIntoView(); // tate-scroll-restoring still active → real sizes
                 requestAnimationFrame(() => {
-                    if (this.scrollRestoringGeneration === gen)
+                    if (this.scrollRestoringGeneration === gen) {
                         el.el.classList.remove('tate-scroll-restoring');
+                        this.virtualizer?.reobserveAll();
+                    }
                 });
             });
         } else {
@@ -470,6 +486,8 @@ export class VerticalWritingView extends ItemView {
         if (p) await p;
         this.syncCoordinator?.dispose();
         this.syncCoordinator = null;
+        this.virtualizer?.detach();
+        this.virtualizer = null;
         this.editorEl = null;
         this.lastCommittedContent = '';
         this.spinnerEl = null; // DOM is destroyed by Obsidian; clear reference
@@ -504,6 +522,7 @@ export class VerticalWritingView extends ItemView {
             if (this.scrollRestoringGeneration === gen) {
                 this.editorEl?.el.classList.remove('tate-scroll-restoring');
                 this.hideLoadingSpinner();
+                this.virtualizer?.reobserveAll();
             }
         });
     }
@@ -514,6 +533,7 @@ export class VerticalWritingView extends ItemView {
         ++this.scrollRestoringGeneration;
         this.editorEl?.el.classList.remove('tate-scroll-restoring');
         this.hideLoadingSpinner();
+        this.virtualizer?.reobserveAll();
     }
 
     /** Proactively refreshes the contain-intrinsic-block-size:auto cache for divs that
@@ -526,7 +546,16 @@ export class VerticalWritingView extends ItemView {
         divs.forEach(d => d.classList.add('tate-layout-refreshing'));
         requestAnimationFrame(() => {
             requestAnimationFrame(() => {
-                divs.forEach(d => d.classList.remove('tate-layout-refreshing'));
+                divs.forEach(d => {
+                    d.classList.remove('tate-layout-refreshing');
+                    // Re-trigger the IntersectionObserver for divs that were off-screen throughout
+                    // the mutation (Undo/Redo, paste). Continuously off-screen divs never produce a
+                    // new IO callback, so without this they would stay thawed indefinitely. After
+                    // reobserveOne, the IO fires isIntersecting:false → lastKnownWidths is updated
+                    // with the correct post-mutation width (from the contain-intrinsic-block-size
+                    // cache written by Frame N) → scheduleFreeze re-freezes the div.
+                    this.virtualizer?.reobserveOne(d);
+                });
             });
         });
     }
@@ -574,13 +603,21 @@ export class VerticalWritingView extends ItemView {
                     el.setViewCursorOffset(offset);
                     el.scrollCursorIntoView();
                     requestAnimationFrame(() => {
-                        if (this.scrollRestoringGeneration === gen)
+                        if (this.scrollRestoringGeneration === gen) {
                             el.el.classList.remove('tate-scroll-restoring');
+                            this.virtualizer?.reobserveAll();
+                        }
                     });
                 });
-            } else if (this.lastKnownViewOffset !== null) {
-                // Normal tab switch: restore the cursor to where the user left off.
-                el.setViewCursorOffset(this.lastKnownViewOffset);
+            } else {
+                // Normal tab switch: restore cursor, then check for external file changes
+                // made while this view was inactive (e.g. edits in MarkdownView).
+                // Skipped when pendingCursorOffset is set: the file was just loaded from vault
+                // by loadFile(), so its content is already current.
+                if (this.lastKnownViewOffset !== null) {
+                    el.setViewCursorOffset(this.lastKnownViewOffset);
+                }
+                void this.syncCoordinator?.checkAndApplyExternalChange();
             }
         }
     }
@@ -706,8 +743,10 @@ export class VerticalWritingView extends ItemView {
             cm6.offsetToPos(fromStart),
             cm6.offsetToPos(fromEndOld),
         );
-        // Commit complete — update last committed content (prevents false positives in onExternalModify)
+        // Commit complete — record in SyncCoordinator so vault.on('modify') can identify
+        // this CM6 autosave as a self-write and ignore it.
         this.lastCommittedContent = content;
+        this.syncCoordinator?.notifySelfWrite(content);
         const segs = buildSegmentMap(content);
         this.plugin.updateCharCount(segs.reduce((sum, seg) => sum + seg.viewLen, 0));
         // Skip cursor sync while tate-editing is expanded (the cursor is inside raw text,
@@ -750,8 +789,10 @@ export class VerticalWritingView extends ItemView {
                 this.hideLoadingSpinner();
                 editorEl.scrollCursorIntoView('nearest', 'nearest');
                 requestAnimationFrame(() => {
-                    if (this.scrollRestoringGeneration === gen)
+                    if (this.scrollRestoringGeneration === gen) {
                         editorEl.el.classList.remove('tate-scroll-restoring');
+                        this.virtualizer?.reobserveAll();
+                    }
                 });
             });
         } else {
