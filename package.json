@@ -1,6 +1,6 @@
 {
   "name": "obsidian-tate",
-  "version": "1.3.2",
+  "version": "1.3.3",
   "description": "Vertical writing mode for Japanese text.",
   "main": "main.js",
   "scripts": {
