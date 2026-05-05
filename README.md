@@ -69,16 +69,33 @@ Controls which characters are forbidden at the start or end of a line (punctuati
 | `Loose` | Newspaper style — relaxed rules that favor tighter wrapping |
 | `Anywhere` | No restrictions — break anywhere |
 
-### Incremental Search
+### Incremental Search and Replace
 
-Run `Search in vertical view` from the command palette to open the search panel. As you type, all matches are highlighted instantly and the nearest hit at or after your cursor position is focused.
+Open the search panel from the command palette:
+
+- **`検索 (search)`** — opens the panel with the search field focused.
+- **`置換 (replace)`** — opens the panel with the replace field expanded and focused.
+
+As you type in the search field, all matches are highlighted instantly and the nearest hit at or after your cursor position is focused. Use the ▶/▼ toggle button at the left of the panel to show or hide the replace field.
+
+**Search field focused**
 
 | Action | Key / Button |
 |--------|-------------|
-| Open search panel | Command palette: `Search in vertical view` |
 | Next hit | **Enter** or ↓ button |
 | Previous hit | **Shift+Enter** or ↑ button |
 | Close panel | **Esc** or × button |
+
+**Replace field focused**
+
+| Action | Key / Button |
+|--------|-------------|
+| Replace current hit and move to next | **Enter** or 置換 button |
+| Close panel | **Esc** |
+
+**Tab** moves focus from the search field to the replace field (and back).
+
+When a match partially overlaps a ruby, tate-chu-yoko, emphasis mark, or heading annotation, the annotation is stripped and only the unmatched portion of the base text is preserved as plain text.
 
 Closing the panel restores the cursor to the last navigated hit, or to the position it was at when the panel was opened if no navigation occurred.
 
