@@ -2841,7 +2841,7 @@ var SearchPanel = class {
     });
     input.addEventListener("compositionend", () => this.runSearch());
     input.addEventListener("keydown", (e) => {
-      if (e.key !== "Enter" && e.key !== "Escape") e.stopPropagation();
+      if (e.key !== "Escape") e.stopPropagation();
     });
     this.inputEl = input;
     const count = document.createElement("span");

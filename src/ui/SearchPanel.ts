@@ -346,10 +346,9 @@ export class SearchPanel {
         // Run search after IME composition is committed (compositionend fires before the
         // subsequent input event in Chromium, so this is the reliable trigger point).
         input.addEventListener('compositionend', () => this.runSearch());
-        // Prevent panel input events from bubbling into the editor's keydown handler
+        // Prevent panel input events from bubbling; Escape propagates to the Scope's close() handler.
         input.addEventListener('keydown', (e) => {
-            // Allow the scope to handle Enter/Escape; block other keys from reaching the editor
-            if (e.key !== 'Enter' && e.key !== 'Escape') e.stopPropagation();
+            if (e.key !== 'Escape') e.stopPropagation();
         });
         this.inputEl = input;
 
