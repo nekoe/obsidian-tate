@@ -2612,7 +2612,7 @@ function extractSegmentsFromDiv(div, editorEl) {
   let node = walker.nextNode();
   while (node) {
     if (!isInsideRtNode(node, editorEl)) {
-      const visible = ((_a = node.textContent) != null ? _a : "").replace(/\u200B/g, "");
+      const visible = ((_a = node.textContent) != null ? _a : "").replace(/​/g, "");
       if (visible.length > 0) {
         segments.push({ node, start: localOffset, length: visible.length });
         localOffset += visible.length;
@@ -2637,7 +2637,7 @@ function extractHybridText(editorEl, virtualizer) {
       const segments = extractSegmentsFromDiv(child, editorEl);
       const text = segments.map((s) => {
         var _a2;
-        return ((_a2 = s.node.textContent) != null ? _a2 : "").replace(/\u200B/g, "");
+        return ((_a2 = s.node.textContent) != null ? _a2 : "").replace(/​/g, "");
       }).join("");
       paragraphs.push({ div: child, frozen: false, globalStart: globalOffset, text, segments });
       globalOffset += text.length;
@@ -2671,6 +2671,33 @@ function createRangeInParagraph(segments, localStart, localEnd) {
 function escapeRegex(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
+function getBaseRange(seg) {
+  var _a;
+  if (seg.kind === "ruby-explicit") return [seg.srcStart + 1, (_a = seg.baseLen) != null ? _a : seg.viewLen];
+  return [seg.srcStart, seg.viewLen];
+}
+function buildReplacedSrc(srcLine, segs, viewStart, viewEnd, replacement) {
+  let srcStart = viewToSrc(segs, viewStart);
+  let srcEnd = viewToSrc(segs, viewEnd);
+  let prefix = "";
+  let suffix = "";
+  for (const seg of segs) {
+    if (seg.kind === "plain" || seg.kind === "newline") continue;
+    const segViewEnd = seg.viewStart + seg.viewLen;
+    const [srcBase, baseLen] = getBaseRange(seg);
+    if (viewStart > seg.viewStart && viewStart < segViewEnd) {
+      const localStart = viewStart - seg.viewStart;
+      prefix = srcLine.slice(srcBase, srcBase + localStart);
+      srcStart = seg.srcStart;
+    }
+    if (viewEnd > seg.viewStart && viewEnd < segViewEnd) {
+      const localEnd = viewEnd - seg.viewStart;
+      suffix = srcLine.slice(srcBase + localEnd, srcBase + baseLen);
+      srcEnd = seg.srcStart + seg.srcLen;
+    }
+  }
+  return srcLine.slice(0, srcStart) + prefix + replacement + suffix + srcLine.slice(srcEnd);
+}
 var SearchPanel = class {
   constructor(editorElementRef, container, app, virtualizer) {
     this.editorElementRef = editorElementRef;
@@ -2680,6 +2707,9 @@ var SearchPanel = class {
     this.panelEl = null;
     this.inputEl = null;
     this.countEl = null;
+    this.replaceInputEl = null;
+    this.replaceRowEl = null;
+    this.toggleBtnEl = null;
     this.matchEntries = [];
     this.currentIndex = -1;
     // Cursor offset (visible) when the panel was opened; restored if no navigation occurred.
@@ -2689,6 +2719,7 @@ var SearchPanel = class {
     // True while the editor has focus due to a user click (not a programmatic setFocus call).
     // When true: tate-search-focus is hidden, and close() skips cursor restore.
     this.editorFocused = false;
+    this.commitCallback = null;
     this.searchScope = new import_obsidian4.Scope(app.scope);
     editorElementRef.el.addEventListener("mousedown", () => {
       if (!this.isOpen) return;
@@ -2698,13 +2729,19 @@ var SearchPanel = class {
     this.searchScope.register([], "Enter", (evt) => {
       if (evt.isComposing) return;
       if (this.editorFocused) return;
-      this.navigate(1);
+      if (document.activeElement === this.replaceInputEl) {
+        this.replaceCurrentMatch();
+      } else {
+        this.navigate(1);
+      }
       return false;
     });
     this.searchScope.register(["Shift"], "Enter", (evt) => {
       if (evt.isComposing) return;
       if (this.editorFocused) return;
-      this.navigate(-1);
+      if (document.activeElement !== this.replaceInputEl) {
+        this.navigate(-1);
+      }
       return false;
     });
     this.searchScope.register([], "Escape", (evt) => {
@@ -2713,13 +2750,21 @@ var SearchPanel = class {
       return false;
     });
   }
+  setCommitCallback(cb) {
+    this.commitCallback = cb;
+  }
   get isOpen() {
     return this.panelEl !== null;
   }
-  open(initialOffset) {
-    var _a, _b;
+  open(initialOffset, expandReplace = false) {
+    var _a, _b, _c;
     if (this.isOpen) {
-      (_a = this.inputEl) == null ? void 0 : _a.focus();
+      if (expandReplace) {
+        this.showReplaceRow();
+        (_a = this.replaceInputEl) == null ? void 0 : _a.focus();
+      } else {
+        (_b = this.inputEl) == null ? void 0 : _b.focus();
+      }
       return;
     }
     this.prSearchOffset = initialOffset;
@@ -2728,9 +2773,9 @@ var SearchPanel = class {
     this.matchEntries = [];
     this.currentIndex = -1;
     this.virtualizer.suppressFreeze(true);
-    this.buildPanel();
+    this.buildPanel(expandReplace);
     this.app.keymap.pushScope(this.searchScope);
-    (_b = this.inputEl) == null ? void 0 : _b.focus();
+    (_c = this.inputEl) == null ? void 0 : _c.focus();
   }
   close() {
     var _a, _b;
@@ -2742,6 +2787,9 @@ var SearchPanel = class {
     this.panelEl = null;
     this.inputEl = null;
     this.countEl = null;
+    this.replaceInputEl = null;
+    this.replaceRowEl = null;
+    this.toggleBtnEl = null;
     this.matchEntries = [];
     this.currentIndex = -1;
     const wasEditorFocused = this.editorFocused;
@@ -2761,9 +2809,36 @@ var SearchPanel = class {
     if (!this.isOpen) return;
     this.runSearch(false);
   }
-  buildPanel() {
+  showReplaceRow() {
+    var _a;
+    (_a = this.replaceRowEl) == null ? void 0 : _a.classList.add("tate-replace-visible");
+    if (this.toggleBtnEl) (0, import_obsidian4.setIcon)(this.toggleBtnEl, "chevron-down");
+  }
+  hideReplaceRow() {
+    var _a;
+    (_a = this.replaceRowEl) == null ? void 0 : _a.classList.remove("tate-replace-visible");
+    if (this.toggleBtnEl) (0, import_obsidian4.setIcon)(this.toggleBtnEl, "chevron-right");
+  }
+  toggleReplaceRow() {
+    var _a;
+    if ((_a = this.replaceRowEl) == null ? void 0 : _a.classList.contains("tate-replace-visible")) {
+      this.hideReplaceRow();
+    } else {
+      this.showReplaceRow();
+    }
+  }
+  buildPanel(expandReplace) {
     const panel = document.createElement("div");
     panel.className = "tate-search-panel";
+    const searchRow = document.createElement("div");
+    searchRow.className = "tate-search-row";
+    const toggleBtn = document.createElement("button");
+    toggleBtn.className = "tate-search-toggle";
+    toggleBtn.tabIndex = -1;
+    (0, import_obsidian4.setIcon)(toggleBtn, expandReplace ? "chevron-down" : "chevron-right");
+    toggleBtn.setAttribute("aria-label", "\u7F6E\u63DB\u6B04\u3092\u8868\u793A");
+    toggleBtn.addEventListener("click", () => this.toggleReplaceRow());
+    this.toggleBtnEl = toggleBtn;
     const input = document.createElement("input");
     input.type = "text";
     input.className = "tate-search-input";
@@ -2780,7 +2855,7 @@ var SearchPanel = class {
     });
     input.addEventListener("compositionend", () => this.runSearch());
     input.addEventListener("keydown", (e) => {
-      if (e.key !== "Enter" && e.key !== "Escape") e.stopPropagation();
+      if (e.key !== "Escape") e.stopPropagation();
     });
     this.inputEl = input;
     const count = document.createElement("span");
@@ -2789,22 +2864,64 @@ var SearchPanel = class {
     this.countEl = count;
     const nextBtn = document.createElement("button");
     nextBtn.className = "tate-search-btn";
+    nextBtn.tabIndex = -1;
     nextBtn.setAttribute("aria-label", "\u6B21\u3078");
-    nextBtn.textContent = "\u2193";
+    (0, import_obsidian4.setIcon)(nextBtn, "arrow-down");
     nextBtn.addEventListener("click", () => this.navigate(1));
     const prevBtn = document.createElement("button");
     prevBtn.className = "tate-search-btn";
+    prevBtn.tabIndex = -1;
     prevBtn.setAttribute("aria-label", "\u524D\u3078");
-    prevBtn.textContent = "\u2191";
+    (0, import_obsidian4.setIcon)(prevBtn, "arrow-up");
     prevBtn.addEventListener("click", () => this.navigate(-1));
     const closeBtn = document.createElement("button");
     closeBtn.className = "tate-search-btn";
+    closeBtn.tabIndex = -1;
     closeBtn.setAttribute("aria-label", "\u9589\u3058\u308B");
-    closeBtn.textContent = "\xD7";
+    (0, import_obsidian4.setIcon)(closeBtn, "x");
     closeBtn.addEventListener("click", () => this.close());
-    panel.append(input, count, nextBtn, prevBtn, closeBtn);
+    searchRow.append(toggleBtn, input, count, nextBtn, prevBtn, closeBtn);
+    const replaceRow = document.createElement("div");
+    replaceRow.className = "tate-replace-row";
+    if (expandReplace) replaceRow.classList.add("tate-replace-visible");
+    this.replaceRowEl = replaceRow;
+    const replaceInput = document.createElement("input");
+    replaceInput.type = "text";
+    replaceInput.className = "tate-replace-input";
+    replaceInput.setAttribute("placeholder", "\u7F6E\u63DB");
+    replaceInput.addEventListener("keydown", (e) => {
+      if (e.key !== "Escape") e.stopPropagation();
+    });
+    this.replaceInputEl = replaceInput;
+    const replaceBtn = document.createElement("button");
+    replaceBtn.className = "tate-replace-btn";
+    replaceBtn.tabIndex = -1;
+    replaceBtn.textContent = "\u7F6E\u63DB";
+    replaceBtn.addEventListener("click", () => this.replaceCurrentMatch());
+    replaceRow.append(replaceInput, replaceBtn);
+    panel.append(searchRow, replaceRow);
     this.container.appendChild(panel);
     this.panelEl = panel;
+  }
+  replaceCurrentMatch() {
+    var _a, _b, _c, _d;
+    if (this.currentIndex < 0 || this.currentIndex >= this.matchEntries.length) return;
+    const entry = this.matchEntries[this.currentIndex];
+    if (entry.kind !== "thawed") return;
+    const replacement = (_b = (_a = this.replaceInputEl) == null ? void 0 : _a.value) != null ? _b : "";
+    const srcLine = this.virtualizer.getSrcLine(entry.div);
+    const segs = buildSegmentMap(srcLine);
+    const newSrc = buildReplacedSrc(srcLine, segs, entry.localStart, entry.localEnd, replacement);
+    this.virtualizer.unfrostDiv(entry.div);
+    entry.div.replaceChildren((0, import_obsidian4.sanitizeHTMLToDom)(parseInlineToHtml(newSrc) || "<br>"));
+    this.virtualizer.observeOne(entry.div);
+    (_c = this.commitCallback) == null ? void 0 : _c.call(this);
+    const nextIndex = this.currentIndex;
+    this.runSearch(false);
+    if (this.matchEntries.length > 0) {
+      this.setFocus(Math.min(nextIndex, this.matchEntries.length - 1), true);
+    }
+    (_d = this.replaceInputEl) == null ? void 0 : _d.focus();
   }
   runSearch(scroll = true) {
     var _a, _b, _c;
@@ -2846,7 +2963,7 @@ var SearchPanel = class {
       } else {
         const range = createRangeInParagraph(para.segments, localStart, localEnd);
         if (range) {
-          this.matchEntries.push({ kind: "thawed", range, viewStart: matchStart });
+          this.matchEntries.push({ kind: "thawed", div: para.div, localStart, localEnd, range, viewStart: matchStart });
         }
       }
       if (m[0].length === 0) re.lastIndex++;
@@ -2895,7 +3012,14 @@ var SearchPanel = class {
       const r = createRangeInParagraph(segments, entry.localStart, entry.localEnd);
       if (!r) return;
       range = r;
-      this.matchEntries[index] = { kind: "thawed", range, viewStart: entry.viewStart };
+      this.matchEntries[index] = {
+        kind: "thawed",
+        div: entry.div,
+        localStart: entry.localStart,
+        localEnd: entry.localEnd,
+        range,
+        viewStart: entry.viewStart
+      };
       this.applyFocusHighlight();
     }
     const sel = window.getSelection();
@@ -2921,7 +3045,14 @@ var SearchPanel = class {
       const segments = extractSegmentsFromDiv(entry.div, this.editorElementRef.el);
       const range = createRangeInParagraph(segments, entry.localStart, entry.localEnd);
       if (range) {
-        this.matchEntries[i] = { kind: "thawed", range, viewStart: entry.viewStart };
+        this.matchEntries[i] = {
+          kind: "thawed",
+          div: entry.div,
+          localStart: entry.localStart,
+          localEnd: entry.localEnd,
+          range,
+          viewStart: entry.viewStart
+        };
       }
     }
   }
@@ -3310,6 +3441,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
     editorEl.setVirtualizer(virtualizer);
     virtualizer.attach();
     this.searchPanel = new SearchPanel(editorEl, container, this.app, virtualizer);
+    this.searchPanel.setCommitCallback(() => this.commitToCm6());
     const spinnerEl = container.createEl("div", { cls: "tate-loading-spinner" });
     this.spinnerEl = spinnerEl;
     const syncCoordinator = new SyncCoordinator(
@@ -3795,6 +3927,16 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
     const offset = el.getViewCursorOffset();
     this.searchPanel.open(offset);
   }
+  openReplace() {
+    const el = this.editorEl;
+    if (!el || !this.searchPanel) return;
+    if (el.isInlineExpanded()) {
+      const contentChanged = el.collapseForEnter();
+      if (contentChanged) this.commitToCm6();
+    }
+    const offset = el.getViewCursorOffset();
+    this.searchPanel.open(offset, true);
+  }
   closeSearch() {
     if (!this.searchPanel) return;
     const restoreOffset = this.searchPanel.close();
@@ -3993,11 +4135,21 @@ var TatePlugin = class extends import_obsidian7.Plugin {
     });
     this.addCommand({
       id: "search",
-      name: "\u691C\u7D22",
+      name: "\u691C\u7D22 (search)",
       checkCallback: (checking) => {
         const view = this.getActiveTateView();
         if (!view) return false;
         if (!checking) view.openSearch();
+        return true;
+      }
+    });
+    this.addCommand({
+      id: "search-replace",
+      name: "\u7F6E\u63DB (replace)",
+      checkCallback: (checking) => {
+        const view = this.getActiveTateView();
+        if (!view) return false;
+        if (!checking) view.openReplace();
         return true;
       }
     });
