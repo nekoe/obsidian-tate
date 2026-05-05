@@ -4123,7 +4123,7 @@ var TatePlugin = class extends import_obsidian7.Plugin {
     });
     this.addCommand({
       id: "search",
-      name: "\u691C\u7D22",
+      name: "\u691C\u7D22 (search)",
       checkCallback: (checking) => {
         const view = this.getActiveTateView();
         if (!view) return false;
@@ -4133,7 +4133,7 @@ var TatePlugin = class extends import_obsidian7.Plugin {
     });
     this.addCommand({
       id: "search-replace",
-      name: "\u7F6E\u63DB",
+      name: "\u7F6E\u63DB (replace)",
       checkCallback: (checking) => {
         const view = this.getActiveTateView();
         if (!view) return false;

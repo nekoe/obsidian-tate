@@ -36,7 +36,7 @@ export default class TatePlugin extends Plugin {
 
         this.addCommand({
             id: 'search',
-            name: '検索',
+            name: '検索 (search)',
             checkCallback: (checking) => {
                 const view = this.getActiveTateView();
                 if (!view) return false;
@@ -47,7 +47,7 @@ export default class TatePlugin extends Plugin {
 
         this.addCommand({
             id: 'search-replace',
-            name: '置換',
+            name: '置換 (replace)',
             checkCallback: (checking) => {
                 const view = this.getActiveTateView();
                 if (!view) return false;
