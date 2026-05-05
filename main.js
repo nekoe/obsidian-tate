@@ -2901,7 +2901,12 @@ var SearchPanel = class {
     replaceBtn.tabIndex = -1;
     replaceBtn.textContent = "\u7F6E\u63DB";
     replaceBtn.addEventListener("click", () => this.replaceCurrentMatch());
-    replaceRow.append(replaceInput, replaceBtn);
+    const replaceAllBtn = document.createElement("button");
+    replaceAllBtn.className = "tate-replace-btn";
+    replaceAllBtn.tabIndex = -1;
+    replaceAllBtn.textContent = "\u5168\u7F6E\u63DB";
+    replaceAllBtn.addEventListener("click", () => this.replaceAllMatches());
+    replaceRow.append(replaceInput, replaceBtn, replaceAllBtn);
     panel.append(searchRow, replaceRow);
     this.container.appendChild(panel);
     this.panelEl = panel;
@@ -2925,6 +2930,31 @@ var SearchPanel = class {
       this.setFocus(Math.min(nextIndex, this.matchEntries.length - 1), true);
     }
     (_d = this.replaceInputEl) == null ? void 0 : _d.focus();
+  }
+  replaceAllMatches() {
+    var _a, _b, _c, _d;
+    if (this.matchEntries.length === 0) return;
+    const replacement = (_b = (_a = this.replaceInputEl) == null ? void 0 : _a.value) != null ? _b : "";
+    const byDiv = /* @__PURE__ */ new Map();
+    for (const entry of this.matchEntries) {
+      const arr = (_c = byDiv.get(entry.div)) != null ? _c : [];
+      arr.push(entry);
+      byDiv.set(entry.div, arr);
+    }
+    for (const [div, entries] of byDiv) {
+      entries.sort((a, b) => b.localStart - a.localStart);
+      let srcLine = this.virtualizer.getSrcLine(div);
+      for (const entry of entries) {
+        const segs = buildSegmentMap(srcLine);
+        srcLine = buildReplacedSrc(srcLine, segs, entry.localStart, entry.localEnd, replacement);
+      }
+      this.virtualizer.unfrostDiv(div);
+      div.replaceChildren((0, import_obsidian4.sanitizeHTMLToDom)(parseInlineToHtml(srcLine) || "<br>"));
+      this.virtualizer.observeOne(div);
+    }
+    this.virtualizer.initRecords(this.editorElementRef.getValue().split("\n"));
+    (_d = this.commitCallback) == null ? void 0 : _d.call(this);
+    this.runSearch(false);
   }
   runSearch(scroll = true) {
     var _a, _b, _c;

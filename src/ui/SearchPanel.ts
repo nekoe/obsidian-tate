@@ -426,7 +426,13 @@ export class SearchPanel {
         replaceBtn.textContent = '置換';
         replaceBtn.addEventListener('click', () => this.replaceCurrentMatch());
 
-        replaceRow.append(replaceInput, replaceBtn);
+        const replaceAllBtn = document.createElement('button');
+        replaceAllBtn.className = 'tate-replace-btn';
+        replaceAllBtn.tabIndex = -1;
+        replaceAllBtn.textContent = '全置換';
+        replaceAllBtn.addEventListener('click', () => this.replaceAllMatches());
+
+        replaceRow.append(replaceInput, replaceBtn, replaceAllBtn);
 
         panel.append(searchRow, replaceRow);
         // Append to the tate-container so Obsidian's cleanup manages this DOM.
@@ -462,6 +468,38 @@ export class SearchPanel {
         }
         // setFocus() gives focus to the search input; return it to the replace input.
         this.replaceInputEl?.focus();
+    }
+
+    private replaceAllMatches(): void {
+        if (this.matchEntries.length === 0) return;
+        const replacement = this.replaceInputEl?.value ?? '';
+
+        // Group matches by div so multiple matches in the same paragraph are applied together.
+        const byDiv = new Map<HTMLElement, MatchEntry[]>();
+        for (const entry of this.matchEntries) {
+            const arr = byDiv.get(entry.div) ?? [];
+            arr.push(entry);
+            byDiv.set(entry.div, arr);
+        }
+
+        // Apply replacements right-to-left within each paragraph so earlier view offsets
+        // remain valid after each successive replacement shifts the source string.
+        for (const [div, entries] of byDiv) {
+            entries.sort((a, b) => b.localStart - a.localStart);
+            let srcLine = this.virtualizer.getSrcLine(div);
+            for (const entry of entries) {
+                const segs = buildSegmentMap(srcLine);
+                srcLine = buildReplacedSrc(srcLine, segs, entry.localStart, entry.localEnd, replacement);
+            }
+            this.virtualizer.unfrostDiv(div);
+            div.replaceChildren(sanitizeHTMLToDom(parseInlineToHtml(srcLine) || '<br>'));
+            this.virtualizer.observeOne(div);
+        }
+
+        // Sync paragraphRecords with the updated DOM, then commit all changes as one transaction.
+        this.virtualizer.initRecords(this.editorElementRef.getValue().split('\n'));
+        this.commitCallback?.();
+        this.runSearch(false);
     }
 
     private runSearch(scroll = true): void {
