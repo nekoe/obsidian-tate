@@ -423,3 +423,104 @@ describe('handleBoutenCompletion — conversion', () => {
         expect(converter.handleBoutenCompletion()).toBe(false);
     });
 });
+
+// ================================================================
+// handleHeadingCompletion
+// ================================================================
+
+describe('handleHeadingCompletion — no conversion', () => {
+    let root: HTMLDivElement;
+    let converter: LiveConverter;
+
+    beforeEach(() => {
+        root = makeRoot();
+        converter = new LiveConverter(root);
+    });
+
+    it('returns false when there is no selection', () => {
+        window.getSelection()!.removeAllRanges();
+        expect(converter.handleHeadingCompletion()).toBe(false);
+    });
+
+    it('returns false when text does not end with ］', () => {
+        const para = makePara(root);
+        const text = document.createTextNode('序章［＃「序章」は大見出し');
+        para.appendChild(text);
+        setCursor(text, text.length);
+        expect(converter.handleHeadingCompletion()).toBe(false);
+    });
+
+    it('returns false when content does not match leading text', () => {
+        const para = makePara(root);
+        const text = document.createTextNode('夏［＃「春」は大見出し］');
+        para.appendChild(text);
+        setCursor(text, text.length);
+        expect(converter.handleHeadingCompletion()).toBe(false);
+    });
+});
+
+describe('handleHeadingCompletion — conversion', () => {
+    let root: HTMLDivElement;
+    let converter: LiveConverter;
+
+    beforeEach(() => {
+        root = makeRoot();
+        converter = new LiveConverter(root);
+    });
+
+    it('converts 大見出し annotation to large heading span', () => {
+        const para = makePara(root);
+        const text = document.createTextNode('序章［＃「序章」は大見出し］');
+        para.appendChild(text);
+        setCursor(text, text.length);
+
+        expect(converter.handleHeadingCompletion()).toBe(true);
+
+        const span = para.querySelector('[data-heading]') as HTMLElement;
+        expect(span).not.toBeNull();
+        expect(span.getAttribute('data-heading')).toBe('large');
+        expect(span.textContent).toBe('序章');
+        expect(span.classList.contains('tate-heading-large')).toBe(true);
+    });
+
+    it('converts 中見出し annotation to mid heading span', () => {
+        const para = makePara(root);
+        const text = document.createTextNode('第一節［＃「第一節」は中見出し］');
+        para.appendChild(text);
+        setCursor(text, text.length);
+
+        expect(converter.handleHeadingCompletion()).toBe(true);
+
+        const span = para.querySelector('[data-heading]') as HTMLElement;
+        expect(span).not.toBeNull();
+        expect(span.getAttribute('data-heading')).toBe('mid');
+        expect(span.textContent).toBe('第一節');
+    });
+
+    it('converts 小見出し annotation to small heading span', () => {
+        const para = makePara(root);
+        const text = document.createTextNode('はじめに［＃「はじめに」は小見出し］');
+        para.appendChild(text);
+        setCursor(text, text.length);
+
+        expect(converter.handleHeadingCompletion()).toBe(true);
+
+        const span = para.querySelector('[data-heading]') as HTMLElement;
+        expect(span).not.toBeNull();
+        expect(span.getAttribute('data-heading')).toBe('small');
+        expect(span.textContent).toBe('はじめに');
+    });
+
+    it('preserves preceding text when heading is not the full line', () => {
+        const para = makePara(root);
+        const text = document.createTextNode('前置き序章［＃「序章」は大見出し］');
+        para.appendChild(text);
+        setCursor(text, text.length);
+
+        converter.handleHeadingCompletion();
+
+        expect(para.firstChild!.textContent).toBe('前置き');
+        const span = para.childNodes[1] as HTMLElement;
+        expect(span.getAttribute('data-heading')).toBe('large');
+    });
+});

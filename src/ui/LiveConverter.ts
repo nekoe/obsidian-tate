@@ -1,6 +1,6 @@
 import { KANJI_RE_STR } from './AozoraParser';
 import {
-    createRubyEl, createTcyEl, createBoutenEl,
+    createRubyEl, createTcyEl, createBoutenEl, createHeadingEl,
     insertAnnotationElement, setCursorAfter, isInsideRuby,
 } from './domHelpers';
 
@@ -86,6 +86,16 @@ export class LiveConverter {
     // Returns true if a conversion occurred.
     handleBoutenCompletion(): boolean {
         return this.handleAnnotationCompletion('］', /［＃「([^「」\n]+)」に傍点］$/, createBoutenEl);
+    }
+
+    // Converts a heading notation just before the cursor to a heading span when ］ is typed.
+    // Tries large → mid → small in order; returns true if any conversion occurred.
+    handleHeadingCompletion(): boolean {
+        return (
+            this.handleAnnotationCompletion('］', /［＃「([^「」\n]+)」は大見出し］$/, c => createHeadingEl(c, 'large')) ||
+            this.handleAnnotationCompletion('］', /［＃「([^「」\n]+)」は中見出し］$/, c => createHeadingEl(c, 'mid'))   ||
+            this.handleAnnotationCompletion('］', /［＃「([^「」\n]+)」は小見出し］$/, c => createHeadingEl(c, 'small'))
+        );
     }
 
     // Shared implementation for live conversions that complete on a terminal character (tcy, bouten).

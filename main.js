@@ -136,7 +136,8 @@ var DEFAULT_SETTINGS = {
   removeBracketIndent: true,
   suppressRubyInline: false,
   suppressTcyInline: false,
-  suppressBoutenInline: false
+  suppressBoutenInline: false,
+  suppressHeadingInline: false
 };
 var TateSettingTab = class extends import_obsidian.PluginSettingTab {
   constructor(app, plugin) {
@@ -201,6 +202,11 @@ var TateSettingTab = class extends import_obsidian.PluginSettingTab {
     }));
     new import_obsidian.Setting(containerEl).setName("\u508D\u70B9\u306E\u30A4\u30F3\u30E9\u30A4\u30F3\u5C55\u958B\u3092\u6291\u5236\u3059\u308B").setDesc("\u30AB\u30FC\u30BD\u30EB\u304C\u508D\u70B9\u4E0A\u306B\u79FB\u52D5\u3057\u3066\u3082\u9752\u7A7A\u8A18\u6CD5\u30C6\u30AD\u30B9\u30C8\u306B\u5C55\u958B\u3057\u306A\u3044 (default off)").addToggle((toggle) => toggle.setValue(this.plugin.settings.suppressBoutenInline).onChange(async (value) => {
       this.plugin.settings.suppressBoutenInline = value;
+      await this.plugin.saveSettings();
+      this.plugin.applySettingsToAllViews();
+    }));
+    new import_obsidian.Setting(containerEl).setName("\u898B\u51FA\u3057\u306E\u30A4\u30F3\u30E9\u30A4\u30F3\u5C55\u958B\u3092\u6291\u5236\u3059\u308B").setDesc("\u30AB\u30FC\u30BD\u30EB\u304C\u898B\u51FA\u3057\u4E0A\u306B\u79FB\u52D5\u3057\u3066\u3082\u9752\u7A7A\u8A18\u6CD5\u30C6\u30AD\u30B9\u30C8\u306B\u5C55\u958B\u3057\u306A\u3044 (default off)").addToggle((toggle) => toggle.setValue(this.plugin.settings.suppressHeadingInline).onChange(async (value) => {
+      this.plugin.settings.suppressHeadingInline = value;
       await this.plugin.saveSettings();
       this.plugin.applySettingsToAllViews();
     }));
@@ -283,7 +289,10 @@ function mapSrcLocalToView(seg, local) {
       return seg.viewStart + seg.viewLen;
     }
     case "tcy":
-    case "bouten": {
+    case "bouten":
+    case "heading-large":
+    case "heading-mid":
+    case "heading-small": {
       if (local <= seg.viewLen) return seg.viewStart + local;
       return seg.viewStart + seg.viewLen;
     }
@@ -299,6 +308,9 @@ function mapViewLocalToSrc(seg, local) {
     case "ruby-implicit":
     case "tcy":
     case "bouten":
+    case "heading-large":
+    case "heading-mid":
+    case "heading-small":
       return seg.srcStart + local;
   }
 }
@@ -309,6 +321,7 @@ function tokenize(source) {
   items = flatScan(items, scanExplicitRuby);
   items = flatScan(items, (raw) => scanAnnotation(raw, tcyRe, "tcy", 9));
   items = flatScan(items, (raw) => scanAnnotation(raw, boutenRe, "bouten", 8));
+  items = flatScan(items, scanHeadings);
   items = flatScan(items, scanImplicitRuby);
   items = flatScan(items, scanNewlines);
   return items.map((item) => {
@@ -401,6 +414,36 @@ function scanImplicitRuby(raw) {
   if (lastIndex < raw.length) result.push({ resolved: false, raw: raw.slice(lastIndex) });
   return result;
 }
+function scanHeadings(raw) {
+  const re = /［＃「([^「」\n]+)」は(大|中|小)見出し］/g;
+  const result = [];
+  let lastIndex = 0;
+  let m;
+  while ((m = re.exec(raw)) !== null) {
+    const content = m[1];
+    const annotationStart = m.index;
+    if (!raw.slice(lastIndex, annotationStart).endsWith(content)) {
+      result.push({ resolved: false, raw: raw.slice(lastIndex, re.lastIndex) });
+      lastIndex = re.lastIndex;
+      continue;
+    }
+    const contentStart = annotationStart - content.length;
+    if (contentStart > lastIndex) {
+      result.push({ resolved: false, raw: raw.slice(lastIndex, contentStart) });
+    }
+    const kind = m[2] === "\u5927" ? "heading-large" : m[2] === "\u4E2D" ? "heading-mid" : "heading-small";
+    result.push({
+      resolved: true,
+      kind,
+      srcLen: content.length * 2 + 10,
+      // content + ［＃「content」は大/中/小見出し］
+      viewLen: content.length
+    });
+    lastIndex = re.lastIndex;
+  }
+  if (lastIndex < raw.length) result.push({ resolved: false, raw: raw.slice(lastIndex) });
+  return result;
+}
 function scanNewlines(raw) {
   const parts = raw.split("\n");
   const result = [];
@@ -424,6 +467,7 @@ function parseInlineToHtml(text) {
     splitByExplicitRuby,
     splitByExplicitTcy,
     splitByExplicitBouten,
+    splitByHeadings,
     splitByImplicitRuby
   ]);
 }
@@ -494,6 +538,35 @@ function splitByAnnotation(text, re, buildHtml) {
   }
   return result;
 }
+function splitByHeadings(text) {
+  const result = [];
+  const re = /［＃「([^「」\n]+)」は(大|中|小)見出し］/g;
+  let lastIndex = 0;
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    const content = m[1];
+    const level = m[2] === "\u5927" ? "large" : m[2] === "\u4E2D" ? "mid" : "small";
+    const annotationStart = m.index;
+    if (!text.slice(lastIndex, annotationStart).endsWith(content)) {
+      result.push({ type: "text", text: text.slice(lastIndex, re.lastIndex) });
+      lastIndex = re.lastIndex;
+      continue;
+    }
+    const contentStart = annotationStart - content.length;
+    if (contentStart > lastIndex) {
+      result.push({ type: "text", text: text.slice(lastIndex, contentStart) });
+    }
+    result.push({
+      type: "html",
+      html: `<span class="tate-heading tate-heading-${level}" data-heading="${level}">${esc(content)}</span>`
+    });
+    lastIndex = re.lastIndex;
+  }
+  if (lastIndex < text.length) {
+    result.push({ type: "text", text: text.slice(lastIndex) });
+  }
+  return result;
+}
 function splitByImplicitRuby(text) {
   const re = new RegExp(`(${KANJI_RE_STR2})\u300A([^\u300A\u300B\\n]*)\u300B`, "gu");
   const result = [];
@@ -540,6 +613,12 @@ function serializeNode(node, rootEl) {
         const content = (_e = node.textContent) != null ? _e : "";
         return `${content}\uFF3B\uFF03\u300C${content}\u300D\u306B\u508D\u70B9\uFF3D`;
       }
+      const heading = node.getAttribute("data-heading");
+      if (heading === "large" || heading === "mid" || heading === "small") {
+        const suffix = heading === "large" ? "\u5927\u898B\u51FA\u3057" : heading === "mid" ? "\u4E2D\u898B\u51FA\u3057" : "\u5C0F\u898B\u51FA\u3057";
+        const content = Array.from(node.childNodes).map((n) => serializeNode(n, rootEl)).join("");
+        return `${content}\uFF3B\uFF03\u300C${content}\u300D\u306F${suffix}\uFF3D`;
+      }
       if (node.classList.contains("tate-cursor-anchor")) {
         return ((_f = node.textContent) != null ? _f : "").replace(/\u200B/g, "");
       }
@@ -580,6 +659,13 @@ function createBoutenEl(content) {
   const span = document.createElement("span");
   span.setAttribute("data-bouten", "sesame");
   span.className = "bouten";
+  span.textContent = content;
+  return span;
+}
+function createHeadingEl(content, level) {
+  const span = document.createElement("span");
+  span.setAttribute("data-heading", level);
+  span.className = `tate-heading tate-heading-${level}`;
   span.textContent = content;
   return span;
 }
@@ -689,7 +775,8 @@ function computeDivViewLen(div, rootEl) {
 function getExtraCharsFromAnnotation(rawText) {
   const patterns = [
     /［＃「([^「」\n]+)」は縦中横］/,
-    /［＃「([^「」\n]+)」に傍点］/
+    /［＃「([^「」\n]+)」に傍点］/,
+    /［＃「([^「」\n]+)」は(大|中|小)見出し］/
   ];
   for (const re of patterns) {
     const m = rawText.match(re);
@@ -1088,6 +1175,11 @@ var LiveConverter = class {
   handleBoutenCompletion() {
     return this.handleAnnotationCompletion("\uFF3D", /［＃「([^「」\n]+)」に傍点］$/, createBoutenEl);
   }
+  // Converts a heading notation just before the cursor to a heading span when ］ is typed.
+  // Tries large → mid → small in order; returns true if any conversion occurred.
+  handleHeadingCompletion() {
+    return this.handleAnnotationCompletion("\uFF3D", /［＃「([^「」\n]+)」は大見出し］$/, (c) => createHeadingEl(c, "large")) || this.handleAnnotationCompletion("\uFF3D", /［＃「([^「」\n]+)」は中見出し］$/, (c) => createHeadingEl(c, "mid")) || this.handleAnnotationCompletion("\uFF3D", /［＃「([^「」\n]+)」は小見出し］$/, (c) => createHeadingEl(c, "small"));
+  }
   // Shared implementation for live conversions that complete on a terminal character (tcy, bouten).
   handleAnnotationCompletion(endChar, re, createElement) {
     var _a, _b;
@@ -1124,12 +1216,13 @@ var InlineExpander = class {
   }
   // Returns the first ancestor of node that is an expandable annotation element,
   // filtered by the caller-provided expand flags.
-  findExpandableAncestor(node, ruby, tcy, bouten) {
+  findExpandableAncestor(node, ruby, tcy, bouten, heading = true) {
     let el = node instanceof HTMLElement ? node : node.parentElement;
     while (el && el !== this.el) {
       if (el.tagName === "RUBY" && ruby) return el;
       if (el.tagName === "SPAN" && el.getAttribute("data-tcy") === "explicit" && tcy) return el;
       if (el.tagName === "SPAN" && el.getAttribute("data-bouten") && bouten) return el;
+      if (el.tagName === "SPAN" && el.getAttribute("data-heading") && heading) return el;
       el = el.parentElement;
     }
     return null;
@@ -1216,6 +1309,7 @@ var InlineEditor = class {
     this.expandRuby = true;
     this.expandTcy = true;
     this.expandBouten = true;
+    this.expandHeading = true;
     this.boutenGuard = new BoutenGuard(el);
     this.anchorManager = new CursorAnchorManager(el);
     this.liveConverter = new LiveConverter(el);
@@ -1224,10 +1318,11 @@ var InlineEditor = class {
   setVirtualizer(v) {
     this.anchorManager.setVirtualizer(v);
   }
-  setExpandSettings(ruby, tcy, bouten) {
+  setExpandSettings(ruby, tcy, bouten, heading) {
     this.expandRuby = ruby;
     this.expandTcy = tcy;
     this.expandBouten = bouten;
+    this.expandHeading = heading;
   }
   // Resets expansion state, selection cache, and burst flag (called from setValue / applyFromCm6)
   reset() {
@@ -1316,7 +1411,7 @@ var InlineEditor = class {
           return contentChanged;
         }
         this.boutenGuard.clear();
-        if (target.tagName === "RUBY" || target.getAttribute("data-tcy") === "explicit" || target.getAttribute("data-bouten"))
+        if (target.tagName === "RUBY" || target.getAttribute("data-tcy") === "explicit" || target.getAttribute("data-bouten") || target.getAttribute("data-heading"))
           this.anchorManager.ensureCursorAnchorAfter(target);
         this.expandForEditing(target, currentRange);
       }
@@ -1360,6 +1455,17 @@ var InlineEditor = class {
     this.isModifyingDom = true;
     try {
       return this.liveConverter.handleBoutenCompletion();
+    } finally {
+      this.isModifyingDom = false;
+    }
+  }
+  // Converts a heading notation just before the cursor to a heading span when ］ is typed.
+  // Returns true if a conversion occurred.
+  handleHeadingCompletion() {
+    if (this.expandedEl || this.isModifyingDom) return false;
+    this.isModifyingDom = true;
+    try {
+      return this.liveConverter.handleHeadingCompletion();
     } finally {
       this.isModifyingDom = false;
     }
@@ -1511,7 +1617,7 @@ var InlineEditor = class {
   // ---- Private helpers for inline expand/collapse ----
   // Walks up ancestors from node and returns the first expandable element (ruby or explicit tcy)
   findExpandableAncestor(node) {
-    return this.expander.findExpandableAncestor(node, this.expandRuby, this.expandTcy, this.expandBouten);
+    return this.expander.findExpandableAncestor(node, this.expandRuby, this.expandTcy, this.expandBouten, this.expandHeading);
   }
   // Expands target into a raw-text editing span and sets the cursor to the corresponding position
   expandForEditing(target, range) {
@@ -1871,6 +1977,9 @@ var EditorElement = class {
   handleBoutenCompletion() {
     return this.inlineEditor.handleBoutenCompletion();
   }
+  handleHeadingCompletion() {
+    return this.inlineEditor.handleHeadingCompletion();
+  }
   // ---- Selection wrap methods called from the command palette ----
   wrapSelectionWithRuby() {
     return this.inlineEditor.wrapSelectionWithRuby();
@@ -1880,6 +1989,37 @@ var EditorElement = class {
   }
   wrapSelectionWithBouten() {
     return this.inlineEditor.wrapSelectionWithBouten();
+  }
+  // Applies a heading annotation to the paragraph containing the cursor.
+  // If the paragraph already has a heading at the same level, the annotation is removed (toggle).
+  // If it has a different heading level, the level is changed.
+  // Returns false if there is no cursor or the paragraph is empty.
+  applyHeading(level) {
+    var _a, _b;
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return false;
+    const div = this.findParagraphDiv(sel.getRangeAt(0).startContainer);
+    if (!div) return false;
+    const currentSrc = this.virtualizer ? this.virtualizer.getSrcLine(div) : Array.from(div.childNodes).map((n) => serializeNode(n, this.el)).join("");
+    if (!currentSrc) return false;
+    const suffix = level === "large" ? "\u5927\u898B\u51FA\u3057" : level === "mid" ? "\u4E2D\u898B\u51FA\u3057" : "\u5C0F\u898B\u51FA\u3057";
+    const m = /^([\s\S]+)［＃「([^「」\n]+)」は(大|中|小)見出し］$/.exec(currentSrc);
+    let newSrc;
+    if (m && m[1].endsWith(m[2])) {
+      const content = m[2];
+      const existingLevel = m[3] === "\u5927" ? "large" : m[3] === "\u4E2D" ? "mid" : "small";
+      if (existingLevel === level) {
+        newSrc = m[1];
+      } else {
+        newSrc = `${m[1]}\uFF3B\uFF03\u300C${content}\u300D\u306F${suffix}\uFF3D`;
+      }
+    } else {
+      newSrc = `${currentSrc}\uFF3B\uFF03\u300C${currentSrc}\u300D\u306F${suffix}\uFF3D`;
+    }
+    (_a = this.virtualizer) == null ? void 0 : _a.unfrostDiv(div);
+    div.replaceChildren((0, import_obsidian3.sanitizeHTMLToDom)(parseInlineToHtml(newSrc) || "<br>"));
+    (_b = this.virtualizer) == null ? void 0 : _b.observeOne(div);
+    return true;
   }
   // Copy handler: serializes the selected DOM to Aozora notation and writes it to text/plain.
   // This ensures ruby/tcy/bouten are preserved when copying within the editor.
@@ -2144,7 +2284,8 @@ var EditorElement = class {
     this.inlineEditor.setExpandSettings(
       !settings.suppressRubyInline,
       !settings.suppressTcyInline,
-      !settings.suppressBoutenInline
+      !settings.suppressBoutenInline,
+      !settings.suppressHeadingInline
     );
   }
   adjustWidth() {
@@ -3245,7 +3386,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
           (_a = this.searchPanel) == null ? void 0 : _a.onContentChanged();
           return;
         }
-        const annotated = editorEl.handleRubyCompletion() || editorEl.handleTcyCompletion() || editorEl.handleBoutenCompletion();
+        const annotated = editorEl.handleRubyCompletion() || editorEl.handleTcyCompletion() || editorEl.handleBoutenCompletion() || editorEl.handleHeadingCompletion();
         if (annotated) {
           this.commitToCm6();
           (_b = this.searchPanel) == null ? void 0 : _b.onContentChanged();
@@ -3269,6 +3410,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
       editorEl.handleRubyCompletion();
       editorEl.handleTcyCompletion();
       editorEl.handleBoutenCompletion();
+      editorEl.handleHeadingCompletion();
       editorEl.onCompositionEnd(e);
       editorEl.handleCursorAnchorInput();
       editorEl.handleBoutenPostCollapseInput();
@@ -3672,6 +3814,9 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
   applyBouten() {
     this.applyAnnotation((el) => el.wrapSelectionWithBouten());
   }
+  applyHeading(level) {
+    this.applyAnnotation((el) => el.applyHeading(level));
+  }
   applyAnnotation(wrap) {
     if (!this.editorEl) return;
     if (!wrap(this.editorEl)) {
@@ -3883,6 +4028,36 @@ var TatePlugin = class extends import_obsidian7.Plugin {
         const view = this.getActiveTateView();
         if (!view) return false;
         if (!checking) view.applyBouten();
+        return true;
+      }
+    });
+    this.addCommand({
+      id: "set-heading-large",
+      name: "\u73FE\u5728\u306E\u6BB5\u843D\u3092\u5927\u898B\u51FA\u3057\u306B\u8A2D\u5B9A",
+      checkCallback: (checking) => {
+        const view = this.getActiveTateView();
+        if (!view) return false;
+        if (!checking) view.applyHeading("large");
+        return true;
+      }
+    });
+    this.addCommand({
+      id: "set-heading-mid",
+      name: "\u73FE\u5728\u306E\u6BB5\u843D\u3092\u4E2D\u898B\u51FA\u3057\u306B\u8A2D\u5B9A",
+      checkCallback: (checking) => {
+        const view = this.getActiveTateView();
+        if (!view) return false;
+        if (!checking) view.applyHeading("mid");
+        return true;
+      }
+    });
+    this.addCommand({
+      id: "set-heading-small",
+      name: "\u73FE\u5728\u306E\u6BB5\u843D\u3092\u5C0F\u898B\u51FA\u3057\u306B\u8A2D\u5B9A",
+      checkCallback: (checking) => {
+        const view = this.getActiveTateView();
+        if (!view) return false;
+        if (!checking) view.applyHeading("small");
         return true;
       }
     });

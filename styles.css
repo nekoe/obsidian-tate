@@ -106,6 +106,23 @@
     text-emphasis-position: over right;
 }
 
+/* Heading spans (大見出し/中見出し/小見出し) */
+.tate-editor .tate-heading {
+    font-weight: bold;
+}
+
+.tate-editor .tate-heading-large {
+    font-size: 1.5em;
+}
+
+.tate-editor .tate-heading-mid {
+    font-size: 1.3em;
+}
+
+.tate-editor .tate-heading-small {
+    font-size: 1.1em;
+}
+
 /* Editing span while inline-expanded */
 .tate-editor .tate-editing {
     background: var(--text-highlight-bg, rgba(255, 208, 0, 0.35));

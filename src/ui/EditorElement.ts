@@ -89,6 +89,10 @@ export class EditorElement {
         return this.inlineEditor.handleBoutenCompletion();
     }
 
+    handleHeadingCompletion(): boolean {
+        return this.inlineEditor.handleHeadingCompletion();
+    }
+
     // ---- Selection wrap methods called from the command palette ----
 
     wrapSelectionWithRuby(): boolean {
@@ -101,6 +105,44 @@ export class EditorElement {
 
     wrapSelectionWithBouten(): boolean {
         return this.inlineEditor.wrapSelectionWithBouten();
+    }
+
+    // Applies a heading annotation to the paragraph containing the cursor.
+    // If the paragraph already has a heading at the same level, the annotation is removed (toggle).
+    // If it has a different heading level, the level is changed.
+    // Returns false if there is no cursor or the paragraph is empty.
+    applyHeading(level: 'large' | 'mid' | 'small'): boolean {
+        const sel = window.getSelection();
+        if (!sel || sel.rangeCount === 0) return false;
+        const div = this.findParagraphDiv(sel.getRangeAt(0).startContainer);
+        if (!div) return false;
+
+        const currentSrc = this.virtualizer
+            ? this.virtualizer.getSrcLine(div)
+            : Array.from(div.childNodes).map(n => serializeNode(n, this.el)).join('');
+        if (!currentSrc) return false;
+
+        const suffix = level === 'large' ? '大見出し' : level === 'mid' ? '中見出し' : '小見出し';
+
+        // Detect an existing heading annotation at the end of the line.
+        const m = /^([\s\S]+)［＃「([^「」\n]+)」は(大|中|小)見出し］$/.exec(currentSrc);
+        let newSrc: string;
+        if (m && m[1].endsWith(m[2])) {
+            const content = m[2];
+            const existingLevel = m[3] === '大' ? 'large' : m[3] === '中' ? 'mid' : 'small';
+            if (existingLevel === level) {
+                newSrc = m[1]; // toggle off: restore text before annotation
+            } else {
+                newSrc = `${m[1]}［＃「${content}」は${suffix}］`;
+            }
+        } else {
+            newSrc = `${currentSrc}［＃「${currentSrc}」は${suffix}］`;
+        }
+
+        this.virtualizer?.unfrostDiv(div);
+        div.replaceChildren(sanitizeHTMLToDom(parseInlineToHtml(newSrc) || '<br>'));
+        this.virtualizer?.observeOne(div);
+        return true;
     }
 
     // Copy handler: serializes the selected DOM to Aozora notation and writes it to text/plain.
@@ -439,6 +481,7 @@ export class EditorElement {
             !settings.suppressRubyInline,
             !settings.suppressTcyInline,
             !settings.suppressBoutenInline,
+            !settings.suppressHeadingInline,
         );
     }
 

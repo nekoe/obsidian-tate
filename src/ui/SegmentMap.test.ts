@@ -121,6 +121,47 @@ describe('buildSegmentMap', () => {
         assertContiguous(segs, src.length);
     });
 
+    it('large heading AB［＃「AB」は大見出し］', () => {
+        // srcLen = 2*2+10 = 14
+        const src = 'AB［＃「AB」は大見出し］';
+        const segs = buildSegmentMap(src);
+        expect(segs).toHaveLength(1);
+        expect(segs[0].kind).toBe('heading-large');
+        expect(segs[0].srcLen).toBe(14);
+        expect(segs[0].viewLen).toBe(2);
+        assertContiguous(segs, src.length);
+    });
+
+    it('mid heading ABC［＃「ABC」は中見出し］', () => {
+        // srcLen = 3*2+10 = 16
+        const src = 'ABC［＃「ABC」は中見出し］';
+        const segs = buildSegmentMap(src);
+        expect(segs).toHaveLength(1);
+        expect(segs[0].kind).toBe('heading-mid');
+        expect(segs[0].srcLen).toBe(16);
+        expect(segs[0].viewLen).toBe(3);
+        assertContiguous(segs, src.length);
+    });
+
+    it('small heading A［＃「A」は小見出し］', () => {
+        // srcLen = 1*2+10 = 12
+        const src = 'A［＃「A」は小見出し］';
+        const segs = buildSegmentMap(src);
+        expect(segs).toHaveLength(1);
+        expect(segs[0].kind).toBe('heading-small');
+        expect(segs[0].srcLen).toBe(12);
+        expect(segs[0].viewLen).toBe(1);
+        assertContiguous(segs, src.length);
+    });
+
+    it('heading content mismatch is plain text', () => {
+        const src = 'AB［＃「XY」は大見出し］';
+        const segs = buildSegmentMap(src);
+        expect(segs).toHaveLength(1);
+        expect(segs[0].kind).toBe('plain');
+        expect(segs[0].srcLen).toBe(src.length);
+    });
+
     it('explicit ruby surrounded by plain text', () => {
         const src = 'ABC｜DE《fg》XYZ';
         const segs = buildSegmentMap(src);

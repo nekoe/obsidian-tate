@@ -12,6 +12,7 @@ export interface TatePluginSettings {
     suppressRubyInline: boolean;
     suppressTcyInline: boolean;
     suppressBoutenInline: boolean;
+    suppressHeadingInline: boolean;
 }
 
 export const DEFAULT_SETTINGS: TatePluginSettings = {
@@ -25,6 +26,7 @@ export const DEFAULT_SETTINGS: TatePluginSettings = {
     suppressRubyInline: false,
     suppressTcyInline: false,
     suppressBoutenInline: false,
+    suppressHeadingInline: false,
 };
 
 export class TateSettingTab extends PluginSettingTab {
@@ -164,6 +166,17 @@ export class TateSettingTab extends PluginSettingTab {
                 .setValue(this.plugin.settings.suppressBoutenInline)
                 .onChange(async (value) => {
                     this.plugin.settings.suppressBoutenInline = value;
+                    await this.plugin.saveSettings();
+                    this.plugin.applySettingsToAllViews();
+                }));
+
+        new Setting(containerEl)
+            .setName('見出しのインライン展開を抑制する')
+            .setDesc('カーソルが見出し上に移動しても青空記法テキストに展開しない (default off)')
+            .addToggle(toggle => toggle
+                .setValue(this.plugin.settings.suppressHeadingInline)
+                .onChange(async (value) => {
+                    this.plugin.settings.suppressHeadingInline = value;
                     await this.plugin.saveSettings();
                     this.plugin.applySettingsToAllViews();
                 }));
