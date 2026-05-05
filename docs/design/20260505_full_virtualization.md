@@ -5,10 +5,10 @@ Created: 2026-05-05
 ## Background
 
 The existing pseudo-virtualization (`ParagraphVirtualizer`, introduced in
-`20260504_dom_virtualization.md`) empties off-screen paragraph divs and stores their content in
-`data-src` / `data-view-len` attributes ("frozen" divs). This eliminates live DOM subtrees for
-off-screen paragraphs, but every frozen div shell remains in the DOM tree. On a 936 k-character
-file the editor holds ~21,000 div shells.
+`20260504_dom_virtualization.md`) empties off-screen paragraph divs. Their content is stored in
+`frozenSrc` / `frozenViewLen` WeakMaps and a `paragraphRecords[]` array (Phase 1 completed;
+the original `data-src` / `data-view-len` DOM attributes were removed). Every frozen div shell
+still remains in the DOM tree. On a 936 k-character file the editor holds ~21,000 div shells.
 
 ### Remaining performance problem after pseudo-virtualization
 
@@ -148,10 +148,11 @@ therefore inside the DOM window.
 
 ### getValue() / getSrcLine()
 
-`getValue()` currently serializes every div either via `data-src` (frozen) or `serializeNode`
-(real). With full virtualization, off-window divs are not in the DOM at all. `getValue()` must
-read from `paragraphRecords[i].src` for off-window paragraphs instead. This is faster (no DOM
-traversal) and simpler than the current frozen-div path.
+`getValue()` currently serializes every div either via `frozenSrc` WeakMap (frozen) or
+`serializeNode` (real). With full virtualization, off-window divs are not in the DOM at all and
+have no WeakMap entry (GC'd on removal). `getValue()` must read from `paragraphRecords[i].src`
+for off-window paragraphs instead. This is faster (no DOM traversal) and is already the
+structure maintained by Phase 1.
 
 ### patchParagraphs (Undo/Redo)
 
@@ -279,22 +280,37 @@ future features (heading notation, one-by-one replace, bulk replace / outline pa
 different dependencies on these phases. The recommended order balances delivery speed against
 architectural cleanliness.
 
-### Phase 1 — `paragraphRecords[]` data store (low risk)
+### Phase 1 — `paragraphRecords[]` data store (**DONE** — branch `feature/paragraph-records`)
 
-Introduce the per-paragraph data store alongside the existing `ParagraphVirtualizer`, keeping
-the frozen-div path intact. This is a purely additive change: frozen divs continue to work, and
-`paragraphRecords` is populated in parallel.
+Introduced the per-paragraph data store alongside the existing `ParagraphVirtualizer`.
+`data-src` / `data-view-len` DOM attributes were removed; frozen divs are now true empty shells.
 
-1. Add `paragraphRecords: ParagraphRecord[]` populated from `data-src` / `data-view-len` /
-   `style.width` on freeze and updated on thaw / edit.
-2. Migrate `getValue()` to read `.src` from `paragraphRecords` for frozen divs (removes
-   `data-src` attribute dependency; frozen divs become true empty shells).
-3. Update `patchParagraphs()` to write changed lines back into `paragraphRecords`.
-   Insertions and deletions anywhere in the document are handled with `splice`:
-   `paragraphRecords.splice(i, deleteCount, ...newRecords)`. This mirrors exactly
-   what `patchParagraphs()` already does to the DOM (insert/remove `<div>` elements
-   at the diff boundary). The cost is O(N) for the array shift, which is negligible
-   alongside the O(diff) DOM mutations that `patchParagraphs()` performs.
+**What was built:**
+
+- `ParagraphRecord` interface: `{ src: string; viewLen: number; width: number }`.
+- `paragraphRecords: ParagraphRecord[]` on `ParagraphVirtualizer` (indexed 1:1 with
+  `editorEl.children`). Populated by `initRecords()`, updated by `spliceRecords()` and `freezeDiv()`.
+- `frozenSrc` / `frozenViewLen` **WeakMaps** (keyed by div element identity) as the primary
+  read path for `getSrcLine()`, `getViewLen()`, `getValue()`, `getVisibleOffset()`,
+  `setVisibleOffset()`, and `extractHybridText()`. These are set by `setFrozenContent()` inside
+  `freezeDiv()`.
+- `initRecords(lines)` called from `setValue()` and the `patchParagraphs` fallback path after
+  `replaceChildren`.
+- `spliceRecords(lo, deleteCount, newLines)` called at the end of the `patchParagraphs` success
+  path, mirroring the DOM splice that already happened.
+- `getSrcByIndex(i)` / `getViewLenByIndex(i)` for O(1) index-based access (reserved for Phase 2;
+  not currently used by any read path in production code).
+
+**Why WeakMaps instead of `paragraphRecords` for reads:**
+
+`paragraphRecords` is indexed by DOM position. Any DOM insertion or deletion between a freeze
+and the next `patchParagraphs` call (e.g., Enter key, paste) shifts frozen div positions without
+updating the array, causing `getValue()` to read the wrong paragraph content. WeakMaps keyed by
+div element identity are unaffected by positional shifts.
+
+`paragraphRecords` is maintained in parallel for Phase 2, where off-window paragraphs are
+removed from the DOM entirely (WeakMap entries would be GC'd) and width data must persist in a
+plain array.
 
 ### Phase 2 — DOM window management + spacers (high risk)
 
@@ -321,15 +337,15 @@ refactoring step and carries the most risk.
 **Recommended delivery order:**
 
 ```
-1. Heading notation          (no virtualization dependency)
-2. Replace — one-by-one     (no virtualization dependency)
-3. Phase 1: paragraphRecords[]
+1. Heading notation          (no virtualization dependency)        ✅ done
+2. Replace — one-by-one     (no virtualization dependency)        ✅ done
+3. Phase 1: paragraphRecords[]                                     ✅ done (feature/paragraph-records)
 4. Replace — bulk           (cleaner with paragraphRecords)
 5. Outline panel            (cleaner with paragraphRecords)
 6. Phase 2: DOM window + spacers   (when performance warrants it)
 ```
 
-Heading notation and one-by-one replace can be shipped immediately without touching the
-virtualization layer. Phase 1 is a prerequisite for clean bulk replace and outline
-implementation but not a hard requirement. Phase 2 should be deferred until the remaining
+Heading notation and one-by-one replace shipped without touching the virtualization layer.
+Phase 1 is complete: `paragraphRecords` is now populated and `data-src`/`data-view-len`
+attributes are removed. Phase 2 should be deferred until the remaining
 `range.deleteContents()` cost (~25 ms for large selections) becomes a user-visible problem.
