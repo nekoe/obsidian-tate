@@ -154,12 +154,12 @@ describe('ParagraphVirtualizer', () => {
     // ---- getSrcLine ----
 
     describe('getSrcLine', () => {
-        it('returns src from paragraphRecords for frozen div', () => {
+        it('returns src from frozenSrc WeakMap for frozen div', () => {
             const div = addFrozenDiv(virt, editorEl, '吾輩は猫である', 7);
             expect(virt.getSrcLine(div)).toBe('吾輩は猫である');
         });
 
-        it('returns empty string for frozen div with empty src', () => {
+        it('returns empty string for frozen div with empty frozenSrc entry', () => {
             const div = addFrozenDiv(virt, editorEl, '', 0);
             expect(virt.getSrcLine(div)).toBe('');
         });
@@ -182,7 +182,7 @@ describe('ParagraphVirtualizer', () => {
     // ---- getViewLen ----
 
     describe('getViewLen', () => {
-        it('reads viewLen from paragraphRecords for frozen div', () => {
+        it('reads viewLen from frozenViewLen WeakMap for frozen div', () => {
             const div = addFrozenDiv(virt, editorEl, '吾輩は猫である', 7);
             expect(virt.getViewLen(div)).toBe(7);
         });

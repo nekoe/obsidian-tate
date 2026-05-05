@@ -1947,19 +1947,20 @@ var EditorElement = class {
     }).join("");
   }
   setValue(content, preserveCursor) {
-    var _a, _b;
+    var _a, _b, _c;
     content = content.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
     this.inlineEditor.reset();
     if (this.getValue() === content && this.el.childNodes.length > 0) return;
     if (preserveCursor && document.activeElement === this.el) {
       const pos = this.getVisibleOffset();
       this.el.replaceChildren((0, import_obsidian3.sanitizeHTMLToDom)(parseToHtml(content)));
+      (_a = this.virtualizer) == null ? void 0 : _a.initRecords(content.split("\n"));
       this.setVisibleOffset(pos);
     } else {
       this.el.replaceChildren((0, import_obsidian3.sanitizeHTMLToDom)(parseToHtml(content)));
+      (_b = this.virtualizer) == null ? void 0 : _b.initRecords(content.split("\n"));
     }
-    (_a = this.virtualizer) == null ? void 0 : _a.initRecords(content.split("\n"));
-    (_b = this.virtualizer) == null ? void 0 : _b.observeAll();
+    (_c = this.virtualizer) == null ? void 0 : _c.observeAll();
   }
   // ---- Inline expand/collapse (call from selectionchange) ----
   handleSelectionChange() {
@@ -3384,7 +3385,8 @@ var ParagraphVirtualizer = class {
     return result.join("");
   }
   // Returns the index of div in editorEl.children, or -1 if not found.
-  // Used for O(N) lookups in getSrcLine/getViewLen for frozen divs (thaw path only).
+  // Used by freezeDiv() to sync paragraphRecords[idx] when a div is frozen (O(N) scan;
+  // acceptable because freezeDiv fires at most once per div after a 50ms timer delay).
   indexOfDiv(div) {
     for (let i = 0; i < this.editorEl.children.length; i++) {
       if (this.editorEl.children[i] === div) return i;

@@ -15,8 +15,12 @@ export interface ParagraphRecord {
 
 // Manages DOM virtualization: off-screen paragraph divs are replaced with lightweight
 // frozen placeholders (<div class="tate-frozen">) to reduce the number of live DOM nodes.
-// paragraphRecords[] is the source of truth for the content of frozen divs; data-src and
-// data-view-len attributes are no longer written. IntersectionObserver drives freeze/thaw.
+// data-src and data-view-len attributes are no longer written.
+// frozenSrc / frozenViewLen WeakMaps (keyed by div identity) are the source of truth for
+// all reads (getSrcLine, getViewLen, getValue, getVisibleOffset, extractHybridText).
+// paragraphRecords[] mirrors paragraph content indexed by DOM position; it is maintained
+// for Phase 2 (DOM windowing) but is not currently used by any read path.
+// IntersectionObserver drives freeze/thaw.
 export class ParagraphVirtualizer {
     private observer: IntersectionObserver | null = null;
     private freezeTimers = new Map<HTMLElement, ReturnType<typeof setTimeout>>();
@@ -314,7 +318,8 @@ export class ParagraphVirtualizer {
     }
 
     // Returns the index of div in editorEl.children, or -1 if not found.
-    // Used for O(N) lookups in getSrcLine/getViewLen for frozen divs (thaw path only).
+    // Used by freezeDiv() to sync paragraphRecords[idx] when a div is frozen (O(N) scan;
+    // acceptable because freezeDiv fires at most once per div after a 50ms timer delay).
     private indexOfDiv(div: HTMLElement): number {
         for (let i = 0; i < this.editorEl.children.length; i++) {
             if (this.editorEl.children[i] === div) return i;

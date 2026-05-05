@@ -60,11 +60,12 @@ export class EditorElement {
         if (preserveCursor && document.activeElement === this.el) {
             const pos = this.getVisibleOffset();
             this.el.replaceChildren(sanitizeHTMLToDom(parseToHtml(content)));
+            this.virtualizer?.initRecords(content.split('\n'));
             this.setVisibleOffset(pos);
         } else {
             this.el.replaceChildren(sanitizeHTMLToDom(parseToHtml(content)));
+            this.virtualizer?.initRecords(content.split('\n'));
         }
-        this.virtualizer?.initRecords(content.split('\n'));
         this.virtualizer?.observeAll();
     }
 
