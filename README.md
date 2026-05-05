@@ -17,8 +17,8 @@ The plugin supports the annotation syntax used by [Aozora Bunko](https://www.aoz
 | `｜東京《とうきょう》` or `東京《とうきょう》` (consecutive kanji) | Ruby (furigana) |
 | `２０２５［＃「２０２５」は縦中横］` | Tate-chu-yoko (digits/latin rotated upright) |
 | `春［＃「春」に傍点］` | Emphasis dots (sesame marks) |
-| `序章［＃「序章」は大見出し］` | Large heading (bold, 1.5×) |
-| `第一節［＃「第一節」は中見出し］` | Mid heading (bold, 1.3×) |
+| `序章［＃「序章」は大見出し］` | Large heading (bold, 1.3×) |
+| `第一節［＃「第一節」は中見出し］` | Mid heading (bold, 1.2×) |
 | `はじめに［＃「はじめに」は小見出し］` | Small heading (bold, 1.1×) |
 
 **Applying via Command Palette**
