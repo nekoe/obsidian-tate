@@ -2866,13 +2866,13 @@ var SearchPanel = class {
     nextBtn.className = "tate-search-btn";
     nextBtn.tabIndex = -1;
     nextBtn.setAttribute("aria-label", "\u6B21\u3078");
-    (0, import_obsidian4.setIcon)(nextBtn, "move-down");
+    (0, import_obsidian4.setIcon)(nextBtn, "arrow-down");
     nextBtn.addEventListener("click", () => this.navigate(1));
     const prevBtn = document.createElement("button");
     prevBtn.className = "tate-search-btn";
     prevBtn.tabIndex = -1;
     prevBtn.setAttribute("aria-label", "\u524D\u3078");
-    (0, import_obsidian4.setIcon)(prevBtn, "move-up");
+    (0, import_obsidian4.setIcon)(prevBtn, "arrow-up");
     prevBtn.addEventListener("click", () => this.navigate(-1));
     const closeBtn = document.createElement("button");
     closeBtn.className = "tate-search-btn";

@@ -385,14 +385,14 @@ export class SearchPanel {
         nextBtn.className = 'tate-search-btn';
         nextBtn.tabIndex = -1;
         nextBtn.setAttribute('aria-label', '次へ');
-        setIcon(nextBtn, 'move-down');
+        setIcon(nextBtn, 'arrow-down');
         nextBtn.addEventListener('click', () => this.navigate(1));
 
         const prevBtn = document.createElement('button');
         prevBtn.className = 'tate-search-btn';
         prevBtn.tabIndex = -1;
         prevBtn.setAttribute('aria-label', '前へ');
-        setIcon(prevBtn, 'move-up');
+        setIcon(prevBtn, 'arrow-up');
         prevBtn.addEventListener('click', () => this.navigate(-1));
 
         const closeBtn = document.createElement('button');
