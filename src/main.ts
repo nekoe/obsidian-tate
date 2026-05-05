@@ -78,6 +78,39 @@ export default class TatePlugin extends Plugin {
             },
         });
 
+        this.addCommand({
+            id: 'set-heading-large',
+            name: '現在の段落を大見出しに設定',
+            checkCallback: (checking) => {
+                const view = this.getActiveTateView();
+                if (!view) return false;
+                if (!checking) view.applyHeading('large');
+                return true;
+            },
+        });
+
+        this.addCommand({
+            id: 'set-heading-mid',
+            name: '現在の段落を中見出しに設定',
+            checkCallback: (checking) => {
+                const view = this.getActiveTateView();
+                if (!view) return false;
+                if (!checking) view.applyHeading('mid');
+                return true;
+            },
+        });
+
+        this.addCommand({
+            id: 'set-heading-small',
+            name: '現在の段落を小見出しに設定',
+            checkCallback: (checking) => {
+                const view = this.getActiveTateView();
+                if (!view) return false;
+                if (!checking) view.applyHeading('small');
+                return true;
+            },
+        });
+
         this.addSettingTab(new TateSettingTab(this.app, this));
 
         // Best-effort cursor save on app quit. Not guaranteed to run (Obsidian limitation).

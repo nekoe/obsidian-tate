@@ -1,7 +1,7 @@
 // Unicode range for kanji characters (same as EditorElement.ts)
 const KANJI_RE_STR = '[\u4E00-\u9FFF\u3400-\u4DBF\u{20000}-\u{2A6DF}々〆〤]+';
 
-export type SegmentKind = 'plain' | 'ruby-explicit' | 'ruby-implicit' | 'tcy' | 'bouten' | 'newline';
+export type SegmentKind = 'plain' | 'ruby-explicit' | 'ruby-implicit' | 'tcy' | 'bouten' | 'heading-large' | 'heading-mid' | 'heading-small' | 'newline';
 
 export interface Segment {
     readonly kind: SegmentKind;
@@ -135,7 +135,10 @@ function mapSrcLocalToView(seg: Segment, local: number): number {
             return seg.viewStart + seg.viewLen;
         }
         case 'tcy':
-        case 'bouten': {
+        case 'bouten':
+        case 'heading-large':
+        case 'heading-mid':
+        case 'heading-small': {
             // content[annotation]: local 0..viewLen=content, viewLen+1..=annotation
             if (local <= seg.viewLen) return seg.viewStart + local;
             return seg.viewStart + seg.viewLen;
@@ -154,6 +157,9 @@ function mapViewLocalToSrc(seg: Segment, local: number): number {
         case 'ruby-implicit':
         case 'tcy':
         case 'bouten':
+        case 'heading-large':
+        case 'heading-mid':
+        case 'heading-small':
             return seg.srcStart + local;
     }
 }
@@ -170,6 +176,7 @@ function tokenize(source: string): ResolvedItem[] {
     items = flatScan(items, scanExplicitRuby);
     items = flatScan(items, raw => scanAnnotation(raw, tcyRe,    'tcy',    9));
     items = flatScan(items, raw => scanAnnotation(raw, boutenRe, 'bouten', 8));
+    items = flatScan(items, scanHeadings);
     items = flatScan(items, scanImplicitRuby);
     items = flatScan(items, scanNewlines);
 
@@ -217,7 +224,7 @@ function scanAnnotation(
     raw: string,
     re: RegExp,
     kind: 'tcy' | 'bouten',
-    bracketFixedLen: number, // 9=tcy, 8=bouten (fixed character count including 「」 and keyword)
+    bracketFixedLen: number, // 9=tcy, 8=bouten (fixed char count of ［＃「」keyword］ excluding content)
 ): PipelineItem[] {
     re.lastIndex = 0;
     const result: PipelineItem[] = [];
@@ -266,6 +273,41 @@ function scanImplicitRuby(raw: string): PipelineItem[] {
             resolved: true, kind: 'ruby-implicit',
             srcLen: baseLen + rtLen + 2, // base + 《 + rt + 》
             viewLen: baseLen, baseLen, rtLen,
+        });
+        lastIndex = re.lastIndex;
+    }
+    if (lastIndex < raw.length) result.push({ resolved: false, raw: raw.slice(lastIndex) });
+    return result;
+}
+
+// Scans heading annotations: content［＃「content」は(大|中|小)見出し］
+// bracketFixedLen = 10 for all heading levels: ［＃「」は大/中/小見出し］ = 10 chars
+function scanHeadings(raw: string): PipelineItem[] {
+    const re = /［＃「([^「」\n]+)」は(大|中|小)見出し］/g;
+    const result: PipelineItem[] = [];
+    let lastIndex = 0;
+    let m: RegExpExecArray | null;
+
+    while ((m = re.exec(raw)) !== null) {
+        const content         = m[1];
+        const annotationStart = m.index;
+
+        if (!raw.slice(lastIndex, annotationStart).endsWith(content)) {
+            result.push({ resolved: false, raw: raw.slice(lastIndex, re.lastIndex) });
+            lastIndex = re.lastIndex;
+            continue;
+        }
+
+        const contentStart = annotationStart - content.length;
+        if (contentStart > lastIndex) {
+            result.push({ resolved: false, raw: raw.slice(lastIndex, contentStart) });
+        }
+        const kind: 'heading-large' | 'heading-mid' | 'heading-small' =
+            m[2] === '大' ? 'heading-large' : m[2] === '中' ? 'heading-mid' : 'heading-small';
+        result.push({
+            resolved: true, kind,
+            srcLen:  content.length * 2 + 10, // content + ［＃「content」は大/中/小見出し］
+            viewLen: content.length,
         });
         lastIndex = re.lastIndex;
     }

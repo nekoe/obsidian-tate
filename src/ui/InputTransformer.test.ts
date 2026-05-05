@@ -13,6 +13,7 @@ type Settings = {
     suppressRubyInline: boolean;
     suppressTcyInline: boolean;
     suppressBoutenInline: boolean;
+    suppressHeadingInline: boolean;
 };
 
 const DEFAULT: Settings = {
@@ -26,6 +27,7 @@ const DEFAULT: Settings = {
     suppressRubyInline: false,
     suppressTcyInline: false,
     suppressBoutenInline: false,
+    suppressHeadingInline: false,
 };
 
 function makeRoot(): HTMLDivElement {

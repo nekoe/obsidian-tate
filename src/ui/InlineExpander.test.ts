@@ -3,7 +3,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 
 import { InlineExpander } from './InlineExpander';
-import { createRubyEl, createTcyEl, createBoutenEl } from './domHelpers';
+import { createRubyEl, createTcyEl, createBoutenEl, createHeadingEl } from './domHelpers';
 
 function makeRoot(): HTMLDivElement {
     const root = document.createElement('div');
@@ -139,6 +139,45 @@ describe('findExpandableAncestor — bouten', () => {
         root.appendChild(bouten);
         const text = bouten.firstChild as Text;
         expect(expander.findExpandableAncestor(text, true, true, false)).toBeNull();
+    });
+});
+
+describe('findExpandableAncestor — heading', () => {
+    let root: HTMLDivElement;
+    let expander: InlineExpander;
+
+    beforeEach(() => {
+        root = makeRoot();
+        expander = new InlineExpander(root);
+    });
+
+    it('returns heading span when cursor is inside large heading and heading=true', () => {
+        const h = createHeadingEl('序章', 'large');
+        root.appendChild(h);
+        const text = h.firstChild as Text;
+        expect(expander.findExpandableAncestor(text, false, false, false, true)).toBe(h);
+    });
+
+    it('returns heading span when cursor is inside mid heading and heading=true', () => {
+        const h = createHeadingEl('第一節', 'mid');
+        root.appendChild(h);
+        const text = h.firstChild as Text;
+        expect(expander.findExpandableAncestor(text, false, false, false, true)).toBe(h);
+    });
+
+    it('returns null for heading when heading=false', () => {
+        const h = createHeadingEl('序章', 'large');
+        root.appendChild(h);
+        const text = h.firstChild as Text;
+        expect(expander.findExpandableAncestor(text, true, true, true, false)).toBeNull();
+    });
+
+    it('heading=true is the default', () => {
+        const h = createHeadingEl('序章', 'small');
+        root.appendChild(h);
+        const text = h.firstChild as Text;
+        // 5th param omitted → defaults to true
+        expect(expander.findExpandableAncestor(text, false, false, false)).toBe(h);
     });
 });
 

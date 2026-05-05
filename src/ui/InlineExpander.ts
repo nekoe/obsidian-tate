@@ -15,13 +15,14 @@ export class InlineExpander {
     // Returns the first ancestor of node that is an expandable annotation element,
     // filtered by the caller-provided expand flags.
     findExpandableAncestor(
-        node: Node, ruby: boolean, tcy: boolean, bouten: boolean,
+        node: Node, ruby: boolean, tcy: boolean, bouten: boolean, heading = true,
     ): HTMLElement | null {
         let el: HTMLElement | null = node instanceof HTMLElement ? node : node.parentElement;
         while (el && el !== this.el) {
             if (el.tagName === 'RUBY' && ruby) return el;
             if (el.tagName === 'SPAN' && el.getAttribute('data-tcy') === 'explicit' && tcy) return el;
             if (el.tagName === 'SPAN' && el.getAttribute('data-bouten') && bouten) return el;
+            if (el.tagName === 'SPAN' && el.getAttribute('data-heading') && heading) return el;
             el = el.parentElement;
         }
         return null;

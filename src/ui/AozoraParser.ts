@@ -26,6 +26,7 @@ export function parseInlineToHtml(text: string): string {
         splitByExplicitRuby,
         splitByExplicitTcy,
         splitByExplicitBouten,
+        splitByHeadings,
         splitByImplicitRuby,
     ]);
 }
@@ -121,6 +122,40 @@ function splitByAnnotation(
     return result;
 }
 
+// Splits heading content［＃「content」は(大|中|小)見出し］
+function splitByHeadings(text: string): ParseSegment[] {
+    const result: ParseSegment[] = [];
+    const re = /［＃「([^「」\n]+)」は(大|中|小)見出し］/g;
+    let lastIndex = 0;
+    let m: RegExpExecArray | null;
+
+    while ((m = re.exec(text)) !== null) {
+        const content = m[1];
+        const level = m[2] === '大' ? 'large' : m[2] === '中' ? 'mid' : 'small';
+        const annotationStart = m.index;
+
+        if (!text.slice(lastIndex, annotationStart).endsWith(content)) {
+            result.push({ type: 'text', text: text.slice(lastIndex, re.lastIndex) });
+            lastIndex = re.lastIndex;
+            continue;
+        }
+
+        const contentStart = annotationStart - content.length;
+        if (contentStart > lastIndex) {
+            result.push({ type: 'text', text: text.slice(lastIndex, contentStart) });
+        }
+        result.push({
+            type: 'html',
+            html: `<span class="tate-heading tate-heading-${level}" data-heading="${level}">${esc(content)}</span>`,
+        });
+        lastIndex = re.lastIndex;
+    }
+    if (lastIndex < text.length) {
+        result.push({ type: 'text', text: text.slice(lastIndex) });
+    }
+    return result;
+}
+
 // Splits implicit ruby kanji《rt》
 function splitByImplicitRuby(text: string): ParseSegment[] {
     const re = new RegExp(`(${KANJI_RE_STR})《([^《》\\n]*)》`, 'gu');
@@ -179,6 +214,14 @@ export function serializeNode(node: Node, rootEl: HTMLElement): string {
             if (node.getAttribute('data-bouten')) {
                 const content = node.textContent ?? '';
                 return `${content}［＃「${content}」に傍点］`;
+            }
+            const heading = node.getAttribute('data-heading');
+            if (heading === 'large' || heading === 'mid' || heading === 'small') {
+                const suffix = heading === 'large' ? '大見出し' : heading === 'mid' ? '中見出し' : '小見出し';
+                const content = Array.from(node.childNodes)
+                    .map(n => serializeNode(n, rootEl))
+                    .join('');
+                return `${content}［＃「${content}」は${suffix}］`;
             }
             if (node.classList.contains('tate-cursor-anchor')) {
                 // Cursor anchor: transparent to serialization; strip U+200B placeholder

@@ -186,7 +186,8 @@ export class VerticalWritingView extends ItemView {
                 }
                 const annotated = editorEl.handleRubyCompletion()
                                || editorEl.handleTcyCompletion()
-                               || editorEl.handleBoutenCompletion();
+                               || editorEl.handleBoutenCompletion()
+                               || editorEl.handleHeadingCompletion();
                 if (annotated) {
                     this.commitToCm6(); // Notation conversion is an immediate commit point
                     this.searchPanel?.onContentChanged();
@@ -214,6 +215,7 @@ export class VerticalWritingView extends ItemView {
             editorEl.handleRubyCompletion();
             editorEl.handleTcyCompletion();
             editorEl.handleBoutenCompletion();
+            editorEl.handleHeadingCompletion();
             editorEl.onCompositionEnd(e); // bracket de-indent for IME input
             editorEl.handleCursorAnchorInput(); // Manage U+200B placeholder after IME input
             editorEl.handleBoutenPostCollapseInput(); // Move IME text out of post-collapse bouten span
@@ -677,6 +679,10 @@ export class VerticalWritingView extends ItemView {
     }
     applyTcy(): void    { this.applyAnnotation(el => el.wrapSelectionWithTcy()); }
     applyBouten(): void { this.applyAnnotation(el => el.wrapSelectionWithBouten()); }
+
+    applyHeading(level: 'large' | 'mid' | 'small'): void {
+        this.applyAnnotation(el => el.applyHeading(level));
+    }
 
     private applyAnnotation(wrap: (el: EditorElement) => boolean): void {
         if (!this.editorEl) return;

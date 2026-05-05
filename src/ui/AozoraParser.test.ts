@@ -124,6 +124,36 @@ describe('parseInlineToHtml', () => {
         expect(parseInlineToHtml('夏［＃「春」に傍点］')).toBe('夏［＃「春」に傍点］');
     });
 
+    // ---- Headings ----
+
+    it('large heading (大見出し)', () => {
+        expect(parseInlineToHtml('序章［＃「序章」は大見出し］')).toBe(
+            '<span class="tate-heading tate-heading-large" data-heading="large">序章</span>'
+        );
+    });
+
+    it('mid heading (中見出し)', () => {
+        expect(parseInlineToHtml('第一節［＃「第一節」は中見出し］')).toBe(
+            '<span class="tate-heading tate-heading-mid" data-heading="mid">第一節</span>'
+        );
+    });
+
+    it('small heading (小見出し)', () => {
+        expect(parseInlineToHtml('はじめに［＃「はじめに」は小見出し］')).toBe(
+            '<span class="tate-heading tate-heading-small" data-heading="small">はじめに</span>'
+        );
+    });
+
+    it('heading with content mismatch is output as plain text', () => {
+        expect(parseInlineToHtml('夏［＃「春」は大見出し］')).toBe('夏［＃「春」は大見出し］');
+    });
+
+    it('heading preceded by extra plain text', () => {
+        expect(parseInlineToHtml('前置き序章［＃「序章」は大見出し］')).toBe(
+            '前置き<span class="tate-heading tate-heading-large" data-heading="large">序章</span>'
+        );
+    });
+
     // ---- Mixed content ----
 
     it('mixed: ruby + tcy + bouten + plain', () => {
@@ -225,6 +255,26 @@ describe('serializeNode', () => {
         expect(serializeNode(root.firstChild!, root)).toBe('春［＃「春」に傍点］');
     });
 
+    // ---- Headings ----
+
+    it('large heading span → content［＃「content」は大見出し］', () => {
+        const root = document.createElement('div');
+        root.innerHTML = '<span class="tate-heading tate-heading-large" data-heading="large">序章</span>';
+        expect(serializeNode(root.firstChild!, root)).toBe('序章［＃「序章」は大見出し］');
+    });
+
+    it('mid heading span → content［＃「content」は中見出し］', () => {
+        const root = document.createElement('div');
+        root.innerHTML = '<span class="tate-heading tate-heading-mid" data-heading="mid">第一節</span>';
+        expect(serializeNode(root.firstChild!, root)).toBe('第一節［＃「第一節」は中見出し］');
+    });
+
+    it('small heading span → content［＃「content」は小見出し］', () => {
+        const root = document.createElement('div');
+        root.innerHTML = '<span class="tate-heading tate-heading-small" data-heading="small">はじめに</span>';
+        expect(serializeNode(root.firstChild!, root)).toBe('はじめに［＃「はじめに」は小見出し］');
+    });
+
     // ---- Cursor anchor ----
 
     it('cursor anchor span with U+200B only returns empty string', () => {
@@ -313,6 +363,18 @@ describe('inline round-trip (parseInlineToHtml → serializeNode)', () => {
 
     it('bouten', () => {
         expect(inlineRoundTrip('春［＃「春」に傍点］')).toBe('春［＃「春」に傍点］');
+    });
+
+    it('large heading', () => {
+        expect(inlineRoundTrip('序章［＃「序章」は大見出し］')).toBe('序章［＃「序章」は大見出し］');
+    });
+
+    it('mid heading', () => {
+        expect(inlineRoundTrip('第一節［＃「第一節」は中見出し］')).toBe('第一節［＃「第一節」は中見出し］');
+    });
+
+    it('small heading', () => {
+        expect(inlineRoundTrip('はじめに［＃「はじめに」は小見出し］')).toBe('はじめに［＃「はじめに」は小見出し］');
     });
 
     it('explicit ruby surrounded by plain text', () => {

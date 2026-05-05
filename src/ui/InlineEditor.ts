@@ -28,6 +28,7 @@ export class InlineEditor {
     private expandRuby = true;
     private expandTcy = true;
     private expandBouten = true;
+    private expandHeading = true;
     private readonly boutenGuard: BoutenGuard;
     private readonly anchorManager: CursorAnchorManager;
     private readonly liveConverter: LiveConverter;
@@ -44,10 +45,11 @@ export class InlineEditor {
         this.anchorManager.setVirtualizer(v);
     }
 
-    setExpandSettings(ruby: boolean, tcy: boolean, bouten: boolean): void {
+    setExpandSettings(ruby: boolean, tcy: boolean, bouten: boolean, heading: boolean): void {
         this.expandRuby = ruby;
         this.expandTcy = tcy;
         this.expandBouten = bouten;
+        this.expandHeading = heading;
     }
 
     // Resets expansion state, selection cache, and burst flag (called from setValue / applyFromCm6)
@@ -176,7 +178,7 @@ export class InlineEditor {
                 // For expandable elements at end-of-line, insert a cursor anchor before expanding so
                 // that when the user exits past the closing bracket, nextSibling is already the anchor.
                 if (target.tagName === 'RUBY' || target.getAttribute('data-tcy') === 'explicit'
-                        || target.getAttribute('data-bouten'))
+                        || target.getAttribute('data-bouten') || target.getAttribute('data-heading'))
                     this.anchorManager.ensureCursorAnchorAfter(target);
                 this.expandForEditing(target, currentRange);
             }
@@ -224,6 +226,18 @@ export class InlineEditor {
         this.isModifyingDom = true;
         try {
             return this.liveConverter.handleBoutenCompletion();
+        } finally {
+            this.isModifyingDom = false;
+        }
+    }
+
+    // Converts a heading notation just before the cursor to a heading span when ］ is typed.
+    // Returns true if a conversion occurred.
+    handleHeadingCompletion(): boolean {
+        if (this.expandedEl || this.isModifyingDom) return false;
+        this.isModifyingDom = true;
+        try {
+            return this.liveConverter.handleHeadingCompletion();
         } finally {
             this.isModifyingDom = false;
         }
@@ -406,7 +420,7 @@ export class InlineEditor {
 
     // Walks up ancestors from node and returns the first expandable element (ruby or explicit tcy)
     private findExpandableAncestor(node: Node): HTMLElement | null {
-        return this.expander.findExpandableAncestor(node, this.expandRuby, this.expandTcy, this.expandBouten);
+        return this.expander.findExpandableAncestor(node, this.expandRuby, this.expandTcy, this.expandBouten, this.expandHeading);
     }
 
     // Expands target into a raw-text editing span and sets the cursor to the corresponding position

@@ -26,6 +26,14 @@ export function createBoutenEl(content: string): HTMLElement {
     return span;
 }
 
+export function createHeadingEl(content: string, level: 'large' | 'mid' | 'small'): HTMLElement {
+    const span = document.createElement('span');
+    span.setAttribute('data-heading', level);
+    span.className = `tate-heading tate-heading-${level}`;
+    span.textContent = content;
+    return span;
+}
+
 export function createCursorAnchor(): HTMLSpanElement {
     const anchor = document.createElement('span');
     anchor.className = 'tate-cursor-anchor';
@@ -79,6 +87,10 @@ export function findAncestor(
 
 export function findBoutenAncestor(node: Node, rootEl: HTMLElement): HTMLElement | null {
     return findAncestor(node, el => !!el.getAttribute('data-bouten'), rootEl);
+}
+
+export function findHeadingAncestor(node: Node, rootEl: HTMLElement): HTMLElement | null {
+    return findAncestor(node, el => !!el.getAttribute('data-heading'), rootEl);
 }
 
 export function findTcyAncestor(node: Node, rootEl: HTMLElement): HTMLElement | null {
@@ -177,6 +189,7 @@ export function getExtraCharsFromAnnotation(rawText: string): string {
     const patterns = [
         /［＃「([^「」\n]+)」は縦中横］/,
         /［＃「([^「」\n]+)」に傍点］/,
+        /［＃「([^「」\n]+)」は(大|中|小)見出し］/,
     ];
     for (const re of patterns) {
         const m = rawText.match(re);
