@@ -500,6 +500,10 @@ export class SearchPanel {
         this.virtualizer.initRecords(this.editorElementRef.getValue().split('\n'));
         this.commitCallback?.();
         this.runSearch(false);
+        if (this.matchEntries.length > 0) {
+            this.setFocus(0, true);
+            this.replaceInputEl?.focus();
+        }
     }
 
     private runSearch(scroll = true): void {
