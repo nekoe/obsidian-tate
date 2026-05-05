@@ -2821,6 +2821,7 @@ var SearchPanel = class {
     searchRow.className = "tate-search-row";
     const toggleBtn = document.createElement("button");
     toggleBtn.className = "tate-search-toggle";
+    toggleBtn.tabIndex = -1;
     toggleBtn.textContent = expandReplace ? "\u25BC" : "\u25B6";
     toggleBtn.setAttribute("aria-label", "\u7F6E\u63DB\u6B04\u3092\u8868\u793A");
     toggleBtn.addEventListener("click", () => this.toggleReplaceRow());
@@ -2850,16 +2851,19 @@ var SearchPanel = class {
     this.countEl = count;
     const nextBtn = document.createElement("button");
     nextBtn.className = "tate-search-btn";
+    nextBtn.tabIndex = -1;
     nextBtn.setAttribute("aria-label", "\u6B21\u3078");
     nextBtn.textContent = "\u2193";
     nextBtn.addEventListener("click", () => this.navigate(1));
     const prevBtn = document.createElement("button");
     prevBtn.className = "tate-search-btn";
+    prevBtn.tabIndex = -1;
     prevBtn.setAttribute("aria-label", "\u524D\u3078");
     prevBtn.textContent = "\u2191";
     prevBtn.addEventListener("click", () => this.navigate(-1));
     const closeBtn = document.createElement("button");
     closeBtn.className = "tate-search-btn";
+    closeBtn.tabIndex = -1;
     closeBtn.setAttribute("aria-label", "\u9589\u3058\u308B");
     closeBtn.textContent = "\xD7";
     closeBtn.addEventListener("click", () => this.close());
@@ -2878,6 +2882,7 @@ var SearchPanel = class {
     this.replaceInputEl = replaceInput;
     const replaceBtn = document.createElement("button");
     replaceBtn.className = "tate-replace-btn";
+    replaceBtn.tabIndex = -1;
     replaceBtn.textContent = "\u7F6E\u63DB";
     replaceBtn.addEventListener("click", () => this.replaceCurrentMatch());
     replaceRow.append(replaceInput, replaceBtn);

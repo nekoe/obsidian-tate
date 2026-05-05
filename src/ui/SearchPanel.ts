@@ -320,6 +320,7 @@ export class SearchPanel {
 
         const toggleBtn = document.createElement('button');
         toggleBtn.className = 'tate-search-toggle';
+        toggleBtn.tabIndex = -1;
         toggleBtn.textContent = expandReplace ? '▼' : '▶';
         toggleBtn.setAttribute('aria-label', '置換欄を表示');
         toggleBtn.addEventListener('click', () => this.toggleReplaceRow());
@@ -359,18 +360,21 @@ export class SearchPanel {
 
         const nextBtn = document.createElement('button');
         nextBtn.className = 'tate-search-btn';
+        nextBtn.tabIndex = -1;
         nextBtn.setAttribute('aria-label', '次へ');
         nextBtn.textContent = '↓';
         nextBtn.addEventListener('click', () => this.navigate(1));
 
         const prevBtn = document.createElement('button');
         prevBtn.className = 'tate-search-btn';
+        prevBtn.tabIndex = -1;
         prevBtn.setAttribute('aria-label', '前へ');
         prevBtn.textContent = '↑';
         prevBtn.addEventListener('click', () => this.navigate(-1));
 
         const closeBtn = document.createElement('button');
         closeBtn.className = 'tate-search-btn';
+        closeBtn.tabIndex = -1;
         closeBtn.setAttribute('aria-label', '閉じる');
         closeBtn.textContent = '×';
         closeBtn.addEventListener('click', () => this.close());
@@ -395,6 +399,7 @@ export class SearchPanel {
 
         const replaceBtn = document.createElement('button');
         replaceBtn.className = 'tate-replace-btn';
+        replaceBtn.tabIndex = -1;
         replaceBtn.textContent = '置換';
         replaceBtn.addEventListener('click', () => this.replaceCurrentMatch());
 
