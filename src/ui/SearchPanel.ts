@@ -71,7 +71,7 @@ function extractSegmentsFromDiv(div: HTMLElement, editorEl: HTMLElement): LocalS
     return segments;
 }
 
-// Frozen divs contribute their visible text via paragraphRecords (getSrcByIndex) without thawing.
+// Frozen divs contribute their visible text via getSrcLine (frozenSrc WeakMap) without thawing.
 function extractHybridText(
     editorEl: HTMLDivElement,
     virtualizer: ParagraphVirtualizer,
@@ -79,11 +79,10 @@ function extractHybridText(
     const paragraphs: ParagraphTextData[] = [];
     let globalOffset = 0;
 
-    for (let i = 0; i < editorEl.children.length; i++) {
-        const child = editorEl.children[i];
+    for (const child of Array.from(editorEl.children)) {
         if (!(child instanceof HTMLElement)) continue;
         if (virtualizer.isFrozen(child)) {
-            const src = virtualizer.getSrcByIndex(i);
+            const src = virtualizer.getSrcLine(child);
             const text = virtualizer.buildParagraphVisibleText(src);
             paragraphs.push({ div: child, frozen: true, globalStart: globalOffset, text, segments: [] });
             globalOffset += text.length;

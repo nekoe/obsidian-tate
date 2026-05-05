@@ -31,13 +31,12 @@ export class EditorElement {
 
     getValue(): string {
         const virt = this.virtualizer;
-        let elemIdx = 0;
         return Array.from(this.el.childNodes)
             .map(n => {
-                if (!(n instanceof HTMLElement)) return serializeNode(n, this.el);
-                const i = elemIdx++;
-                if (virt && virt.isFrozen(n)) {
-                    const src = virt.getSrcByIndex(i);
+                if (virt && n instanceof HTMLElement && virt.isFrozen(n)) {
+                    // getSrcLine reads from frozenSrc WeakMap (keyed by div identity),
+                    // so it stays correct even when other divs are inserted/removed.
+                    const src = virt.getSrcLine(n);
                     // Non-first paragraph divs need a leading newline (same as serializeNode DIV logic).
                     // Use previousElementSibling to ignore bare Text/BR nodes from paste fallback.
                     return n.previousElementSibling !== null ? '\n' + src : src;
@@ -779,14 +778,12 @@ export class EditorElement {
         }
 
         // Accumulate view lengths of all divs before the cursor div.
-        // Frozen divs use O(1) index-based lookup via paragraphRecords.
+        // Frozen divs use getViewLen() which reads from frozenViewLen WeakMap (O(1), always correct).
         let count = 0;
-        let divIdx = 0;
         for (const child of Array.from(this.el.children) as HTMLElement[]) {
             if (child === cursorDiv) break;
-            const i = divIdx++;
             count += this.virtualizer?.isFrozen(child)
-                ? this.virtualizer.getViewLenByIndex(i)
+                ? this.virtualizer.getViewLen(child)
                 : computeDivViewLen(child, this.el);
         }
 
@@ -822,13 +819,11 @@ export class EditorElement {
         if (!sel) return;
         let remaining = offset;
 
-        // Scan paragraph divs first. For frozen divs, skip by getViewLenByIndex (O(1) via paragraphRecords).
+        // Scan paragraph divs first. For frozen divs, skip by getViewLen() (frozenViewLen WeakMap, O(1)).
         // For real divs, walk text nodes to find the exact position.
-        let idx = 0;
         for (const child of Array.from(this.el.children) as HTMLElement[]) {
-            const i = idx++;
             if (this.virtualizer?.isFrozen(child)) {
-                const viewLen = this.virtualizer.getViewLenByIndex(i);
+                const viewLen = this.virtualizer.getViewLen(child);
                 if (remaining <= viewLen) {
                     // Offset falls inside this frozen div — thaw it first, then retry once.
                     // Guard against thaw failure: only retry if the class was actually removed.

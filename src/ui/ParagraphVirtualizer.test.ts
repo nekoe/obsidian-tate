@@ -25,12 +25,13 @@ function addRealDiv(editorEl: HTMLElement, text: string): HTMLDivElement {
     return div;
 }
 
-// Creates a frozen div and registers it in paragraphRecords so getSrcLine/getViewLen work.
-// paragraphRecords is indexed 1:1 with editorEl.children; the pushed record matches this position.
+// Creates a frozen div and registers its content in both frozenSrc/frozenViewLen (for getSrcLine/getViewLen)
+// and paragraphRecords (for getSrcByIndex/getViewLenByIndex). Mirrors what freezeDiv() does in production.
 function addFrozenDiv(virt: ParagraphVirtualizer, editorEl: HTMLElement, src: string, viewLen: number): HTMLDivElement {
     const div = document.createElement('div');
     div.classList.add(FROZEN_CLASS);
     editorEl.appendChild(div);
+    virt.setFrozenContent(div, src, viewLen);
     virt.paragraphRecords.push({ src, viewLen, width: 0 });
     return div;
 }

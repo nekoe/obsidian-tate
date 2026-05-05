@@ -1938,12 +1938,9 @@ var EditorElement = class {
   }
   getValue() {
     const virt = this.virtualizer;
-    let elemIdx = 0;
     return Array.from(this.el.childNodes).map((n) => {
-      if (!(n instanceof HTMLElement)) return serializeNode(n, this.el);
-      const i = elemIdx++;
-      if (virt && virt.isFrozen(n)) {
-        const src = virt.getSrcByIndex(i);
+      if (virt && n instanceof HTMLElement && virt.isFrozen(n)) {
+        const src = virt.getSrcLine(n);
         return n.previousElementSibling !== null ? "\n" + src : src;
       }
       return serializeNode(n, this.el);
@@ -2516,11 +2513,9 @@ var EditorElement = class {
       node = node.parentElement;
     }
     let count = 0;
-    let divIdx = 0;
     for (const child of Array.from(this.el.children)) {
       if (child === cursorDiv) break;
-      const i = divIdx++;
-      count += ((_a = this.virtualizer) == null ? void 0 : _a.isFrozen(child)) ? this.virtualizer.getViewLenByIndex(i) : computeDivViewLen(child, this.el);
+      count += ((_a = this.virtualizer) == null ? void 0 : _a.isFrozen(child)) ? this.virtualizer.getViewLen(child) : computeDivViewLen(child, this.el);
     }
     if (!cursorDiv || ((_b = this.virtualizer) == null ? void 0 : _b.isFrozen(cursorDiv))) return count;
     const walker = document.createTreeWalker(cursorDiv, NodeFilter.SHOW_TEXT);
@@ -2546,11 +2541,9 @@ var EditorElement = class {
     const sel = window.getSelection();
     if (!sel) return;
     let remaining = offset;
-    let idx = 0;
     for (const child of Array.from(this.el.children)) {
-      const i = idx++;
       if ((_a = this.virtualizer) == null ? void 0 : _a.isFrozen(child)) {
-        const viewLen = this.virtualizer.getViewLenByIndex(i);
+        const viewLen = this.virtualizer.getViewLen(child);
         if (remaining <= viewLen) {
           this.virtualizer.thawDiv(child);
           if (!this.virtualizer.isFrozen(child)) this.setVisibleOffset(offset);
@@ -2572,13 +2565,13 @@ var EditorElement = class {
               const text = (_c = node.textContent) != null ? _c : "";
               actualOffset = 0;
               let visible = 0;
-              for (let i2 = 0; i2 < text.length; i2++) {
+              for (let i = 0; i < text.length; i++) {
                 if (visible === remaining) {
-                  actualOffset = i2;
+                  actualOffset = i;
                   break;
                 }
-                if (text[i2] !== "\u200B") visible++;
-                actualOffset = i2 + 1;
+                if (text[i] !== "\u200B") visible++;
+                actualOffset = i + 1;
               }
             } else {
               actualOffset = remaining;
@@ -2635,11 +2628,10 @@ function extractSegmentsFromDiv(div, editorEl) {
 function extractHybridText(editorEl, virtualizer) {
   const paragraphs = [];
   let globalOffset = 0;
-  for (let i = 0; i < editorEl.children.length; i++) {
-    const child = editorEl.children[i];
+  for (const child of Array.from(editorEl.children)) {
     if (!(child instanceof HTMLElement)) continue;
     if (virtualizer.isFrozen(child)) {
-      const src = virtualizer.getSrcByIndex(i);
+      const src = virtualizer.getSrcLine(child);
       const text = virtualizer.buildParagraphVisibleText(src);
       paragraphs.push({ div: child, frozen: true, globalStart: globalOffset, text, segments: [] });
       globalOffset += text.length;
@@ -3151,10 +3143,14 @@ var ParagraphVirtualizer = class {
     // the natural content width, causing a scroll-position shift on re-activation.
     this.viewActive = true;
     // Per-paragraph data store. Indexed 1:1 with editorEl.children.
-    // Frozen divs store no content in the DOM; all reads go through this array.
-    // Updated by: initRecords() on full content replace, spliceRecords() on patchParagraphs,
-    // and freezeDiv() to sync src/viewLen/width before the DOM content is discarded.
+    // Maintained by initRecords() / spliceRecords() / freezeDiv(). Used for Phase 2 (DOM windowing).
     this.paragraphRecords = [];
+    // Source of truth for frozen div content, keyed by div identity (not DOM position).
+    // Set by freezeDiv() / setFrozenContent(); read by getSrcLine() and getViewLen().
+    // Identity-keyed so that reads remain correct even after other divs are inserted or
+    // removed (DOM positions shift, but a WeakMap entry stays with its div element).
+    this.frozenSrc = /* @__PURE__ */ new WeakMap();
+    this.frozenViewLen = /* @__PURE__ */ new WeakMap();
   }
   // Starts the IntersectionObserver and begins observing all current children.
   attach() {
@@ -3179,6 +3175,8 @@ var ParagraphVirtualizer = class {
     this.freezeTimers.clear();
     this.lastKnownWidths = /* @__PURE__ */ new WeakMap();
     this.seenDivs = /* @__PURE__ */ new WeakSet();
+    this.frozenSrc = /* @__PURE__ */ new WeakMap();
+    this.frozenViewLen = /* @__PURE__ */ new WeakMap();
     this.viewActive = true;
     this.paragraphRecords.length = 0;
   }
@@ -3268,25 +3266,30 @@ var ParagraphVirtualizer = class {
   isFrozen(div) {
     return div.classList.contains(FROZEN_CLASS);
   }
+  // Sets the frozen content for a div in frozenSrc / frozenViewLen.
+  // Called by freezeDiv() internally. Also exposed for test helpers that create frozen
+  // divs directly (outside the normal freeze/thaw lifecycle).
+  setFrozenContent(div, src, viewLen) {
+    this.frozenSrc.set(div, src);
+    this.frozenViewLen.set(div, viewLen);
+  }
   // Returns the Aozora source line for a div.
-  // Frozen div: reads from paragraphRecords by position (O(N) scan; used only in thawDiv).
+  // Frozen div: reads from frozenSrc (keyed by div identity, O(1), correct after DOM shifts).
   // Real div: serializes child nodes.
   getSrcLine(div) {
-    var _a, _b;
+    var _a;
     if (div.classList.contains(FROZEN_CLASS)) {
-      const idx = this.indexOfDiv(div);
-      return idx >= 0 ? (_b = (_a = this.paragraphRecords[idx]) == null ? void 0 : _a.src) != null ? _b : "" : "";
+      return (_a = this.frozenSrc.get(div)) != null ? _a : "";
     }
     return Array.from(div.childNodes).map((n) => serializeNode(n, this.editorEl)).join("");
   }
   // Returns the visible character count for a div.
-  // Frozen div: reads from paragraphRecords by position (O(N) scan).
+  // Frozen div: reads from frozenViewLen (keyed by div identity, O(1), correct after DOM shifts).
   // Real div: walks text nodes.
   getViewLen(div) {
-    var _a, _b;
+    var _a;
     if (div.classList.contains(FROZEN_CLASS)) {
-      const idx = this.indexOfDiv(div);
-      return idx >= 0 ? (_b = (_a = this.paragraphRecords[idx]) == null ? void 0 : _a.viewLen) != null ? _b : 0 : 0;
+      return (_a = this.frozenViewLen.get(div)) != null ? _a : 0;
     }
     return computeDivViewLen(div, this.editorEl);
   }
@@ -3419,6 +3422,7 @@ var ParagraphVirtualizer = class {
     const src = this.getSrcLine(div);
     const viewLen = this.buildParagraphVisibleText(src).length;
     const pixelWidth = (_a = this.lastKnownWidths.get(div)) != null ? _a : 0;
+    this.setFrozenContent(div, src, viewLen);
     const idx = this.indexOfDiv(div);
     if (idx >= 0 && this.paragraphRecords[idx] !== void 0) {
       this.paragraphRecords[idx].src = src;
