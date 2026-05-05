@@ -290,6 +290,11 @@ the frozen-div path intact. This is a purely additive change: frozen divs contin
 2. Migrate `getValue()` to read `.src` from `paragraphRecords` for frozen divs (removes
    `data-src` attribute dependency; frozen divs become true empty shells).
 3. Update `patchParagraphs()` to write changed lines back into `paragraphRecords`.
+   Insertions and deletions anywhere in the document are handled with `splice`:
+   `paragraphRecords.splice(i, deleteCount, ...newRecords)`. This mirrors exactly
+   what `patchParagraphs()` already does to the DOM (insert/remove `<div>` elements
+   at the diff boundary). The cost is O(N) for the array shift, which is negligible
+   alongside the O(diff) DOM mutations that `patchParagraphs()` performs.
 
 ### Phase 2 — DOM window management + spacers (high risk)
 
