@@ -142,6 +142,7 @@ function getSrcRangeForViewRange(
     let srcEnd   = viewToSrc(segs, viewEnd);
     for (const seg of segs) {
         if (seg.viewLen === 0) continue; // newline — no annotation to snap
+        if (seg.kind === 'plain') continue; // plain text has no annotation boundaries to snap to
         const segViewEnd = seg.viewStart + seg.viewLen;
         // viewStart falls inside the segment (not at its boundary) → expand srcStart leftward
         if (viewStart > seg.viewStart && viewStart < segViewEnd)
@@ -195,6 +196,9 @@ export class SearchPanel {
         this.searchScope.register([], 'Enter', (evt) => {
             if (evt.isComposing) return;
             if (this.editorFocused) return; // pass through to editor
+            // Scope fires in capture phase before the replace input's keydown handler.
+            // When the replace input is focused, let its keydown handler run replaceCurrentMatch().
+            if (document.activeElement === this.replaceInputEl) return;
             this.navigate(1);
             return false;
         });

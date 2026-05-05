@@ -2676,6 +2676,7 @@ function getSrcRangeForViewRange(segs, viewStart, viewEnd) {
   let srcEnd = viewToSrc(segs, viewEnd);
   for (const seg of segs) {
     if (seg.viewLen === 0) continue;
+    if (seg.kind === "plain") continue;
     const segViewEnd = seg.viewStart + seg.viewLen;
     if (viewStart > seg.viewStart && viewStart < segViewEnd)
       srcStart = Math.min(srcStart, seg.srcStart);
@@ -2715,6 +2716,7 @@ var SearchPanel = class {
     this.searchScope.register([], "Enter", (evt) => {
       if (evt.isComposing) return;
       if (this.editorFocused) return;
+      if (document.activeElement === this.replaceInputEl) return;
       this.navigate(1);
       return false;
     });
