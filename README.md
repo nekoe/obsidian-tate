@@ -8,7 +8,7 @@ An Obsidian plugin that brings authentic vertical writing (縦書き) to your no
 
 ## Features
 
-### Ruby, Tate-chu-yoko, and Emphasis Marks via Aozora Notation
+### Ruby, Tate-chu-yoko, Emphasis Marks, and Headings via Aozora Notation
 
 The plugin supports the annotation syntax used by [Aozora Bunko](https://www.aozora.gr.jp/), a digital library of Japanese literature.
 
@@ -17,6 +17,9 @@ The plugin supports the annotation syntax used by [Aozora Bunko](https://www.aoz
 | `｜東京《とうきょう》` or `東京《とうきょう》` (consecutive kanji) | Ruby (furigana) |
 | `２０２５［＃「２０２５」は縦中横］` | Tate-chu-yoko (digits/latin rotated upright) |
 | `春［＃「春」に傍点］` | Emphasis dots (sesame marks) |
+| `序章［＃「序章」は大見出し］` | Large heading (bold, 1.5×) |
+| `第一節［＃「第一節」は中見出し］` | Mid heading (bold, 1.3×) |
+| `はじめに［＃「はじめに」は小見出し］` | Small heading (bold, 1.1×) |
 
 **Applying via Command Palette**
 
@@ -26,9 +29,21 @@ Select text, open the command palette (`Ctrl+P` / `Cmd+P`), and run one of:
 - `Make selection tate-chu-yoko (tate-chu-yoko: tcy)`
 - `Add emphasis marks to selection (bouten)`
 
+For headings, place the cursor in the paragraph you want to style and run one of:
+
+- `Set current paragraph as large heading (大見出し)`
+- `Set current paragraph as mid heading (中見出し)`
+- `Set current paragraph as small heading (小見出し)`
+
+Running the same command again on a heading paragraph removes the annotation (toggle). Running a different heading command changes the level.
+
 **Inline Editing**
 
-Moving the cursor into a ruby, tate-chu-yoko, or emphasis mark element expands it into raw Aozora text in place — the same behavior as Obsidian's Markdown editor. Moving the cursor out collapses it back to the rendered form. Pressing **Enter** while an element is expanded also collapses it immediately.
+Moving the cursor into a ruby, tate-chu-yoko, emphasis mark, or heading element expands it into raw Aozora text in place — the same behavior as Obsidian's Markdown editor. Moving the cursor out collapses it back to the rendered form. Pressing **Enter** while an element is expanded also collapses it immediately.
+
+**Live Conversion**
+
+Typing an Aozora annotation in full and closing it with `》` (ruby) or `］` (tcy, bouten, headings) converts the notation to its rendered form on the spot, without using the command palette.
 
 ### Auto-indent and Typography Helpers
 
@@ -119,3 +134,7 @@ Configure under **Settings → TATE**:
 | Match preceding paragraph indent | On Enter, copy the indent of the paragraph above | On |
 | Remove bracket indent | Remove one leading `　` when a full-width bracket is typed after spaces | On |
 | Line-break rule | Kinsoku rule set for line start/end restrictions | Normal |
+| Suppress ruby inline expansion | Do not expand ruby when cursor enters it (Experimental) | Off |
+| Suppress tcy inline expansion | Do not expand tate-chu-yoko when cursor enters it (Experimental) | Off |
+| Suppress bouten inline expansion | Do not expand emphasis marks when cursor enters them (Experimental) | Off |
+| Suppress heading inline expansion | Do not expand headings when cursor enters them (Experimental) | Off |
