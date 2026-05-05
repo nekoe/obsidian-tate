@@ -99,6 +99,7 @@ See the design documents in `docs/design/` for details:
 - [Search Panel: Incremental Search with CSS Custom Highlight API](docs/design/20260428_search_panel.md)
 - [Proactive Layout Cache Refresh for content-visibility:auto (tate-layout-refreshing, two-rAF pattern)](docs/design/20260429_proactive_layout_cache_refresh.md)
 - [DOM Virtualization: Frozen Paragraph Placeholders (ParagraphVirtualizer, freeze/thaw lifecycle)](docs/design/20260504_dom_virtualization.md)
+- [Full DOM Virtualization: Design Notes and Future Feature Roadmap (replace, headings, outline)](docs/design/20260505_full_virtualization.md)
 
 ## Settings
 
