@@ -354,5 +354,30 @@ describe('ParagraphVirtualizer', () => {
             expect(mockObserve.mock.calls.length).toBe(observeCallsBefore);
             expect(mockUnobserve.mock.calls.length).toBe(unobserveCallsBefore);
         });
+
+        it('onViewDeactivated suppresses freeze so visible divs are not frozen on tab switch', () => {
+            vi.useFakeTimers();
+            const div = addRealDiv(editorEl, '猫');
+            fireEntry(div, true);          // mark as seen
+            fireEntry(div, false, 88);     // IO fires isIntersecting:false (tab switched away)
+            virtIO.onViewDeactivated();    // view becomes inactive — suppress freeze
+            vi.advanceTimersByTime(100);   // timer fires but shouldFreeze returns false
+            expect(div.classList.contains(FROZEN_CLASS)).toBe(false);
+        });
+
+        it('onViewActivated cancels stale timers and re-enables freeze', () => {
+            vi.useFakeTimers();
+            const div = addRealDiv(editorEl, '猫');
+            fireEntry(div, true);
+            fireEntry(div, false, 88);     // schedule freeze during inactive period
+            virtIO.onViewDeactivated();
+            virtIO.onViewActivated();      // re-enable freeze, cancel stale timers
+            vi.advanceTimersByTime(100);   // stale timer must not fire
+            expect(div.classList.contains(FROZEN_CLASS)).toBe(false);
+            // New IO after activation should freeze normally
+            fireEntry(div, false, 88);     // fresh isIntersecting:false
+            vi.advanceTimersByTime(51);
+            expect(div.classList.contains(FROZEN_CLASS)).toBe(true);
+        });
     });
 });

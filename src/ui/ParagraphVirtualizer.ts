@@ -23,6 +23,11 @@ export class ParagraphVirtualizer {
     // so freezing it would produce the wrong style.width and cause a layout shift on thaw.
     private seenDivs = new Set<HTMLElement>();
     private freezeSuppressed = false;
+    // Set to false while the tate view is not the active leaf. Prevents freezing of
+    // viewport-visible divs that receive isIntersecting:false callbacks when the tab
+    // switches away — freezing those divs produces a style.width that may not match
+    // the natural content width, causing a scroll-position shift on re-activation.
+    private viewActive = true;
 
     constructor(
         private readonly editorEl: HTMLElement,
@@ -52,6 +57,7 @@ export class ParagraphVirtualizer {
         this.freezeTimers.clear();
         this.lastKnownWidths.clear();
         this.seenDivs.clear();
+        this.viewActive = true;
     }
 
     // Registers all current editorEl children with the observer (call after setValue).
@@ -189,9 +195,27 @@ export class ParagraphVirtualizer {
         this.freezeSuppressed = value;
     }
 
+    // Called when the tate view loses focus (another leaf becomes active).
+    // Suppresses freeze and cancels pending timers so that viewport-visible divs
+    // that receive isIntersecting:false during the tab switch are not frozen with
+    // potentially inaccurate widths (inactive-tab layout may differ).
+    onViewDeactivated(): void {
+        this.viewActive = false;
+        this.cancelAllPendingFreezeTimers();
+    }
+
+    // Called when the tate view becomes the active leaf again.
+    // Re-enables freeze and cancels any stale timers that were scheduled during
+    // the inactive period so they do not fire and freeze now-visible divs.
+    onViewActivated(): void {
+        this.viewActive = true;
+        this.cancelAllPendingFreezeTimers();
+    }
+
     // Returns true if the given div may be frozen.
     shouldFreeze(div: HTMLElement): boolean {
         if (this.freezeSuppressed) return false;
+        if (!this.viewActive) return false;
         if (this.editorEl.classList.contains('tate-scroll-restoring')) return false;
         if (div.classList.contains('tate-layout-refreshing')) return false;
         if (!this.editorEl.contains(div)) return false; // div was removed from the DOM
@@ -213,6 +237,13 @@ export class ParagraphVirtualizer {
             result.push(src.slice(start, start + seg.viewLen));
         }
         return result.join('');
+    }
+
+    // Cancels all pending freeze timers without touching lastKnownWidths, preserving
+    // accurate widths for the next freeze cycle. Used by onViewDeactivated/onViewActivated.
+    private cancelAllPendingFreezeTimers(): void {
+        for (const timer of this.freezeTimers.values()) clearTimeout(timer);
+        this.freezeTimers.clear();
     }
 
     private scheduleFreeze(div: HTMLElement): void {

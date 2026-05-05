@@ -360,6 +360,7 @@ export class VerticalWritingView extends ItemView {
                     this.onThisLeafActivated();
                 } else {
                     this.popEscScope();
+                    this.virtualizer?.onViewDeactivated();
                     if (!this.app.workspace.getLeavesOfType(TATE_VIEW_TYPE).includes(leaf)) {
                         // Hide only when the newly active leaf is not any tate view
                         this.plugin.updateCharCount(null);
@@ -580,6 +581,7 @@ export class VerticalWritingView extends ItemView {
     // and notifyActivated() (called when revealLeaf doesn't fire active-leaf-change).
     private onThisLeafActivated(): void {
         this.pushEscScope();
+        this.virtualizer?.onViewActivated();
         this.plugin.updateCharCount(countChars(this.lastCommittedContent));
         const el = this.editorEl;
         if (el) {

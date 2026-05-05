@@ -2826,6 +2826,11 @@ var ParagraphVirtualizer = class {
     // so freezing it would produce the wrong style.width and cause a layout shift on thaw.
     this.seenDivs = /* @__PURE__ */ new Set();
     this.freezeSuppressed = false;
+    // Set to false while the tate view is not the active leaf. Prevents freezing of
+    // viewport-visible divs that receive isIntersecting:false callbacks when the tab
+    // switches away — freezing those divs produces a style.width that may not match
+    // the natural content width, causing a scroll-position shift on re-activation.
+    this.viewActive = true;
   }
   // Starts the IntersectionObserver and begins observing all current children.
   attach() {
@@ -2850,6 +2855,7 @@ var ParagraphVirtualizer = class {
     this.freezeTimers.clear();
     this.lastKnownWidths.clear();
     this.seenDivs.clear();
+    this.viewActive = true;
   }
   // Registers all current editorEl children with the observer (call after setValue).
   // If tate-scroll-restoring is active, content-visibility:visible is in effect for all
@@ -2973,9 +2979,25 @@ var ParagraphVirtualizer = class {
   suppressFreeze(value) {
     this.freezeSuppressed = value;
   }
+  // Called when the tate view loses focus (another leaf becomes active).
+  // Suppresses freeze and cancels pending timers so that viewport-visible divs
+  // that receive isIntersecting:false during the tab switch are not frozen with
+  // potentially inaccurate widths (inactive-tab layout may differ).
+  onViewDeactivated() {
+    this.viewActive = false;
+    this.cancelAllPendingFreezeTimers();
+  }
+  // Called when the tate view becomes the active leaf again.
+  // Re-enables freeze and cancels any stale timers that were scheduled during
+  // the inactive period so they do not fire and freeze now-visible divs.
+  onViewActivated() {
+    this.viewActive = true;
+    this.cancelAllPendingFreezeTimers();
+  }
   // Returns true if the given div may be frozen.
   shouldFreeze(div) {
     if (this.freezeSuppressed) return false;
+    if (!this.viewActive) return false;
     if (this.editorEl.classList.contains("tate-scroll-restoring")) return false;
     if (div.classList.contains("tate-layout-refreshing")) return false;
     if (!this.editorEl.contains(div)) return false;
@@ -2996,6 +3018,12 @@ var ParagraphVirtualizer = class {
       result.push(src.slice(start, start + seg.viewLen));
     }
     return result.join("");
+  }
+  // Cancels all pending freeze timers without touching lastKnownWidths, preserving
+  // accurate widths for the next freeze cycle. Used by onViewDeactivated/onViewActivated.
+  cancelAllPendingFreezeTimers() {
+    for (const timer of this.freezeTimers.values()) clearTimeout(timer);
+    this.freezeTimers.clear();
   }
   scheduleFreeze(div) {
     if (div.classList.contains(FROZEN_CLASS)) return;
@@ -3332,11 +3360,13 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
     );
     this.registerEvent(
       this.app.workspace.on("active-leaf-change", (leaf) => {
+        var _a;
         if (leaf === null) return;
         if (leaf === this.leaf) {
           this.onThisLeafActivated();
         } else {
           this.popEscScope();
+          (_a = this.virtualizer) == null ? void 0 : _a.onViewDeactivated();
           if (!this.app.workspace.getLeavesOfType(TATE_VIEW_TYPE).includes(leaf)) {
             this.plugin.updateCharCount(null);
           }
@@ -3527,8 +3557,9 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
   // Body of the "this leaf became active" branch, shared between active-leaf-change
   // and notifyActivated() (called when revealLeaf doesn't fire active-leaf-change).
   onThisLeafActivated() {
-    var _a;
+    var _a, _b;
     this.pushEscScope();
+    (_a = this.virtualizer) == null ? void 0 : _a.onViewActivated();
     this.plugin.updateCharCount(countChars(this.lastCommittedContent));
     const el = this.editorEl;
     if (el) {
@@ -3556,7 +3587,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
         if (this.lastKnownViewOffset !== null) {
           el.setViewCursorOffset(this.lastKnownViewOffset);
         }
-        void ((_a = this.syncCoordinator) == null ? void 0 : _a.checkAndApplyExternalChange());
+        void ((_b = this.syncCoordinator) == null ? void 0 : _b.checkAndApplyExternalChange());
       }
     }
   }
