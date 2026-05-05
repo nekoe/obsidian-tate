@@ -338,6 +338,23 @@ export class SearchPanel {
         const panel = document.createElement('div');
         panel.className = 'tate-search-panel';
 
+        // When focus is on a panel element other than the text inputs (e.g., the 全置換 button),
+        // forward Cmd-z / Shift+Cmd-z to the editor so Undo/Redo still works.
+        panel.addEventListener('keydown', (e) => {
+            if (e.target === this.inputEl || e.target === this.replaceInputEl) return;
+            if ((e.metaKey || e.ctrlKey) && !e.altKey && e.key === 'z') {
+                e.preventDefault();
+                e.stopPropagation();
+                this.editorElementRef.el.dispatchEvent(
+                    new KeyboardEvent('keydown', {
+                        key: 'z', code: 'KeyZ',
+                        metaKey: e.metaKey, ctrlKey: e.ctrlKey, shiftKey: e.shiftKey,
+                        bubbles: true, cancelable: true,
+                    })
+                );
+            }
+        });
+
         const searchRow = document.createElement('div');
         searchRow.className = 'tate-search-row';
 
