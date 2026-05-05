@@ -78,6 +78,7 @@ export class VerticalWritingView extends ItemView {
         virtualizer.attach();
 
         this.searchPanel = new SearchPanel(editorEl, container, this.app, virtualizer);
+        this.searchPanel.setCommitCallback(() => this.commitToCm6());
 
         const spinnerEl = container.createEl('div', { cls: 'tate-loading-spinner' });
         this.spinnerEl = spinnerEl;
@@ -658,6 +659,19 @@ export class VerticalWritingView extends ItemView {
 
         const offset = el.getViewCursorOffset();
         this.searchPanel.open(offset);
+    }
+
+    openReplace(): void {
+        const el = this.editorEl;
+        if (!el || !this.searchPanel) return;
+
+        if (el.isInlineExpanded()) {
+            const contentChanged = el.collapseForEnter();
+            if (contentChanged) this.commitToCm6();
+        }
+
+        const offset = el.getViewCursorOffset();
+        this.searchPanel.open(offset, true);
     }
 
     private closeSearch(): void {

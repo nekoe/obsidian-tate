@@ -1,12 +1,17 @@
-import { App, Scope } from 'obsidian';
+import { App, sanitizeHTMLToDom, Scope } from 'obsidian';
 import type { EditorElement } from './EditorElement';
 import type { ParagraphVirtualizer } from './ParagraphVirtualizer';
 import { isInsideRtNode } from './domHelpers';
+import { buildSegmentMap, viewToSrc, type Segment } from './SegmentMap';
+import { parseInlineToHtml } from './AozoraParser';
 
 // ---- Match entry types ----
 
 interface ThawedMatchEntry {
     kind: 'thawed';
+    div: HTMLElement;
+    localStart: number; // visible offset within this paragraph
+    localEnd: number;
     range: Range;
     viewStart: number; // visible-text offset of match start in combined text
 }
@@ -43,12 +48,11 @@ function visibleToRawOffset(node: Text, visibleOffset: number): number {
     let visible = 0;
     for (let i = 0; i < text.length; i++) {
         if (visible === visibleOffset) return i;
-        if (text[i] !== '\u200B') visible++;
+        if (text[i] !== '​') visible++;
     }
     return text.length;
 }
 
-// Extracts text segments from a single thawed paragraph div.
 function extractSegmentsFromDiv(div: HTMLElement, editorEl: HTMLElement): LocalSegment[] {
     const segments: LocalSegment[] = [];
     let localOffset = 0;
@@ -56,7 +60,7 @@ function extractSegmentsFromDiv(div: HTMLElement, editorEl: HTMLElement): LocalS
     let node = walker.nextNode() as Text | null;
     while (node) {
         if (!isInsideRtNode(node, editorEl)) {
-            const visible = (node.textContent ?? '').replace(/\u200B/g, '');
+            const visible = (node.textContent ?? '').replace(/​/g, '');
             if (visible.length > 0) {
                 segments.push({ node, start: localOffset, length: visible.length });
                 localOffset += visible.length;
@@ -67,8 +71,7 @@ function extractSegmentsFromDiv(div: HTMLElement, editorEl: HTMLElement): LocalS
     return segments;
 }
 
-// Builds per-paragraph text data without thawing frozen divs.
-// Frozen divs are represented by their data-src visible text via virtualizer.
+// Frozen divs contribute their visible text via buildParagraphVisibleText(data-src) without thawing.
 function extractHybridText(
     editorEl: HTMLDivElement,
     virtualizer: ParagraphVirtualizer,
@@ -85,7 +88,7 @@ function extractHybridText(
             globalOffset += text.length;
         } else {
             const segments = extractSegmentsFromDiv(child, editorEl);
-            const text = segments.map(s => (s.node.textContent ?? '').replace(/\u200B/g, '')).join('');
+            const text = segments.map(s => (s.node.textContent ?? '').replace(/​/g, '')).join('');
             paragraphs.push({ div: child, frozen: false, globalStart: globalOffset, text, segments });
             globalOffset += text.length;
         }
@@ -94,7 +97,6 @@ function extractHybridText(
     return { text: paragraphs.map(p => p.text).join(''), paragraphs };
 }
 
-// Creates a DOM Range for a match within a single thawed paragraph.
 function createRangeInParagraph(
     segments: LocalSegment[],
     localStart: number,
@@ -128,12 +130,38 @@ function escapeRegex(s: string): string {
     return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+// Converts a view-space match range to a source-space range, snapping to annotation
+// boundaries when the view range partially overlaps a non-plain segment. Without this,
+// slicing a source string at a mid-annotation view offset would produce broken Aozora.
+function getSrcRangeForViewRange(
+    segs: readonly Segment[],
+    viewStart: number,
+    viewEnd: number,
+): [srcStart: number, srcEnd: number] {
+    let srcStart = viewToSrc(segs, viewStart);
+    let srcEnd   = viewToSrc(segs, viewEnd);
+    for (const seg of segs) {
+        if (seg.viewLen === 0) continue; // newline — no annotation to snap
+        const segViewEnd = seg.viewStart + seg.viewLen;
+        // viewStart falls inside the segment (not at its boundary) → expand srcStart leftward
+        if (viewStart > seg.viewStart && viewStart < segViewEnd)
+            srcStart = Math.min(srcStart, seg.srcStart);
+        // viewEnd falls inside the segment → expand srcEnd rightward
+        if (viewEnd > seg.viewStart && viewEnd < segViewEnd)
+            srcEnd = Math.max(srcEnd, seg.srcStart + seg.srcLen);
+    }
+    return [srcStart, srcEnd];
+}
+
 // ---- SearchPanel ----
 
 export class SearchPanel {
     private panelEl: HTMLElement | null = null;
     private inputEl: HTMLInputElement | null = null;
     private countEl: HTMLElement | null = null;
+    private replaceInputEl: HTMLInputElement | null = null;
+    private replaceRowEl: HTMLElement | null = null;
+    private toggleBtnEl: HTMLButtonElement | null = null;
 
     private readonly searchScope: Scope;
 
@@ -146,6 +174,7 @@ export class SearchPanel {
     // True while the editor has focus due to a user click (not a programmatic setFocus call).
     // When true: tate-search-focus is hidden, and close() skips cursor restore.
     private editorFocused = false;
+    private commitCallback: (() => void) | null = null;
 
     constructor(
         private readonly editorElementRef: EditorElement,
@@ -182,13 +211,22 @@ export class SearchPanel {
         });
     }
 
+    setCommitCallback(cb: () => void): void {
+        this.commitCallback = cb;
+    }
+
     get isOpen(): boolean {
         return this.panelEl !== null;
     }
 
-    open(initialOffset: number): void {
+    open(initialOffset: number, expandReplace = false): void {
         if (this.isOpen) {
-            this.inputEl?.focus();
+            if (expandReplace) {
+                this.showReplaceRow();
+                this.replaceInputEl?.focus();
+            } else {
+                this.inputEl?.focus();
+            }
             return;
         }
 
@@ -199,7 +237,7 @@ export class SearchPanel {
         this.currentIndex = -1;
         // Suppress freeze while the panel is open so DOM ranges remain valid.
         this.virtualizer.suppressFreeze(true);
-        this.buildPanel();
+        this.buildPanel(expandReplace);
         this.app.keymap.pushScope(this.searchScope);
         this.inputEl?.focus();
     }
@@ -216,6 +254,9 @@ export class SearchPanel {
         this.panelEl = null;
         this.inputEl = null;
         this.countEl = null;
+        this.replaceInputEl = null;
+        this.replaceRowEl = null;
+        this.toggleBtnEl = null;
         this.matchEntries = [];
         this.currentIndex = -1;
 
@@ -245,9 +286,37 @@ export class SearchPanel {
         this.runSearch(false); // update highlights only; no scroll while user is editing
     }
 
-    private buildPanel(): void {
+    private showReplaceRow(): void {
+        this.replaceRowEl?.classList.add('tate-replace-visible');
+        if (this.toggleBtnEl) this.toggleBtnEl.textContent = '▼';
+    }
+
+    private hideReplaceRow(): void {
+        this.replaceRowEl?.classList.remove('tate-replace-visible');
+        if (this.toggleBtnEl) this.toggleBtnEl.textContent = '▶';
+    }
+
+    private toggleReplaceRow(): void {
+        if (this.replaceRowEl?.classList.contains('tate-replace-visible')) {
+            this.hideReplaceRow();
+        } else {
+            this.showReplaceRow();
+        }
+    }
+
+    private buildPanel(expandReplace: boolean): void {
         const panel = document.createElement('div');
         panel.className = 'tate-search-panel';
+
+        const searchRow = document.createElement('div');
+        searchRow.className = 'tate-search-row';
+
+        const toggleBtn = document.createElement('button');
+        toggleBtn.className = 'tate-search-toggle';
+        toggleBtn.textContent = expandReplace ? '▼' : '▶';
+        toggleBtn.setAttribute('aria-label', '置換欄を表示');
+        toggleBtn.addEventListener('click', () => this.toggleReplaceRow());
+        this.toggleBtnEl = toggleBtn;
 
         const input = document.createElement('input');
         input.type = 'text';
@@ -300,12 +369,70 @@ export class SearchPanel {
         closeBtn.textContent = '×';
         closeBtn.addEventListener('click', () => this.close());
 
-        panel.append(input, count, nextBtn, prevBtn, closeBtn);
+        searchRow.append(toggleBtn, input, count, nextBtn, prevBtn, closeBtn);
+
+        const replaceRow = document.createElement('div');
+        replaceRow.className = 'tate-replace-row';
+        if (expandReplace) replaceRow.classList.add('tate-replace-visible');
+        this.replaceRowEl = replaceRow;
+
+        const replaceInput = document.createElement('input');
+        replaceInput.type = 'text';
+        replaceInput.className = 'tate-replace-input';
+        replaceInput.setAttribute('placeholder', '置換');
+        replaceInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.isComposing) {
+                e.preventDefault();
+                // Intercept Enter so the scope's navigate(+1) does not fire.
+                e.stopPropagation();
+                this.replaceCurrentMatch();
+            } else if (e.key !== 'Escape') {
+                e.stopPropagation();
+            }
+            // Escape: let propagate → scope handles close()
+        });
+        this.replaceInputEl = replaceInput;
+
+        const replaceBtn = document.createElement('button');
+        replaceBtn.className = 'tate-replace-btn';
+        replaceBtn.textContent = '置換';
+        replaceBtn.addEventListener('click', () => this.replaceCurrentMatch());
+
+        replaceRow.append(replaceInput, replaceBtn);
+
+        panel.append(searchRow, replaceRow);
         // Append to the tate-container so Obsidian's cleanup manages this DOM.
         // position:absolute with top/right anchors to the container's visible edge,
         // which stays fixed even during horizontal scroll of the editor content.
         this.container.appendChild(panel);
         this.panelEl = panel;
+    }
+
+    private replaceCurrentMatch(): void {
+        if (this.currentIndex < 0 || this.currentIndex >= this.matchEntries.length) return;
+        const entry = this.matchEntries[this.currentIndex];
+        // setFocus() guarantees thawed after any navigation; guard just in case.
+        if (entry.kind !== 'thawed') return;
+
+        const replacement = this.replaceInputEl?.value ?? '';
+        const srcLine = this.virtualizer.getSrcLine(entry.div);
+        const segs = buildSegmentMap(srcLine);
+        const [srcStart, srcEnd] = getSrcRangeForViewRange(segs, entry.localStart, entry.localEnd);
+        const newSrc = srcLine.slice(0, srcStart) + replacement + srcLine.slice(srcEnd);
+
+        this.virtualizer.unfrostDiv(entry.div);
+        entry.div.replaceChildren(sanitizeHTMLToDom(parseInlineToHtml(newSrc) || '<br>'));
+        this.virtualizer.observeOne(entry.div);
+
+        this.commitCallback?.();
+
+        // Rebuild match list; the replaced entry disappears.
+        // The old currentIndex now points to what was the next match.
+        const nextIndex = this.currentIndex;
+        this.runSearch(false);
+        if (this.matchEntries.length > 0) {
+            this.setFocus(Math.min(nextIndex, this.matchEntries.length - 1), true);
+        }
     }
 
     private runSearch(scroll = true): void {
@@ -356,7 +483,7 @@ export class SearchPanel {
             } else {
                 const range = createRangeInParagraph(para.segments, localStart, localEnd);
                 if (range) {
-                    this.matchEntries.push({ kind: 'thawed', range, viewStart: matchStart });
+                    this.matchEntries.push({ kind: 'thawed', div: para.div, localStart, localEnd, range, viewStart: matchStart });
                 }
             }
 
@@ -419,7 +546,14 @@ export class SearchPanel {
             if (!r) return;
             range = r;
             // Upgrade entry to thawed so subsequent navigation and highlighting use the live Range.
-            this.matchEntries[index] = { kind: 'thawed', range, viewStart: entry.viewStart };
+            this.matchEntries[index] = {
+                kind: 'thawed',
+                div: entry.div,
+                localStart: entry.localStart,
+                localEnd: entry.localEnd,
+                range,
+                viewStart: entry.viewStart,
+            };
             this.applyFocusHighlight();
         }
 
@@ -451,7 +585,14 @@ export class SearchPanel {
             const segments = extractSegmentsFromDiv(entry.div, this.editorElementRef.el);
             const range = createRangeInParagraph(segments, entry.localStart, entry.localEnd);
             if (range) {
-                this.matchEntries[i] = { kind: 'thawed', range, viewStart: entry.viewStart };
+                this.matchEntries[i] = {
+                    kind: 'thawed',
+                    div: entry.div,
+                    localStart: entry.localStart,
+                    localEnd: entry.localEnd,
+                    range,
+                    viewStart: entry.viewStart,
+                };
             }
         }
     }
