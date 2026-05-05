@@ -25,12 +25,13 @@ function addRealDiv(editorEl: HTMLElement, text: string): HTMLDivElement {
     return div;
 }
 
-function addFrozenDiv(editorEl: HTMLElement, src: string, viewLen: number): HTMLDivElement {
+// Creates a frozen div and registers it in paragraphRecords so getSrcLine/getViewLen work.
+// paragraphRecords is indexed 1:1 with editorEl.children; the pushed record matches this position.
+function addFrozenDiv(virt: ParagraphVirtualizer, editorEl: HTMLElement, src: string, viewLen: number): HTMLDivElement {
     const div = document.createElement('div');
     div.classList.add(FROZEN_CLASS);
-    div.setAttribute('data-src', src);
-    div.setAttribute('data-view-len', String(viewLen));
     editorEl.appendChild(div);
+    virt.paragraphRecords.push({ src, viewLen, width: 0 });
     return div;
 }
 
@@ -51,16 +52,114 @@ describe('ParagraphVirtualizer', () => {
         scrollArea.remove();
     });
 
+    // ---- initRecords ----
+
+    describe('initRecords', () => {
+        it('populates paragraphRecords from lines', () => {
+            virt.initRecords(['吾輩', '猫', '']);
+            expect(virt.paragraphRecords).toHaveLength(3);
+            expect(virt.paragraphRecords[0].src).toBe('吾輩');
+            expect(virt.paragraphRecords[1].src).toBe('猫');
+            expect(virt.paragraphRecords[2].src).toBe('');
+        });
+
+        it('computes viewLen for each line', () => {
+            virt.initRecords(['東京《とうきょう》市']);
+            expect(virt.paragraphRecords[0].viewLen).toBe(3); // 東京市 (rt excluded)
+        });
+
+        it('sets width to 0 for all entries', () => {
+            virt.initRecords(['abc', 'def']);
+            expect(virt.paragraphRecords[0].width).toBe(0);
+            expect(virt.paragraphRecords[1].width).toBe(0);
+        });
+
+        it('replaces existing records on repeated calls', () => {
+            virt.initRecords(['old1', 'old2']);
+            virt.initRecords(['new']);
+            expect(virt.paragraphRecords).toHaveLength(1);
+            expect(virt.paragraphRecords[0].src).toBe('new');
+        });
+    });
+
+    // ---- spliceRecords ----
+
+    describe('spliceRecords', () => {
+        beforeEach(() => {
+            virt.initRecords(['line0', 'line1', 'line2', 'line3']);
+        });
+
+        it('replaces middle records with same count', () => {
+            virt.spliceRecords(1, 2, ['new1', 'new2']);
+            expect(virt.paragraphRecords).toHaveLength(4);
+            expect(virt.getSrcByIndex(0)).toBe('line0');
+            expect(virt.getSrcByIndex(1)).toBe('new1');
+            expect(virt.getSrcByIndex(2)).toBe('new2');
+            expect(virt.getSrcByIndex(3)).toBe('line3');
+        });
+
+        it('inserts more than deleted (count grows)', () => {
+            virt.spliceRecords(1, 1, ['a', 'b', 'c']);
+            expect(virt.paragraphRecords).toHaveLength(6);
+            expect(virt.getSrcByIndex(1)).toBe('a');
+            expect(virt.getSrcByIndex(2)).toBe('b');
+            expect(virt.getSrcByIndex(3)).toBe('c');
+            expect(virt.getSrcByIndex(4)).toBe('line2');
+        });
+
+        it('deletes more than inserted (count shrinks)', () => {
+            virt.spliceRecords(1, 3, ['only']);
+            expect(virt.paragraphRecords).toHaveLength(2);
+            expect(virt.getSrcByIndex(0)).toBe('line0');
+            expect(virt.getSrcByIndex(1)).toBe('only');
+        });
+
+        it('computes viewLen for new records', () => {
+            virt.spliceRecords(0, 1, ['吾輩《わがはい》']);
+            expect(virt.paragraphRecords[0].viewLen).toBe(2); // 吾輩 (rt excluded)
+        });
+    });
+
+    // ---- getSrcByIndex ----
+
+    describe('getSrcByIndex', () => {
+        it('returns src at index', () => {
+            virt.initRecords(['alpha', 'beta']);
+            expect(virt.getSrcByIndex(0)).toBe('alpha');
+            expect(virt.getSrcByIndex(1)).toBe('beta');
+        });
+
+        it('returns empty string for out-of-bounds index', () => {
+            virt.initRecords(['a']);
+            expect(virt.getSrcByIndex(99)).toBe('');
+        });
+    });
+
+    // ---- getViewLenByIndex ----
+
+    describe('getViewLenByIndex', () => {
+        it('returns viewLen at index', () => {
+            virt.initRecords(['abc', '吾輩《わがはい》']);
+            expect(virt.getViewLenByIndex(0)).toBe(3);
+            expect(virt.getViewLenByIndex(1)).toBe(2); // 吾輩 (rt excluded)
+        });
+
+        it('returns 0 for out-of-bounds index', () => {
+            virt.initRecords(['a']);
+            expect(virt.getViewLenByIndex(99)).toBe(0);
+        });
+    });
+
     // ---- getSrcLine ----
 
     describe('getSrcLine', () => {
-        it('returns data-src for frozen div', () => {
-            const div = addFrozenDiv(editorEl, '吾輩は猫である', 7);
+        it('returns src from paragraphRecords for frozen div', () => {
+            const div = addFrozenDiv(virt, editorEl, '吾輩は猫である', 7);
             expect(virt.getSrcLine(div)).toBe('吾輩は猫である');
         });
 
-        it('returns empty string for frozen div with no data-src', () => {
-            const div = addFrozenDiv(editorEl, '', 0);
+        it('returns empty string for frozen div with empty src', () => {
+            const div = addFrozenDiv(virt, editorEl, '', 0);
             expect(virt.getSrcLine(div)).toBe('');
         });
 
@@ -82,8 +181,8 @@ describe('ParagraphVirtualizer', () => {
     // ---- getViewLen ----
 
     describe('getViewLen', () => {
-        it('reads data-view-len for frozen div', () => {
-            const div = addFrozenDiv(editorEl, '吾輩は猫である', 7);
+        it('reads viewLen from paragraphRecords for frozen div', () => {
+            const div = addFrozenDiv(virt, editorEl, '吾輩は猫である', 7);
             expect(virt.getViewLen(div)).toBe(7);
         });
 
@@ -104,8 +203,8 @@ describe('ParagraphVirtualizer', () => {
     // ---- thawDiv ----
 
     describe('thawDiv', () => {
-        it('thaws a frozen div and restores content from data-src', () => {
-            const div = addFrozenDiv(editorEl, '吾輩は猫', 4);
+        it('thaws a frozen div and restores content from paragraphRecords', () => {
+            const div = addFrozenDiv(virt, editorEl, '吾輩は猫', 4);
             virt.thawDiv(div);
             expect(div.classList.contains(FROZEN_CLASS)).toBe(false);
             expect(div.getAttribute('data-src')).toBeNull();
@@ -120,7 +219,7 @@ describe('ParagraphVirtualizer', () => {
         });
 
         it('thaws empty frozen div to <br>', () => {
-            const div = addFrozenDiv(editorEl, '', 0);
+            const div = addFrozenDiv(virt, editorEl, '', 0);
             virt.thawDiv(div);
             expect(div.querySelector('br')).not.toBeNull();
         });
@@ -130,7 +229,7 @@ describe('ParagraphVirtualizer', () => {
 
     describe('unfrostDiv', () => {
         it('removes frozen markers without touching child content', () => {
-            const div = addFrozenDiv(editorEl, '吾輩は猫', 4);
+            const div = addFrozenDiv(virt, editorEl, '吾輩は猫', 4);
             virt.unfrostDiv(div);
             expect(div.classList.contains(FROZEN_CLASS)).toBe(false);
             expect(div.getAttribute('data-src')).toBeNull();
@@ -152,7 +251,7 @@ describe('ParagraphVirtualizer', () => {
         it('thaws the target div and specified neighbors', () => {
             const divs: HTMLDivElement[] = [];
             for (let i = 0; i < 5; i++) {
-                divs.push(addFrozenDiv(editorEl, `line${i}`, i));
+                divs.push(addFrozenDiv(virt, editorEl, `line${i}`, i));
             }
             // Thaw div[2] with 1 neighbor on each side
             virt.ensureThawed(divs[2], 1);
@@ -167,7 +266,7 @@ describe('ParagraphVirtualizer', () => {
         it('handles edge (first) div with neighborCount > remaining siblings', () => {
             const divs: HTMLDivElement[] = [];
             for (let i = 0; i < 3; i++) {
-                divs.push(addFrozenDiv(editorEl, `line${i}`, i));
+                divs.push(addFrozenDiv(virt, editorEl, `line${i}`, i));
             }
             virt.ensureThawed(divs[0], 5); // no previous siblings, 2 following
             expect(divs[0].classList.contains(FROZEN_CLASS)).toBe(false);
@@ -248,7 +347,7 @@ describe('ParagraphVirtualizer', () => {
         it('view length matches getViewLen for frozen div', () => {
             const src = '｜東京《とうきょう》市';
             const visText = virt.buildParagraphVisibleText(src);
-            const div = addFrozenDiv(editorEl, src, visText.length);
+            const div = addFrozenDiv(virt, editorEl, src, visText.length);
             expect(virt.getViewLen(div)).toBe(visText.length);
         });
     });
@@ -293,10 +392,11 @@ describe('ParagraphVirtualizer', () => {
             } as IntersectionObserverEntry], {} as IntersectionObserver);
         }
 
-        it('isIntersecting:true thaws a frozen div and marks it as seen', () => {
-            const div = addFrozenDiv(editorEl, '猫', 1);
+        it('isIntersecting:true thaws a frozen div and restores content from paragraphRecords', () => {
+            const div = addFrozenDiv(virtIO, editorEl, '猫', 1);
             fireEntry(div, true, 80);
             expect(div.classList.contains(FROZEN_CLASS)).toBe(false); // thawed
+            expect(div.textContent).toBe('猫'); // content restored from records
             // seenDivs populated → div is now eligible for freezing
             expect(virtIO.shouldFreeze(div)).toBe(true);
         });
@@ -304,6 +404,7 @@ describe('ParagraphVirtualizer', () => {
         it('isIntersecting:false captures width, schedules freeze, and freezes after delay', () => {
             vi.useFakeTimers();
             const div = addRealDiv(editorEl, '猫');
+            virtIO.initRecords(['猫']); // records must exist before freeze
             fireEntry(div, true);          // mark as seen
             fireEntry(div, false, 88);     // leave viewport; schedule freeze with width=88
             expect(div.classList.contains(FROZEN_CLASS)).toBe(false); // timer not fired yet
@@ -335,6 +436,7 @@ describe('ParagraphVirtualizer', () => {
             vi.useFakeTimers();
             editorEl.classList.add('tate-scroll-restoring');
             const div = addRealDiv(editorEl, '猫');
+            virtIO.initRecords(['猫']); // records must exist before freeze
             vi.spyOn(div, 'getBoundingClientRect').mockReturnValue({ width: 120 } as DOMRect);
             virtIO.observeAll(); // captures width + adds to seenDivs
             editorEl.classList.remove('tate-scroll-restoring');
@@ -368,6 +470,7 @@ describe('ParagraphVirtualizer', () => {
         it('onViewActivated cancels stale timers and re-enables freeze', () => {
             vi.useFakeTimers();
             const div = addRealDiv(editorEl, '猫');
+            virtIO.initRecords(['猫']); // records must exist before freeze
             fireEntry(div, true);
             fireEntry(div, false, 88);     // schedule freeze during inactive period
             virtIO.onViewDeactivated();

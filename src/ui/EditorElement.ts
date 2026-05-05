@@ -31,10 +31,13 @@ export class EditorElement {
 
     getValue(): string {
         const virt = this.virtualizer;
+        let elemIdx = 0;
         return Array.from(this.el.childNodes)
             .map(n => {
-                if (virt && n instanceof HTMLElement && virt.isFrozen(n)) {
-                    const src = virt.getSrcLine(n);
+                if (!(n instanceof HTMLElement)) return serializeNode(n, this.el);
+                const i = elemIdx++;
+                if (virt && virt.isFrozen(n)) {
+                    const src = virt.getSrcByIndex(i);
                     // Non-first paragraph divs need a leading newline (same as serializeNode DIV logic).
                     // Use previousElementSibling to ignore bare Text/BR nodes from paste fallback.
                     return n.previousElementSibling !== null ? '\n' + src : src;
@@ -62,6 +65,7 @@ export class EditorElement {
         } else {
             this.el.replaceChildren(sanitizeHTMLToDom(parseToHtml(content)));
         }
+        this.virtualizer?.initRecords(content.split('\n'));
         this.virtualizer?.observeAll();
     }
 
@@ -608,6 +612,7 @@ export class EditorElement {
         // so we walk el.childNodes and verify that every node is a <div>.
         if (!this.hasCleanDivStructure(prevLines.length)) {
             el.replaceChildren(sanitizeHTMLToDom(parseToHtml(nextContent)));
+            this.virtualizer?.initRecords(nextLines);
             this.virtualizer?.observeAll();
             return null;
         }
@@ -656,6 +661,7 @@ export class EditorElement {
         for (let i = hiNext; i < N; i++)
             if (nextLines[i] === '') ensureBrPlaceholder(el.children[i] as HTMLElement);
 
+        this.virtualizer?.spliceRecords(lo, hiPrev - lo, nextLines.slice(lo, hiNext));
         return changedDivs;
     }
 
@@ -772,13 +778,15 @@ export class EditorElement {
             node = node.parentElement;
         }
 
-        // Accumulate view lengths of all divs before the cursor div,
-        // skipping frozen divs via data-view-len (O(1) per frozen div).
+        // Accumulate view lengths of all divs before the cursor div.
+        // Frozen divs use O(1) index-based lookup via paragraphRecords.
         let count = 0;
+        let divIdx = 0;
         for (const child of Array.from(this.el.children) as HTMLElement[]) {
             if (child === cursorDiv) break;
+            const i = divIdx++;
             count += this.virtualizer?.isFrozen(child)
-                ? this.virtualizer.getViewLen(child)
+                ? this.virtualizer.getViewLenByIndex(i)
                 : computeDivViewLen(child, this.el);
         }
 
@@ -814,11 +822,13 @@ export class EditorElement {
         if (!sel) return;
         let remaining = offset;
 
-        // Scan paragraph divs first. For frozen divs, skip by getViewLen.
+        // Scan paragraph divs first. For frozen divs, skip by getViewLenByIndex (O(1) via paragraphRecords).
         // For real divs, walk text nodes to find the exact position.
+        let idx = 0;
         for (const child of Array.from(this.el.children) as HTMLElement[]) {
+            const i = idx++;
             if (this.virtualizer?.isFrozen(child)) {
-                const viewLen = this.virtualizer.getViewLen(child);
+                const viewLen = this.virtualizer.getViewLenByIndex(i);
                 if (remaining <= viewLen) {
                     // Offset falls inside this frozen div — thaw it first, then retry once.
                     // Guard against thaw failure: only retry if the class was actually removed.
