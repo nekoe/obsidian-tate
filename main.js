@@ -2716,14 +2716,19 @@ var SearchPanel = class {
     this.searchScope.register([], "Enter", (evt) => {
       if (evt.isComposing) return;
       if (this.editorFocused) return;
-      if (document.activeElement === this.replaceInputEl) return;
-      this.navigate(1);
+      if (document.activeElement === this.replaceInputEl) {
+        this.replaceCurrentMatch();
+      } else {
+        this.navigate(1);
+      }
       return false;
     });
     this.searchScope.register(["Shift"], "Enter", (evt) => {
       if (evt.isComposing) return;
       if (this.editorFocused) return;
-      this.navigate(-1);
+      if (document.activeElement !== this.replaceInputEl) {
+        this.navigate(-1);
+      }
       return false;
     });
     this.searchScope.register([], "Escape", (evt) => {
@@ -2868,13 +2873,7 @@ var SearchPanel = class {
     replaceInput.className = "tate-replace-input";
     replaceInput.setAttribute("placeholder", "\u7F6E\u63DB");
     replaceInput.addEventListener("keydown", (e) => {
-      if (e.key === "Enter" && !e.isComposing) {
-        e.preventDefault();
-        e.stopPropagation();
-        this.replaceCurrentMatch();
-      } else if (e.key !== "Escape") {
-        e.stopPropagation();
-      }
+      if (e.key !== "Escape") e.stopPropagation();
     });
     this.replaceInputEl = replaceInput;
     const replaceBtn = document.createElement("button");
@@ -2887,7 +2886,7 @@ var SearchPanel = class {
     this.panelEl = panel;
   }
   replaceCurrentMatch() {
-    var _a, _b, _c;
+    var _a, _b, _c, _d;
     if (this.currentIndex < 0 || this.currentIndex >= this.matchEntries.length) return;
     const entry = this.matchEntries[this.currentIndex];
     if (entry.kind !== "thawed") return;
@@ -2905,6 +2904,7 @@ var SearchPanel = class {
     if (this.matchEntries.length > 0) {
       this.setFocus(Math.min(nextIndex, this.matchEntries.length - 1), true);
     }
+    (_d = this.replaceInputEl) == null ? void 0 : _d.focus();
   }
   runSearch(scroll = true) {
     var _a, _b, _c;

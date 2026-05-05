@@ -196,17 +196,20 @@ export class SearchPanel {
         this.searchScope.register([], 'Enter', (evt) => {
             if (evt.isComposing) return;
             if (this.editorFocused) return; // pass through to editor
-            // Scope fires in capture phase before the replace input's keydown handler.
-            // When the replace input is focused, let its keydown handler run replaceCurrentMatch().
-            if (document.activeElement === this.replaceInputEl) return;
-            this.navigate(1);
+            if (document.activeElement === this.replaceInputEl) {
+                this.replaceCurrentMatch();
+            } else {
+                this.navigate(1);
+            }
             return false;
         });
         this.searchScope.register(['Shift'], 'Enter', (evt) => {
             if (evt.isComposing) return;
             if (this.editorFocused) return; // pass through to editor
-            this.navigate(-1);
-            return false;
+            if (document.activeElement !== this.replaceInputEl) {
+                this.navigate(-1);
+            }
+            return false; // Shift+Enter in replace input: no-op
         });
         this.searchScope.register([], 'Escape', (evt) => {
             if (evt.isComposing) return;
@@ -385,15 +388,9 @@ export class SearchPanel {
         replaceInput.className = 'tate-replace-input';
         replaceInput.setAttribute('placeholder', '置換');
         replaceInput.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter' && !e.isComposing) {
-                e.preventDefault();
-                // Intercept Enter so the scope's navigate(+1) does not fire.
-                e.stopPropagation();
-                this.replaceCurrentMatch();
-            } else if (e.key !== 'Escape') {
-                e.stopPropagation();
-            }
-            // Escape: let propagate → scope handles close()
+            // Enter and Shift+Enter are handled entirely in the Scope (capture phase).
+            // Escape propagates to the Scope's close() handler.
+            if (e.key !== 'Escape') e.stopPropagation();
         });
         this.replaceInputEl = replaceInput;
 
@@ -437,6 +434,8 @@ export class SearchPanel {
         if (this.matchEntries.length > 0) {
             this.setFocus(Math.min(nextIndex, this.matchEntries.length - 1), true);
         }
+        // setFocus() gives focus to the search input; return it to the replace input.
+        this.replaceInputEl?.focus();
     }
 
     private runSearch(scroll = true): void {
