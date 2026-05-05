@@ -274,23 +274,57 @@ virtualization, step 3 shifts `domStart` / `domEnd` and updates spacer widths.
 
 ## Implementation Sequence
 
-If full virtualization is pursued, the recommended order is:
+Full virtualization splits naturally into two phases with very different risk profiles. Three
+future features (heading notation, one-by-one replace, bulk replace / outline panel) have
+different dependencies on these phases. The recommended order balances delivery speed against
+architectural cleanliness.
 
-1. **Introduce `paragraphRecords[]`** alongside the existing `ParagraphVirtualizer` (dual-track,
-   keep frozen-div path working) so the data store is available before the DOM window logic lands.
+### Phase 1 — `paragraphRecords[]` data store (low risk)
 
-2. **Replace frozen divs with full removal + spacers** for the far-off-screen paragraphs (beyond
-   the existing `rootMargin` buffer). Keep frozen divs for the near-buffer zone during transition.
+Introduce the per-paragraph data store alongside the existing `ParagraphVirtualizer`, keeping
+the frozen-div path intact. This is a purely additive change: frozen divs continue to work, and
+`paragraphRecords` is populated in parallel.
 
-3. **Add drag-selection protection** (hold divs referenced by `anchorNode`/`focusNode`).
+1. Add `paragraphRecords: ParagraphRecord[]` populated from `data-src` / `data-view-len` /
+   `style.width` on freeze and updated on thaw / edit.
+2. Migrate `getValue()` to read `.src` from `paragraphRecords` for frozen divs (removes
+   `data-src` attribute dependency; frozen divs become true empty shells).
+3. Update `patchParagraphs()` to write changed lines back into `paragraphRecords`.
 
-4. **Migrate `getValue()` and `patchParagraphs()`** to read/write `paragraphRecords` for
-   off-window paragraphs.
+### Phase 2 — DOM window management + spacers (high risk)
 
-5. **Implement heading notation** (parser + CSS + command palette).
+Replace frozen-div shells with true DOM removal and two spacer divs. This is the major
+refactoring step and carries the most risk.
 
-6. **Implement replace** (extends SearchPanel, operates on `paragraphRecords`).
+4. Add `rightSpacer` and `leftSpacer` divs. Implement window expand / contract driven by
+   `IntersectionObserver` on the boundary divs.
+5. Add drag-selection protection: do not evict a div whose subtree contains
+   `selection.anchorNode` or `selection.focusNode`.
+6. Validate scroll-position stability (spacer width accuracy) across file sizes and
+   navigation patterns before merging.
 
-7. **Implement outline panel** (depends on heading notation).
+### Future features — dependency map
 
-Steps 5–7 are independent of full virtualization and can be implemented before or after it.
+| Feature | Depends on Phase 1 | Depends on Phase 2 | Can land independently |
+|---|---|---|---|
+| Heading notation (parse + render + command) | No | No | **Yes** |
+| Replace — one-by-one | No | No | **Yes** |
+| Replace — bulk | Preferred (`.src` update without DOM) | No | Possible with frozen `data-src` fallback |
+| Outline panel — heading extraction | Preferred (scan `.src` directly) | No | Possible with frozen `data-src` fallback |
+| Outline panel — jump to off-screen heading | No | Preferred (window shift) | Possible with `ensureThawed` fallback |
+
+**Recommended delivery order:**
+
+```
+1. Heading notation          (no virtualization dependency)
+2. Replace — one-by-one     (no virtualization dependency)
+3. Phase 1: paragraphRecords[]
+4. Replace — bulk           (cleaner with paragraphRecords)
+5. Outline panel            (cleaner with paragraphRecords)
+6. Phase 2: DOM window + spacers   (when performance warrants it)
+```
+
+Heading notation and one-by-one replace can be shipped immediately without touching the
+virtualization layer. Phase 1 is a prerequisite for clean bulk replace and outline
+implementation but not a hard requirement. Phase 2 should be deferred until the remaining
+`range.deleteContents()` cost (~25 ms for large selections) becomes a user-visible problem.
