@@ -2671,19 +2671,32 @@ function createRangeInParagraph(segments, localStart, localEnd) {
 function escapeRegex(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
-function getSrcRangeForViewRange(segs, viewStart, viewEnd) {
+function getBaseRange(seg) {
+  var _a;
+  if (seg.kind === "ruby-explicit") return [seg.srcStart + 1, (_a = seg.baseLen) != null ? _a : seg.viewLen];
+  return [seg.srcStart, seg.viewLen];
+}
+function buildReplacedSrc(srcLine, segs, viewStart, viewEnd, replacement) {
   let srcStart = viewToSrc(segs, viewStart);
   let srcEnd = viewToSrc(segs, viewEnd);
+  let prefix = "";
+  let suffix = "";
   for (const seg of segs) {
-    if (seg.viewLen === 0) continue;
-    if (seg.kind === "plain") continue;
+    if (seg.kind === "plain" || seg.kind === "newline") continue;
     const segViewEnd = seg.viewStart + seg.viewLen;
-    if (viewStart > seg.viewStart && viewStart < segViewEnd)
-      srcStart = Math.min(srcStart, seg.srcStart);
-    if (viewEnd > seg.viewStart && viewEnd < segViewEnd)
-      srcEnd = Math.max(srcEnd, seg.srcStart + seg.srcLen);
+    const [srcBase, baseLen] = getBaseRange(seg);
+    if (viewStart > seg.viewStart && viewStart < segViewEnd) {
+      const localStart = viewStart - seg.viewStart;
+      prefix = srcLine.slice(srcBase, srcBase + localStart);
+      srcStart = seg.srcStart;
+    }
+    if (viewEnd > seg.viewStart && viewEnd < segViewEnd) {
+      const localEnd = viewEnd - seg.viewStart;
+      suffix = srcLine.slice(srcBase + localEnd, srcBase + baseLen);
+      srcEnd = seg.srcStart + seg.srcLen;
+    }
   }
-  return [srcStart, srcEnd];
+  return srcLine.slice(0, srcStart) + prefix + replacement + suffix + srcLine.slice(srcEnd);
 }
 var SearchPanel = class {
   constructor(editorElementRef, container, app, virtualizer) {
@@ -2898,8 +2911,7 @@ var SearchPanel = class {
     const replacement = (_b = (_a = this.replaceInputEl) == null ? void 0 : _a.value) != null ? _b : "";
     const srcLine = this.virtualizer.getSrcLine(entry.div);
     const segs = buildSegmentMap(srcLine);
-    const [srcStart, srcEnd] = getSrcRangeForViewRange(segs, entry.localStart, entry.localEnd);
-    const newSrc = srcLine.slice(0, srcStart) + replacement + srcLine.slice(srcEnd);
+    const newSrc = buildReplacedSrc(srcLine, segs, entry.localStart, entry.localEnd, replacement);
     this.virtualizer.unfrostDiv(entry.div);
     entry.div.replaceChildren((0, import_obsidian4.sanitizeHTMLToDom)(parseInlineToHtml(newSrc) || "<br>"));
     this.virtualizer.observeOne(entry.div);

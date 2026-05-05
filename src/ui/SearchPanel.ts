@@ -130,28 +130,51 @@ function escapeRegex(s: string): string {
     return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-// Converts a view-space match range to a source-space range, snapping to annotation
-// boundaries when the view range partially overlaps a non-plain segment. Without this,
-// slicing a source string at a mid-annotation view offset would produce broken Aozora.
-function getSrcRangeForViewRange(
+// Returns [srcBase, baseLen] for the base text of a non-plain segment.
+// ruby-explicit ｜base《rt》: base starts at srcStart+1 (after ｜).
+// All others (ruby-implicit, bouten, tcy, heading-*): base starts at srcStart.
+function getBaseRange(seg: Segment): [srcBase: number, baseLen: number] {
+    if (seg.kind === 'ruby-explicit') return [seg.srcStart + 1, seg.baseLen ?? seg.viewLen];
+    return [seg.srcStart, seg.viewLen];
+}
+
+// Builds the replacement source string for a view-space match [viewStart, viewEnd).
+// When the match partially overlaps a non-plain segment, the annotation is stripped and
+// the unmatched portion of the base text is preserved as plain text:
+//   - match starts mid-segment → unmatched base prefix prepended before replacement
+//   - match ends mid-segment   → unmatched base suffix appended after replacement
+function buildReplacedSrc(
+    srcLine: string,
     segs: readonly Segment[],
     viewStart: number,
     viewEnd: number,
-): [srcStart: number, srcEnd: number] {
+    replacement: string,
+): string {
     let srcStart = viewToSrc(segs, viewStart);
     let srcEnd   = viewToSrc(segs, viewEnd);
+    let prefix = '';
+    let suffix = '';
+
     for (const seg of segs) {
-        if (seg.viewLen === 0) continue; // newline — no annotation to snap
-        if (seg.kind === 'plain') continue; // plain text has no annotation boundaries to snap to
+        if (seg.kind === 'plain' || seg.kind === 'newline') continue;
         const segViewEnd = seg.viewStart + seg.viewLen;
-        // viewStart falls inside the segment (not at its boundary) → expand srcStart leftward
-        if (viewStart > seg.viewStart && viewStart < segViewEnd)
-            srcStart = Math.min(srcStart, seg.srcStart);
-        // viewEnd falls inside the segment → expand srcEnd rightward
-        if (viewEnd > seg.viewStart && viewEnd < segViewEnd)
-            srcEnd = Math.max(srcEnd, seg.srcStart + seg.srcLen);
+        const [srcBase, baseLen] = getBaseRange(seg);
+
+        if (viewStart > seg.viewStart && viewStart < segViewEnd) {
+            // Match starts inside this segment: keep the unmatched base prefix as plain text.
+            const localStart = viewStart - seg.viewStart;
+            prefix = srcLine.slice(srcBase, srcBase + localStart);
+            srcStart = seg.srcStart;
+        }
+        if (viewEnd > seg.viewStart && viewEnd < segViewEnd) {
+            // Match ends inside this segment: keep the unmatched base suffix as plain text.
+            const localEnd = viewEnd - seg.viewStart;
+            suffix = srcLine.slice(srcBase + localEnd, srcBase + baseLen);
+            srcEnd = seg.srcStart + seg.srcLen;
+        }
     }
-    return [srcStart, srcEnd];
+
+    return srcLine.slice(0, srcStart) + prefix + replacement + suffix + srcLine.slice(srcEnd);
 }
 
 // ---- SearchPanel ----
@@ -422,8 +445,7 @@ export class SearchPanel {
         const replacement = this.replaceInputEl?.value ?? '';
         const srcLine = this.virtualizer.getSrcLine(entry.div);
         const segs = buildSegmentMap(srcLine);
-        const [srcStart, srcEnd] = getSrcRangeForViewRange(segs, entry.localStart, entry.localEnd);
-        const newSrc = srcLine.slice(0, srcStart) + replacement + srcLine.slice(srcEnd);
+        const newSrc = buildReplacedSrc(srcLine, segs, entry.localStart, entry.localEnd, replacement);
 
         this.virtualizer.unfrostDiv(entry.div);
         entry.div.replaceChildren(sanitizeHTMLToDom(parseInlineToHtml(newSrc) || '<br>'));
