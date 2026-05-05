@@ -1947,18 +1947,20 @@ var EditorElement = class {
     }).join("");
   }
   setValue(content, preserveCursor) {
-    var _a;
+    var _a, _b, _c;
     content = content.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
     this.inlineEditor.reset();
     if (this.getValue() === content && this.el.childNodes.length > 0) return;
     if (preserveCursor && document.activeElement === this.el) {
       const pos = this.getVisibleOffset();
       this.el.replaceChildren((0, import_obsidian3.sanitizeHTMLToDom)(parseToHtml(content)));
+      (_a = this.virtualizer) == null ? void 0 : _a.initRecords(content.split("\n"));
       this.setVisibleOffset(pos);
     } else {
       this.el.replaceChildren((0, import_obsidian3.sanitizeHTMLToDom)(parseToHtml(content)));
+      (_b = this.virtualizer) == null ? void 0 : _b.initRecords(content.split("\n"));
     }
-    (_a = this.virtualizer) == null ? void 0 : _a.observeAll();
+    (_c = this.virtualizer) == null ? void 0 : _c.observeAll();
   }
   // ---- Inline expand/collapse (call from selectionchange) ----
   handleSelectionChange() {
@@ -2375,13 +2377,14 @@ var EditorElement = class {
   // Updates paragraph divs to match nextContent, replacing only divs whose line changed.
   // Returns the changed/added divs, or null if hasCleanDivStructure failed (full rebuild).
   patchParagraphs(prevContent, nextContent) {
-    var _a, _b, _c, _d;
+    var _a, _b, _c, _d, _e, _f;
     const prevLines = prevContent.split("\n");
     const nextLines = nextContent ? nextContent.split("\n") : [""];
     const el = this.el;
     if (!this.hasCleanDivStructure(prevLines.length)) {
       el.replaceChildren((0, import_obsidian3.sanitizeHTMLToDom)(parseToHtml(nextContent)));
-      (_a = this.virtualizer) == null ? void 0 : _a.observeAll();
+      (_a = this.virtualizer) == null ? void 0 : _a.initRecords(nextLines);
+      (_b = this.virtualizer) == null ? void 0 : _b.observeAll();
       return null;
     }
     const P = prevLines.length;
@@ -2392,7 +2395,7 @@ var EditorElement = class {
     while (suf < P - lo && suf < N - lo && prevLines[P - 1 - suf] === nextLines[N - 1 - suf]) suf++;
     const hiPrev = P - suf;
     const hiNext = N - suf;
-    const suffixAnchor = (_b = el.children[hiPrev]) != null ? _b : null;
+    const suffixAnchor = (_c = el.children[hiPrev]) != null ? _c : null;
     const insertCount = hiNext - hiPrev;
     if (insertCount > 0) {
       for (let i = 0; i < insertCount; i++)
@@ -2404,16 +2407,17 @@ var EditorElement = class {
     const changedDivs = [];
     for (let i = lo; i < hiNext; i++) {
       const div = el.children[i];
-      (_c = this.virtualizer) == null ? void 0 : _c.unfrostDiv(div);
+      (_d = this.virtualizer) == null ? void 0 : _d.unfrostDiv(div);
       const html = parseInlineToHtml(nextLines[i]) || "<br>";
       div.replaceChildren((0, import_obsidian3.sanitizeHTMLToDom)(html));
-      (_d = this.virtualizer) == null ? void 0 : _d.observeOne(div);
+      (_e = this.virtualizer) == null ? void 0 : _e.observeOne(div);
       changedDivs.push(div);
     }
     for (let i = 0; i < lo; i++)
       if (nextLines[i] === "") ensureBrPlaceholder(el.children[i]);
     for (let i = hiNext; i < N; i++)
       if (nextLines[i] === "") ensureBrPlaceholder(el.children[i]);
+    (_f = this.virtualizer) == null ? void 0 : _f.spliceRecords(lo, hiPrev - lo, nextLines.slice(lo, hiNext));
     return changedDivs;
   }
   // Returns true iff el.childNodes consists of exactly expectedCount <div> elements.
@@ -2623,21 +2627,20 @@ function extractSegmentsFromDiv(div, editorEl) {
   return segments;
 }
 function extractHybridText(editorEl, virtualizer) {
-  var _a;
   const paragraphs = [];
   let globalOffset = 0;
   for (const child of Array.from(editorEl.children)) {
     if (!(child instanceof HTMLElement)) continue;
     if (virtualizer.isFrozen(child)) {
-      const src = (_a = child.getAttribute("data-src")) != null ? _a : "";
+      const src = virtualizer.getSrcLine(child);
       const text = virtualizer.buildParagraphVisibleText(src);
       paragraphs.push({ div: child, frozen: true, globalStart: globalOffset, text, segments: [] });
       globalOffset += text.length;
     } else {
       const segments = extractSegmentsFromDiv(child, editorEl);
       const text = segments.map((s) => {
-        var _a2;
-        return ((_a2 = s.node.textContent) != null ? _a2 : "").replace(/​/g, "");
+        var _a;
+        return ((_a = s.node.textContent) != null ? _a : "").replace(/​/g, "");
       }).join("");
       paragraphs.push({ div: child, frozen: false, globalStart: globalOffset, text, segments });
       globalOffset += text.length;
@@ -3140,6 +3143,15 @@ var ParagraphVirtualizer = class {
     // switches away — freezing those divs produces a style.width that may not match
     // the natural content width, causing a scroll-position shift on re-activation.
     this.viewActive = true;
+    // Per-paragraph data store. Indexed 1:1 with editorEl.children.
+    // Maintained by initRecords() / spliceRecords() / freezeDiv(). Used for Phase 2 (DOM windowing).
+    this.paragraphRecords = [];
+    // Source of truth for frozen div content, keyed by div identity (not DOM position).
+    // Set by freezeDiv() / setFrozenContent(); read by getSrcLine() and getViewLen().
+    // Identity-keyed so that reads remain correct even after other divs are inserted or
+    // removed (DOM positions shift, but a WeakMap entry stays with its div element).
+    this.frozenSrc = /* @__PURE__ */ new WeakMap();
+    this.frozenViewLen = /* @__PURE__ */ new WeakMap();
   }
   // Starts the IntersectionObserver and begins observing all current children.
   attach() {
@@ -3164,7 +3176,10 @@ var ParagraphVirtualizer = class {
     this.freezeTimers.clear();
     this.lastKnownWidths = /* @__PURE__ */ new WeakMap();
     this.seenDivs = /* @__PURE__ */ new WeakSet();
+    this.frozenSrc = /* @__PURE__ */ new WeakMap();
+    this.frozenViewLen = /* @__PURE__ */ new WeakMap();
     this.viewActive = true;
+    this.paragraphRecords.length = 0;
   }
   // Registers all current editorEl children with the observer (call after setValue).
   // If tate-scroll-restoring is active, content-visibility:visible is in effect for all
@@ -3212,37 +3227,79 @@ var ParagraphVirtualizer = class {
     this.observer.unobserve(div);
     this.observer.observe(div);
   }
+  // Initializes paragraphRecords from content lines.
+  // Call from EditorElement.setValue() and the patchParagraphs fallback after replaceChildren.
+  // width is 0 for all entries (updated to the measured value when the div is first frozen).
+  initRecords(lines) {
+    this.paragraphRecords.length = 0;
+    for (const line of lines) {
+      this.paragraphRecords.push({
+        src: line,
+        viewLen: this.buildParagraphVisibleText(line).length,
+        width: 0
+      });
+    }
+  }
+  // Mirrors the DOM splice performed by patchParagraphs, keeping paragraphRecords in sync.
+  // lo: first changed index; deleteCount: number of old records to remove;
+  // newLines: replacement Aozora source lines (may be a different count than deleteCount).
+  spliceRecords(lo, deleteCount, newLines) {
+    const newRecords = newLines.map((src) => ({
+      src,
+      viewLen: this.buildParagraphVisibleText(src).length,
+      width: 0
+    }));
+    this.paragraphRecords.splice(lo, deleteCount, ...newRecords);
+  }
+  // Returns the Aozora source for the paragraph at index i. O(1).
+  // Use in getValue() and extractHybridText() where the caller already has the index.
+  getSrcByIndex(i) {
+    var _a, _b;
+    return (_b = (_a = this.paragraphRecords[i]) == null ? void 0 : _a.src) != null ? _b : "";
+  }
+  // Returns the visible character count for the paragraph at index i. O(1).
+  // Use in getVisibleOffset() and setVisibleOffset() where the caller already has the index.
+  getViewLenByIndex(i) {
+    var _a, _b;
+    return (_b = (_a = this.paragraphRecords[i]) == null ? void 0 : _a.viewLen) != null ? _b : 0;
+  }
   // Returns true if div is currently frozen (has the tate-frozen class).
   isFrozen(div) {
     return div.classList.contains(FROZEN_CLASS);
   }
+  // Sets the frozen content for a div in frozenSrc / frozenViewLen.
+  // Called by freezeDiv() internally. Also exposed for test helpers that create frozen
+  // divs directly (outside the normal freeze/thaw lifecycle).
+  setFrozenContent(div, src, viewLen) {
+    this.frozenSrc.set(div, src);
+    this.frozenViewLen.set(div, viewLen);
+  }
   // Returns the Aozora source line for a div.
-  // Frozen div: reads data-src attribute. Real div: serializes child nodes.
+  // Frozen div: reads from frozenSrc (keyed by div identity, O(1), correct after DOM shifts).
+  // Real div: serializes child nodes.
   getSrcLine(div) {
     var _a;
     if (div.classList.contains(FROZEN_CLASS)) {
-      return (_a = div.getAttribute("data-src")) != null ? _a : "";
+      return (_a = this.frozenSrc.get(div)) != null ? _a : "";
     }
     return Array.from(div.childNodes).map((n) => serializeNode(n, this.editorEl)).join("");
   }
   // Returns the visible character count for a div.
-  // Frozen div: reads data-view-len attribute. Real div: walks text nodes.
+  // Frozen div: reads from frozenViewLen (keyed by div identity, O(1), correct after DOM shifts).
+  // Real div: walks text nodes.
   getViewLen(div) {
     var _a;
     if (div.classList.contains(FROZEN_CLASS)) {
-      return parseInt((_a = div.getAttribute("data-view-len")) != null ? _a : "0", 10);
+      return (_a = this.frozenViewLen.get(div)) != null ? _a : 0;
     }
     return computeDivViewLen(div, this.editorEl);
   }
-  // Thaws a frozen div: restores real DOM content from data-src and re-registers with observer.
+  // Thaws a frozen div: restores real DOM content from paragraphRecords and re-registers with observer.
   thawDiv(div) {
-    var _a;
     if (!div.classList.contains(FROZEN_CLASS)) return;
     this.cancelFreeze(div);
-    const src = (_a = div.getAttribute("data-src")) != null ? _a : "";
+    const src = this.getSrcLine(div);
     div.classList.remove(FROZEN_CLASS);
-    div.removeAttribute("data-src");
-    div.removeAttribute("data-view-len");
     div.style.removeProperty("width");
     div.style.removeProperty("contain-intrinsic-block-size");
     div.replaceChildren((0, import_obsidian5.sanitizeHTMLToDom)(parseInlineToHtml(src) || "<br>"));
@@ -3254,8 +3311,6 @@ var ParagraphVirtualizer = class {
     if (!div.classList.contains(FROZEN_CLASS)) return;
     this.cancelFreeze(div);
     div.classList.remove(FROZEN_CLASS);
-    div.removeAttribute("data-src");
-    div.removeAttribute("data-view-len");
     div.style.removeProperty("width");
     div.style.removeProperty("contain-intrinsic-block-size");
   }
@@ -3329,6 +3384,15 @@ var ParagraphVirtualizer = class {
     }
     return result.join("");
   }
+  // Returns the index of div in editorEl.children, or -1 if not found.
+  // Used by freezeDiv() to sync paragraphRecords[idx] when a div is frozen (O(N) scan;
+  // acceptable because freezeDiv fires at most once per div after a 50ms timer delay).
+  indexOfDiv(div) {
+    for (let i = 0; i < this.editorEl.children.length; i++) {
+      if (this.editorEl.children[i] === div) return i;
+    }
+    return -1;
+  }
   // Cancels all pending freeze timers without touching lastKnownWidths, preserving
   // accurate widths for the next freeze cycle. Used by onViewDeactivated/onViewActivated.
   cancelAllPendingFreezeTimers() {
@@ -3360,11 +3424,16 @@ var ParagraphVirtualizer = class {
     const src = this.getSrcLine(div);
     const viewLen = this.buildParagraphVisibleText(src).length;
     const pixelWidth = (_a = this.lastKnownWidths.get(div)) != null ? _a : 0;
+    this.setFrozenContent(div, src, viewLen);
+    const idx = this.indexOfDiv(div);
+    if (idx >= 0 && this.paragraphRecords[idx] !== void 0) {
+      this.paragraphRecords[idx].src = src;
+      this.paragraphRecords[idx].viewLen = viewLen;
+      this.paragraphRecords[idx].width = pixelWidth;
+    }
     if (pixelWidth > 0) div.style.setProperty("width", `${pixelWidth}px`);
     div.replaceChildren();
     div.classList.add(FROZEN_CLASS);
-    div.setAttribute("data-src", src);
-    div.setAttribute("data-view-len", String(viewLen));
   }
   onIntersection(entries) {
     for (const entry of entries) {

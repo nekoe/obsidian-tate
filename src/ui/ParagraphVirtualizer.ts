@@ -7,10 +7,20 @@ import { computeDivViewLen } from './domHelpers';
 export const FROZEN_CLASS = 'tate-frozen';
 const FREEZE_DELAY_MS = 50;
 
+export interface ParagraphRecord {
+    src: string;     // Aozora source line
+    viewLen: number; // visible character count (excluding annotation markers and rt text)
+    width: number;   // measured pixel width; 0 = not yet measured
+}
 
 // Manages DOM virtualization: off-screen paragraph divs are replaced with lightweight
-// frozen placeholders (<div class="tate-frozen" data-src="..." data-view-len="...">) to
-// reduce the number of live DOM nodes. IntersectionObserver drives freeze/thaw automatically.
+// frozen placeholders (<div class="tate-frozen">) to reduce the number of live DOM nodes.
+// data-src and data-view-len attributes are no longer written.
+// frozenSrc / frozenViewLen WeakMaps (keyed by div identity) are the source of truth for
+// all reads (getSrcLine, getViewLen, getValue, getVisibleOffset, extractHybridText).
+// paragraphRecords[] mirrors paragraph content indexed by DOM position; it is maintained
+// for Phase 2 (DOM windowing) but is not currently used by any read path.
+// IntersectionObserver drives freeze/thaw.
 export class ParagraphVirtualizer {
     private observer: IntersectionObserver | null = null;
     private freezeTimers = new Map<HTMLElement, ReturnType<typeof setTimeout>>();
@@ -32,6 +42,17 @@ export class ParagraphVirtualizer {
     // switches away — freezing those divs produces a style.width that may not match
     // the natural content width, causing a scroll-position shift on re-activation.
     private viewActive = true;
+
+    // Per-paragraph data store. Indexed 1:1 with editorEl.children.
+    // Maintained by initRecords() / spliceRecords() / freezeDiv(). Used for Phase 2 (DOM windowing).
+    readonly paragraphRecords: ParagraphRecord[] = [];
+
+    // Source of truth for frozen div content, keyed by div identity (not DOM position).
+    // Set by freezeDiv() / setFrozenContent(); read by getSrcLine() and getViewLen().
+    // Identity-keyed so that reads remain correct even after other divs are inserted or
+    // removed (DOM positions shift, but a WeakMap entry stays with its div element).
+    private frozenSrc = new WeakMap<HTMLElement, string>();
+    private frozenViewLen = new WeakMap<HTMLElement, number>();
 
     constructor(
         private readonly editorEl: HTMLElement,
@@ -62,7 +83,10 @@ export class ParagraphVirtualizer {
         // WeakMap/WeakSet have no .clear() — reassign to drop all references.
         this.lastKnownWidths = new WeakMap();
         this.seenDivs = new WeakSet();
+        this.frozenSrc = new WeakMap();
+        this.frozenViewLen = new WeakMap();
         this.viewActive = true;
+        this.paragraphRecords.length = 0;
     }
 
     // Registers all current editorEl children with the observer (call after setValue).
@@ -117,16 +141,63 @@ export class ParagraphVirtualizer {
         this.observer.observe(div);
     }
 
+    // Initializes paragraphRecords from content lines.
+    // Call from EditorElement.setValue() and the patchParagraphs fallback after replaceChildren.
+    // width is 0 for all entries (updated to the measured value when the div is first frozen).
+    initRecords(lines: string[]): void {
+        this.paragraphRecords.length = 0;
+        for (const line of lines) {
+            this.paragraphRecords.push({
+                src: line,
+                viewLen: this.buildParagraphVisibleText(line).length,
+                width: 0,
+            });
+        }
+    }
+
+    // Mirrors the DOM splice performed by patchParagraphs, keeping paragraphRecords in sync.
+    // lo: first changed index; deleteCount: number of old records to remove;
+    // newLines: replacement Aozora source lines (may be a different count than deleteCount).
+    spliceRecords(lo: number, deleteCount: number, newLines: string[]): void {
+        const newRecords = newLines.map(src => ({
+            src,
+            viewLen: this.buildParagraphVisibleText(src).length,
+            width: 0,
+        }));
+        this.paragraphRecords.splice(lo, deleteCount, ...newRecords);
+    }
+
+    // Returns the Aozora source for the paragraph at index i. O(1).
+    // Use in getValue() and extractHybridText() where the caller already has the index.
+    getSrcByIndex(i: number): string {
+        return this.paragraphRecords[i]?.src ?? '';
+    }
+
+    // Returns the visible character count for the paragraph at index i. O(1).
+    // Use in getVisibleOffset() and setVisibleOffset() where the caller already has the index.
+    getViewLenByIndex(i: number): number {
+        return this.paragraphRecords[i]?.viewLen ?? 0;
+    }
+
     // Returns true if div is currently frozen (has the tate-frozen class).
     isFrozen(div: HTMLElement): boolean {
         return div.classList.contains(FROZEN_CLASS);
     }
 
+    // Sets the frozen content for a div in frozenSrc / frozenViewLen.
+    // Called by freezeDiv() internally. Also exposed for test helpers that create frozen
+    // divs directly (outside the normal freeze/thaw lifecycle).
+    setFrozenContent(div: HTMLElement, src: string, viewLen: number): void {
+        this.frozenSrc.set(div, src);
+        this.frozenViewLen.set(div, viewLen);
+    }
+
     // Returns the Aozora source line for a div.
-    // Frozen div: reads data-src attribute. Real div: serializes child nodes.
+    // Frozen div: reads from frozenSrc (keyed by div identity, O(1), correct after DOM shifts).
+    // Real div: serializes child nodes.
     getSrcLine(div: HTMLElement): string {
         if (div.classList.contains(FROZEN_CLASS)) {
-            return div.getAttribute('data-src') ?? '';
+            return this.frozenSrc.get(div) ?? '';
         }
         return Array.from(div.childNodes)
             .map(n => serializeNode(n, this.editorEl))
@@ -134,22 +205,22 @@ export class ParagraphVirtualizer {
     }
 
     // Returns the visible character count for a div.
-    // Frozen div: reads data-view-len attribute. Real div: walks text nodes.
+    // Frozen div: reads from frozenViewLen (keyed by div identity, O(1), correct after DOM shifts).
+    // Real div: walks text nodes.
     getViewLen(div: HTMLElement): number {
         if (div.classList.contains(FROZEN_CLASS)) {
-            return parseInt(div.getAttribute('data-view-len') ?? '0', 10);
+            return this.frozenViewLen.get(div) ?? 0;
         }
         return computeDivViewLen(div, this.editorEl);
     }
 
-    // Thaws a frozen div: restores real DOM content from data-src and re-registers with observer.
+    // Thaws a frozen div: restores real DOM content from paragraphRecords and re-registers with observer.
     thawDiv(div: HTMLElement): void {
         if (!div.classList.contains(FROZEN_CLASS)) return;
         this.cancelFreeze(div);
-        const src = div.getAttribute('data-src') ?? '';
+        // Read src from records before removing the frozen class (getSrcLine uses the class to branch).
+        const src = this.getSrcLine(div);
         div.classList.remove(FROZEN_CLASS);
-        div.removeAttribute('data-src');
-        div.removeAttribute('data-view-len');
         // Remove the frozen width pin and any stale contain-intrinsic-block-size from a
         // previous freeze cycle. Both operations and replaceChildren are batched into a
         // single browser layout pass, so there is no intermediate size flash.
@@ -165,8 +236,6 @@ export class ParagraphVirtualizer {
         if (!div.classList.contains(FROZEN_CLASS)) return;
         this.cancelFreeze(div);
         div.classList.remove(FROZEN_CLASS);
-        div.removeAttribute('data-src');
-        div.removeAttribute('data-view-len');
         div.style.removeProperty('width');
         div.style.removeProperty('contain-intrinsic-block-size');
     }
@@ -248,6 +317,16 @@ export class ParagraphVirtualizer {
         return result.join('');
     }
 
+    // Returns the index of div in editorEl.children, or -1 if not found.
+    // Used by freezeDiv() to sync paragraphRecords[idx] when a div is frozen (O(N) scan;
+    // acceptable because freezeDiv fires at most once per div after a 50ms timer delay).
+    private indexOfDiv(div: HTMLElement): number {
+        for (let i = 0; i < this.editorEl.children.length; i++) {
+            if (this.editorEl.children[i] === div) return i;
+        }
+        return -1;
+    }
+
     // Cancels all pending freeze timers without touching lastKnownWidths, preserving
     // accurate widths for the next freeze cycle. Used by onViewDeactivated/onViewActivated.
     private cancelAllPendingFreezeTimers(): void {
@@ -283,6 +362,22 @@ export class ParagraphVirtualizer {
         const src = this.getSrcLine(div);
         const viewLen = this.buildParagraphVisibleText(src).length;
         const pixelWidth = this.lastKnownWidths.get(div) ?? 0;
+
+        // Store content keyed by div identity (WeakMap) so getSrcLine/getViewLen remain
+        // correct even if other divs are inserted or removed after this freeze (DOM positions
+        // shift, but each WeakMap entry travels with its own div element).
+        this.setFrozenContent(div, src, viewLen);
+
+        // Also sync paragraphRecords for Phase 2 (DOM windowing). Records are indexed by
+        // current DOM position; they become stale after DOM insertions/deletions outside
+        // patchParagraphs, but frozenSrc/frozenViewLen are always authoritative for reads.
+        const idx = this.indexOfDiv(div);
+        if (idx >= 0 && this.paragraphRecords[idx] !== undefined) {
+            this.paragraphRecords[idx].src = src;
+            this.paragraphRecords[idx].viewLen = viewLen;
+            this.paragraphRecords[idx].width = pixelWidth;
+        }
+
         // Set style.width before emptying content so both changes are batched into a single
         // layout pass — the div stays at pixelWidth throughout the transition with no size
         // flash regardless of whether it is inside or outside Chrome's content-visibility
@@ -292,8 +387,6 @@ export class ParagraphVirtualizer {
         if (pixelWidth > 0) div.style.setProperty('width', `${pixelWidth}px`);
         div.replaceChildren();
         div.classList.add(FROZEN_CLASS);
-        div.setAttribute('data-src', src);
-        div.setAttribute('data-view-len', String(viewLen));
     }
 
     private onIntersection(entries: IntersectionObserverEntry[]): void {

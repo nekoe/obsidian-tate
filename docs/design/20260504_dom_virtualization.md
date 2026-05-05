@@ -23,25 +23,30 @@ divs are frozen.
 
 ## Frozen Placeholder Format
 
-A frozen div is an empty `<div>` decorated with three markers:
+A frozen div is an empty `<div>` decorated with two markers:
 
 ```html
-<div class="tate-frozen"
-     data-src="吾輩《わがはい》は猫である"
-     data-view-len="8"
-     style="width: 132px">
-</div>
+<div class="tate-frozen" style="width: 132px"></div>
 ```
 
 | Attribute / Property | Purpose |
 |---|---|
 | `class="tate-frozen"` | Identifies the div as frozen; CSS adds `pointer-events: none` |
-| `data-src` | Aozora source line (serialized from child nodes at freeze time) |
-| `data-view-len` | Visible character count (for `getViewCursorOffset()` without parsing) |
 | `style.width` | Pins the physical column width so the scroll container does not shrink when content is removed |
 
-`data-src` and `data-view-len` allow `getSrcLine()` and `getViewLen()` to serve frozen divs
-without touching the DOM. `style.width` is the key scroll stability mechanism.
+`data-src` and `data-view-len` attributes are **not** written to frozen divs (they were
+removed in the Phase 1 `paragraphRecords` refactor). Content is stored in two dedicated stores:
+
+| Store | Type | Key | Purpose |
+|---|---|---|---|
+| `frozenSrc` | `WeakMap<HTMLElement, string>` | div element | Aozora source for `getSrcLine()` / `getValue()` |
+| `frozenViewLen` | `WeakMap<HTMLElement, number>` | div element | Visible char count for `getViewLen()` / `getVisibleOffset()` |
+| `paragraphRecords` | `ParagraphRecord[]` | DOM index | Full per-paragraph store for Phase 2 (DOM windowing) |
+
+The WeakMaps are keyed by **div element identity**, not DOM position. This is intentional:
+when a div is inserted elsewhere in the document (e.g., Enter key), frozen div positions
+shift, but each WeakMap entry travels with its own element and stays correct.
+`style.width` is the key scroll stability mechanism.
 
 ### Why `style.width`, not `contain-intrinsic-block-size`
 
@@ -68,7 +73,10 @@ VerticalWritingView (view.ts)
        ├─ IntersectionObserver  (freeze/thaw trigger)
        ├─ freezeTimers          (pending freeze per div)
        ├─ lastKnownWidths       (pixel width cache per div)
-       └─ seenDivs              (freeze eligibility guard)
+       ├─ seenDivs              (freeze eligibility guard)
+       ├─ frozenSrc             (WeakMap: div → Aozora src, source of truth for reads)
+       ├─ frozenViewLen         (WeakMap: div → visible char count, source of truth for reads)
+       └─ paragraphRecords      (ParagraphRecord[]: indexed by DOM position, for Phase 2)
 ```
 
 ### IntersectionObserver setup
@@ -91,7 +99,7 @@ freezing.
 
 1. `seenDivs.add(div)` — marks the div as having been rendered at least once
 2. `cancelFreeze(div)` — cancels any pending freeze timer; deletes `lastKnownWidths` entry
-3. If frozen: `thawDiv(div)` — restores DOM content from `data-src`, removes `style.width`
+3. If frozen: `thawDiv(div)` — restores DOM content from `frozenSrc` WeakMap, removes `style.width`
 
 ### Leaving the viewport (`isIntersecting: false`)
 
@@ -105,7 +113,10 @@ visible flicker.
 ### `freezeDiv()`
 
 ```
-shouldFreeze? → seenDivs guard? → read src/viewLen → set style.width → replaceChildren() → add class/attrs
+shouldFreeze? → seenDivs guard? → read src/viewLen from live DOM
+  → setFrozenContent(div, src, viewLen)    [writes frozenSrc / frozenViewLen WeakMaps]
+  → sync paragraphRecords[indexOfDiv(div)] [for Phase 2]
+  → set style.width → replaceChildren() → add tate-frozen class
 ```
 
 `shouldFreeze()` blocks freezing in six cases:
@@ -131,8 +142,14 @@ least once.
 
 | Method | Use case | DOM effect |
 |---|---|---|
-| `thawDiv()` | IntersectionObserver scroll-in, `ensureThawed*`, SearchPanel navigation | Reconstructs DOM from `data-src` via `parseInlineToHtml` + `sanitizeHTMLToDom` |
-| `unfrostDiv()` | `patchParagraphs()` (Undo/Redo) — caller replaces children immediately after | Strips frozen markers only; leaves `childNodes` empty for caller to fill |
+| `thawDiv()` | IntersectionObserver scroll-in, `ensureThawed*`, SearchPanel navigation | Reads src from `frozenSrc` WeakMap, reconstructs DOM via `parseInlineToHtml` + `sanitizeHTMLToDom`, removes `style.width` |
+| `unfrostDiv()` | `patchParagraphs()` (Undo/Redo) — caller replaces children immediately after | Strips frozen class and `style.width` only; leaves `childNodes` empty for caller to fill |
+
+`thawDiv()` reads src from the `frozenSrc` WeakMap **before** removing the `tate-frozen` class,
+because `getSrcLine()` uses the class to branch between the WeakMap path (frozen) and the live
+DOM serialization path (real). The WeakMap entries for `frozenSrc`/`frozenViewLen` are not
+explicitly cleared on thaw — the `isFrozen()` guard in `getSrcLine()`/`getViewLen()` prevents
+stale values from being read. The next `freezeDiv()` call on the same element overwrites them.
 
 `thawDiv()` calls `observeOne()` after reconstruction so the div re-enters the observation cycle.
 `unfrostDiv()` does not (caller calls `observeOne()` after `replaceChildren()`).
@@ -200,9 +217,10 @@ for the duration the panel was open.
 
 ### Hybrid text extraction
 
-Frozen divs now contribute their visible text via `buildParagraphVisibleText(data-src)` — a pure
+Frozen divs now contribute their visible text via `buildParagraphVisibleText(src)` — a pure
 function that runs `buildSegmentMap()` on the Aozora source and concatenates the base-text
-characters for each segment. Thawed divs are extracted via `TreeWalker` as before.
+characters for each segment. The src is read from the `frozenSrc` WeakMap via `getSrcLine()`.
+Thawed divs are extracted via `TreeWalker` as before.
 
 All match positions are tracked in combined visible-text space (global character offset across
 all paragraphs). Each match is stored as a `MatchEntry` union:
@@ -249,7 +267,8 @@ use by the highlight sets.
 | Frozen divs are not searched via TreeWalker | `extractHybridText()` skips frozen divs; `SearchPanel.extractSegmentsFromDiv()` only called on thawed divs |
 | Cursor div is never frozen | `shouldFreeze()` checks `div.contains(sel.getRangeAt(0).startContainer)` |
 | `style.width` is never stale | Only set in `freezeDiv()` immediately after `lastKnownWidths` is captured by IO callback |
-| `data-src` reflects current content | `getSrcLine()` serializes live DOM at freeze time; `patchParagraphs` calls `unfrostDiv` before `replaceChildren` to avoid a stale `data-src` |
+| `frozenSrc` reflects current content | `getSrcLine()` serializes live DOM at freeze time; `patchParagraphs` calls `unfrostDiv` before `replaceChildren` to avoid a stale `frozenSrc` entry on the next freeze |
+| `frozenSrc`/`frozenViewLen` correct after DOM shifts | Keyed by div element identity (WeakMap), not DOM position; insertions/deletions elsewhere do not invalidate existing entries |
 
 ## Files Changed
 
