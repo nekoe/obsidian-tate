@@ -1890,19 +1890,53 @@ var EditorElement = class {
   handleCut(e) {
     const range = this.serializeSelectionToClipboard(e);
     if (!range) return;
-    const emptyLineDivs = Array.from(this.el.children).filter(
-      (n) => {
-        var _a;
-        return n instanceof HTMLElement && n.tagName === "DIV" && n.childNodes.length === 1 && ((_a = n.firstChild) == null ? void 0 : _a.nodeName) === "BR";
-      }
-    );
+    this.deleteRangeContents(range);
+  }
+  // Intercepts deleteContent* beforeinput events when the selection is non-collapsed,
+  // performing the deletion via range.deleteContents() instead of Chrome's contenteditable
+  // processing. Chrome's native deletion records undo state, injects NBSP, and recomputes
+  // vertical-rl column layouts for each removed node — all O(N) work we don't need.
+  // Returns true if the event was handled (caller must call e.preventDefault()).
+  // Collapsed-cursor single-character deletion is left to the browser (grapheme-cluster
+  // boundary handling is complex and Chrome does it correctly for free).
+  handleSelectionDelete(e) {
+    if (e.isComposing) return false;
+    if (!e.inputType.startsWith("deleteContent")) return false;
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return false;
+    const range = sel.getRangeAt(0);
+    if (!this.el.contains(range.commonAncestorContainer)) return false;
+    this.inlineEditor.onBeforeInput();
+    this.deleteRangeContents(range);
+    return true;
+  }
+  // Deletes the contents of range and repairs the paragraph structure:
+  // removes empty-paragraph shells and restores <br> placeholders.
+  // Used by both handleCut and handleSelectionDelete.
+  //
+  // Only the two boundary divs (start / end) can retain a shell after deleteContents().
+  // Middle divs that lie entirely within the range are fully removed by the browser —
+  // no shell is left, so there is nothing to repair. This makes cleanup O(1).
+  deleteRangeContents(range) {
+    var _a, _b;
+    const startDiv = this.findParagraphDiv(range.startContainer);
+    const endDiv = this.findParagraphDiv(range.endContainer);
+    const startWasEmptyLine = startDiv !== null && startDiv.childNodes.length === 1 && ((_a = startDiv.firstChild) == null ? void 0 : _a.nodeName) === "BR";
+    const endWasEmptyLine = endDiv !== null && endDiv !== startDiv && endDiv.childNodes.length === 1 && ((_b = endDiv.firstChild) == null ? void 0 : _b.nodeName) === "BR";
     range.deleteContents();
-    for (const div of emptyLineDivs) {
-      if (div.isConnected && isEffectivelyEmpty(div)) div.remove();
+    if (startDiv == null ? void 0 : startDiv.isConnected) {
+      if (startWasEmptyLine && isEffectivelyEmpty(startDiv)) {
+        startDiv.remove();
+      } else {
+        ensureBrPlaceholder(startDiv);
+      }
     }
-    for (const child of Array.from(this.el.children)) {
-      if (child instanceof HTMLElement && child.tagName === "DIV")
-        ensureBrPlaceholder(child);
+    if (endDiv && endDiv !== startDiv && endDiv.isConnected) {
+      if (endWasEmptyLine && isEffectivelyEmpty(endDiv)) {
+        endDiv.remove();
+      } else {
+        ensureBrPlaceholder(endDiv);
+      }
     }
   }
   // Serializes the current selection to Aozora notation and writes it to text/plain.
@@ -3180,11 +3214,19 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
       (_a = this.searchPanel) == null ? void 0 : _a.onContentChanged();
     });
     this.registerDomEvent(editorEl.el, "beforeinput", (e) => {
+      var _a;
       if (!this.guardCm6(e)) return;
       if (!e.isComposing && e.inputType === "insertParagraph" && editorEl.isInlineExpanded()) {
         e.preventDefault();
         const contentChanged = editorEl.collapseForEnter();
         if (contentChanged) this.commitToCm6();
+        return;
+      }
+      if (editorEl.handleSelectionDelete(e)) {
+        e.preventDefault();
+        editorEl.normalizeEmptyDom();
+        this.scheduleCommit();
+        (_a = this.searchPanel) == null ? void 0 : _a.onContentChanged();
         return;
       }
       editorEl.onBeforeInput(e);

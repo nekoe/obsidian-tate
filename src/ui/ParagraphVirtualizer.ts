@@ -7,6 +7,7 @@ import { computeDivViewLen } from './domHelpers';
 export const FROZEN_CLASS = 'tate-frozen';
 const FREEZE_DELAY_MS = 50;
 
+
 // Manages DOM virtualization: off-screen paragraph divs are replaced with lightweight
 // frozen placeholders (<div class="tate-frozen" data-src="..." data-view-len="...">) to
 // reduce the number of live DOM nodes. IntersectionObserver drives freeze/thaw automatically.

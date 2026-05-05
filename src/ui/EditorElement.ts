@@ -113,34 +113,66 @@ export class EditorElement {
     handleCut(e: ClipboardEvent): void {
         const range = this.serializeSelectionToClipboard(e);
         if (!range) return;
-        // Pre-identify empty paragraph divs (only <br>) that may have their placeholder
-        // removed by deleteContents(). After the cut, any such div with no remaining
-        // children must be removed: <div></div> serializes identically to <div><br></div>
-        // ('\n'), so getValue() sees no change and commitToCm6() skips the CM6 update.
-        // This covers both same-div selections and cross-div selections where the empty
-        // line falls within the range.
-        const emptyLineDivs = Array.from(this.el.children).filter(
-            (n): n is HTMLElement =>
-                n instanceof HTMLElement &&
-                n.tagName === 'DIV' &&
-                n.childNodes.length === 1 &&
-                n.firstChild?.nodeName === 'BR'
-        );
-        range.deleteContents();
-        // Empty-line divs that had their <br> removed by deleteContents() represent
-        // a whole empty paragraph being cut — remove the shell entirely.
-        for (const div of emptyLineDivs) {
-            if (div.isConnected && isEffectivelyEmpty(div)) div.remove();
-        }
-        // Any remaining <div> whose text was fully cut must have its <br> placeholder
-        // restored. deleteContents() on a full text selection leaves the text node in
-        // place with data === '' rather than removing it; ensureBrPlaceholder handles both
-        // the childNodes.length === 0 and the empty-Text-node cases.
-        for (const child of Array.from(this.el.children)) {
-            if (child instanceof HTMLElement && child.tagName === 'DIV')
-                ensureBrPlaceholder(child);
-        }
+        this.deleteRangeContents(range);
         // view.ts calls commitToCm6() after cut
+    }
+
+    // Intercepts deleteContent* beforeinput events when the selection is non-collapsed,
+    // performing the deletion via range.deleteContents() instead of Chrome's contenteditable
+    // processing. Chrome's native deletion records undo state, injects NBSP, and recomputes
+    // vertical-rl column layouts for each removed node — all O(N) work we don't need.
+    // Returns true if the event was handled (caller must call e.preventDefault()).
+    // Collapsed-cursor single-character deletion is left to the browser (grapheme-cluster
+    // boundary handling is complex and Chrome does it correctly for free).
+    handleSelectionDelete(e: InputEvent): boolean {
+        if (e.isComposing) return false;
+        if (!e.inputType.startsWith('deleteContent')) return false;
+        const sel = window.getSelection();
+        if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return false;
+        const range = sel.getRangeAt(0);
+        if (!this.el.contains(range.commonAncestorContainer)) return false;
+        this.inlineEditor.onBeforeInput(); // keep burst flag in sync
+        this.deleteRangeContents(range);
+        return true;
+    }
+
+    // Deletes the contents of range and repairs the paragraph structure:
+    // removes empty-paragraph shells and restores <br> placeholders.
+    // Used by both handleCut and handleSelectionDelete.
+    //
+    // Only the two boundary divs (start / end) can retain a shell after deleteContents().
+    // Middle divs that lie entirely within the range are fully removed by the browser —
+    // no shell is left, so there is nothing to repair. This makes cleanup O(1).
+    private deleteRangeContents(range: Range): void {
+        const startDiv = this.findParagraphDiv(range.startContainer);
+        const endDiv   = this.findParagraphDiv(range.endContainer);
+
+        // Note whether each boundary div was a pure empty-line (only <br>) before deletion.
+        // deleteContents() strips the <br>, leaving a <div></div> shell that must be
+        // removed rather than repaired — the whole paragraph was selected and deleted.
+        const startWasEmptyLine = startDiv !== null &&
+            startDiv.childNodes.length === 1 &&
+            startDiv.firstChild?.nodeName === 'BR';
+        const endWasEmptyLine = endDiv !== null && endDiv !== startDiv &&
+            endDiv.childNodes.length === 1 &&
+            endDiv.firstChild?.nodeName === 'BR';
+
+        range.deleteContents();
+
+        if (startDiv?.isConnected) {
+            if (startWasEmptyLine && isEffectivelyEmpty(startDiv)) {
+                startDiv.remove();
+            } else {
+                ensureBrPlaceholder(startDiv);
+            }
+        }
+        if (endDiv && endDiv !== startDiv && endDiv.isConnected) {
+            if (endWasEmptyLine && isEffectivelyEmpty(endDiv)) {
+                endDiv.remove();
+            } else {
+                ensureBrPlaceholder(endDiv);
+            }
+        }
     }
 
     // Serializes the current selection to Aozora notation and writes it to text/plain.

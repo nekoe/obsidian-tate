@@ -9,6 +9,7 @@ import { TatePluginSettings } from './settings';
 
 export const TATE_VIEW_TYPE = 'tate-vertical-writing';
 
+
 export class VerticalWritingView extends ItemView {
     private editorEl: EditorElement | null = null;
     private virtualizer: ParagraphVirtualizer | null = null;
@@ -148,6 +149,18 @@ export class VerticalWritingView extends ItemView {
                 e.preventDefault();
                 const contentChanged = editorEl.collapseForEnter();
                 if (contentChanged) this.commitToCm6();
+                return;
+            }
+            // For non-collapsed selection deletion, bypass Chrome's contenteditable
+            // processing (undo recording, NBSP injection, column layout recompute)
+            // and use range.deleteContents() directly. This eliminates the O(N) slowness
+            // and memory spike observed between beforeinput and input for multi-line
+            // selections. Collapsed-cursor single-char deletion is left to the browser.
+            if (editorEl.handleSelectionDelete(e)) {
+                e.preventDefault();
+                editorEl.normalizeEmptyDom();
+                this.scheduleCommit();
+                this.searchPanel?.onContentChanged();
                 return;
             }
             editorEl.onBeforeInput(e);
