@@ -2799,12 +2799,12 @@ var SearchPanel = class {
   showReplaceRow() {
     var _a;
     (_a = this.replaceRowEl) == null ? void 0 : _a.classList.add("tate-replace-visible");
-    if (this.toggleBtnEl) this.toggleBtnEl.textContent = "\u25BC";
+    if (this.toggleBtnEl) (0, import_obsidian4.setIcon)(this.toggleBtnEl, "chevron-down");
   }
   hideReplaceRow() {
     var _a;
     (_a = this.replaceRowEl) == null ? void 0 : _a.classList.remove("tate-replace-visible");
-    if (this.toggleBtnEl) this.toggleBtnEl.textContent = "\u25B6";
+    if (this.toggleBtnEl) (0, import_obsidian4.setIcon)(this.toggleBtnEl, "chevron-right");
   }
   toggleReplaceRow() {
     var _a;
@@ -2822,7 +2822,7 @@ var SearchPanel = class {
     const toggleBtn = document.createElement("button");
     toggleBtn.className = "tate-search-toggle";
     toggleBtn.tabIndex = -1;
-    toggleBtn.textContent = expandReplace ? "\u25BC" : "\u25B6";
+    (0, import_obsidian4.setIcon)(toggleBtn, expandReplace ? "chevron-down" : "chevron-right");
     toggleBtn.setAttribute("aria-label", "\u7F6E\u63DB\u6B04\u3092\u8868\u793A");
     toggleBtn.addEventListener("click", () => this.toggleReplaceRow());
     this.toggleBtnEl = toggleBtn;

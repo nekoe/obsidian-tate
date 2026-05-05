@@ -1,4 +1,4 @@
-import { App, sanitizeHTMLToDom, Scope } from 'obsidian';
+import { App, sanitizeHTMLToDom, Scope, setIcon } from 'obsidian';
 import type { EditorElement } from './EditorElement';
 import type { ParagraphVirtualizer } from './ParagraphVirtualizer';
 import { isInsideRtNode } from './domHelpers';
@@ -295,12 +295,12 @@ export class SearchPanel {
 
     private showReplaceRow(): void {
         this.replaceRowEl?.classList.add('tate-replace-visible');
-        if (this.toggleBtnEl) this.toggleBtnEl.textContent = '▼';
+        if (this.toggleBtnEl) setIcon(this.toggleBtnEl, 'chevron-down');
     }
 
     private hideReplaceRow(): void {
         this.replaceRowEl?.classList.remove('tate-replace-visible');
-        if (this.toggleBtnEl) this.toggleBtnEl.textContent = '▶';
+        if (this.toggleBtnEl) setIcon(this.toggleBtnEl, 'chevron-right');
     }
 
     private toggleReplaceRow(): void {
@@ -321,7 +321,7 @@ export class SearchPanel {
         const toggleBtn = document.createElement('button');
         toggleBtn.className = 'tate-search-toggle';
         toggleBtn.tabIndex = -1;
-        toggleBtn.textContent = expandReplace ? '▼' : '▶';
+        setIcon(toggleBtn, expandReplace ? 'chevron-down' : 'chevron-right');
         toggleBtn.setAttribute('aria-label', '置換欄を表示');
         toggleBtn.addEventListener('click', () => this.toggleReplaceRow());
         this.toggleBtnEl = toggleBtn;
