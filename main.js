@@ -4289,7 +4289,7 @@ var TatePlugin = class extends import_obsidian7.Plugin {
     });
     this.addCommand({
       id: "set-heading-large",
-      name: "\u73FE\u5728\u306E\u6BB5\u843D\u3092\u5927\u898B\u51FA\u3057\u306B\u8A2D\u5B9A",
+      name: "\u9078\u629E\u30C6\u30AD\u30B9\u30C8\u3092\u5927\u898B\u51FA\u3057\u306B\u8A2D\u5B9A",
       checkCallback: (checking) => {
         const view = this.getActiveTateView();
         if (!view) return false;
@@ -4299,7 +4299,7 @@ var TatePlugin = class extends import_obsidian7.Plugin {
     });
     this.addCommand({
       id: "set-heading-mid",
-      name: "\u73FE\u5728\u306E\u6BB5\u843D\u3092\u4E2D\u898B\u51FA\u3057\u306B\u8A2D\u5B9A",
+      name: "\u9078\u629E\u30C6\u30AD\u30B9\u30C8\u3092\u4E2D\u898B\u51FA\u3057\u306B\u8A2D\u5B9A",
       checkCallback: (checking) => {
         const view = this.getActiveTateView();
         if (!view) return false;
@@ -4309,7 +4309,7 @@ var TatePlugin = class extends import_obsidian7.Plugin {
     });
     this.addCommand({
       id: "set-heading-small",
-      name: "\u73FE\u5728\u306E\u6BB5\u843D\u3092\u5C0F\u898B\u51FA\u3057\u306B\u8A2D\u5B9A",
+      name: "\u9078\u629E\u30C6\u30AD\u30B9\u30C8\u3092\u5C0F\u898B\u51FA\u3057\u306B\u8A2D\u5B9A",
       checkCallback: (checking) => {
         const view = this.getActiveTateView();
         if (!view) return false;
