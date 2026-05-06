@@ -31,19 +31,28 @@ export class EditorElement {
 
     getValue(): string {
         const virt = this.virtualizer;
-        return Array.from(this.el.childNodes)
-            .map(n => {
-                if (virt && n instanceof HTMLElement && virt.isFrozen(n)) {
-                    // getSrcLine reads from frozenSrc WeakMap (keyed by div identity),
-                    // so it stays correct even when other divs are inserted/removed.
-                    const src = virt.getSrcLine(n);
-                    // Non-first paragraph divs need a leading newline (same as serializeNode DIV logic).
-                    // Use previousElementSibling to ignore bare Text/BR nodes from paste fallback.
-                    return n.previousElementSibling !== null ? '\n' + src : src;
-                }
-                return serializeNode(n, this.el);
-            })
-            .join('');
+        // When records are not yet loaded (before first setValue), fall back to direct DOM walk.
+        if (!virt || virt.domEnd < 0) {
+            return Array.from(this.el.childNodes).map(n => serializeNode(n, this.el)).join('');
+        }
+        // Iterate by paragraphRecords index so that off-window paragraphs (Phase 2c+) are read
+        // from records rather than the DOM (their divs have been removed from the tree).
+        const parts: string[] = [];
+        for (let i = 0; i < virt.paragraphRecords.length; i++) {
+            const div = virt.getWindowDiv(i);
+            let src: string;
+            if (!div) {
+                // Off-window: read from records (Phase 2c+; unreachable in Phase 2a).
+                src = virt.paragraphRecords[i].src;
+            } else if (virt.isFrozen(div)) {
+                // In-window frozen: read from frozenSrc WeakMap (identity-keyed, always correct).
+                src = virt.getSrcLine(div);
+            } else {
+                src = Array.from(div.childNodes).map(n => serializeNode(n, this.el)).join('');
+            }
+            parts.push(i === 0 ? src : '\n' + src);
+        }
+        return parts.join('');
     }
 
     setValue(content: string, preserveCursor: boolean): void {
@@ -734,6 +743,7 @@ export class EditorElement {
         const sel = window.getSelection();
         if (!sel || sel.rangeCount === 0) return 0;
         const range = sel.getRangeAt(0);
+        const virt = this.virtualizer;
 
         // Find which paragraph div contains the cursor.
         let cursorDiv: HTMLElement | null = null;
@@ -746,18 +756,34 @@ export class EditorElement {
             node = node.parentElement;
         }
 
-        // Accumulate view lengths of all divs before the cursor div.
-        // Frozen divs use getViewLen() which reads from frozenViewLen WeakMap (O(1), always correct).
+        // Accumulate view lengths of all paragraphs before the cursor div.
+        // Uses paragraphRecords index so off-window paragraphs (Phase 2c+) are counted via records.
         let count = 0;
-        for (const child of Array.from(this.el.children) as HTMLElement[]) {
-            if (child === cursorDiv) break;
-            count += this.virtualizer?.isFrozen(child)
-                ? this.virtualizer.getViewLen(child)
-                : computeDivViewLen(child, this.el);
+        if (virt && virt.domEnd >= 0) {
+            for (let i = 0; i < virt.paragraphRecords.length; i++) {
+                const div = virt.getWindowDiv(i);
+                if (div === cursorDiv) break;
+                if (!div) {
+                    // Off-window: use record's viewLen (Phase 2c+; unreachable in Phase 2a).
+                    count += virt.paragraphRecords[i].viewLen;
+                } else if (virt.isFrozen(div)) {
+                    count += virt.getViewLen(div); // frozenViewLen WeakMap (O(1))
+                } else {
+                    count += computeDivViewLen(div, this.el);
+                }
+            }
+        } else {
+            // Fallback: no records loaded yet; walk DOM directly.
+            for (const child of Array.from(this.el.children) as HTMLElement[]) {
+                if (child === cursorDiv) break;
+                count += virt?.isFrozen(child)
+                    ? (virt.getViewLen(child))
+                    : computeDivViewLen(child, this.el);
+            }
         }
 
         // If the cursor is not inside any child div (e.g. cursor on el itself), return 0.
-        if (!cursorDiv || this.virtualizer?.isFrozen(cursorDiv)) return count;
+        if (!cursorDiv || virt?.isFrozen(cursorDiv)) return count;
 
         // Walk text nodes inside the cursor div to find the exact offset.
         const walker = document.createTreeWalker(cursorDiv, NodeFilter.SHOW_TEXT);
@@ -786,25 +812,39 @@ export class EditorElement {
     private setVisibleOffset(offset: number): void {
         const sel = window.getSelection();
         if (!sel) return;
+        const virt = this.virtualizer;
         let remaining = offset;
 
-        // Scan paragraph divs first. For frozen divs, skip by getViewLen() (frozenViewLen WeakMap, O(1)).
-        // For real divs, walk text nodes to find the exact position.
-        for (const child of Array.from(this.el.children) as HTMLElement[]) {
-            if (this.virtualizer?.isFrozen(child)) {
-                const viewLen = this.virtualizer.getViewLen(child);
+        // Iterate by paragraphRecords index so off-window paragraphs are handled correctly.
+        const N = virt && virt.domEnd >= 0 ? virt.paragraphRecords.length : this.el.children.length;
+
+        for (let idx = 0; idx < N; idx++) {
+            const child = virt && virt.domEnd >= 0
+                ? virt.getWindowDiv(idx)
+                : (this.el.children[idx] as HTMLElement);
+
+            if (!child) {
+                // Off-window paragraph (Phase 2c+): shift the window to include it, then retry.
+                virt!.ensureInWindow(idx);
+                const retryChild = virt!.getWindowDiv(idx);
+                if (retryChild) { idx--; continue; } // retry with the now-in-window div
+                remaining -= virt!.paragraphRecords[idx].viewLen;
+                continue;
+            }
+
+            if (virt?.isFrozen(child)) {
+                const viewLen = virt.getViewLen(child);
                 if (remaining <= viewLen) {
                     // Offset falls inside this frozen div — thaw it first, then retry once.
-                    // Guard against thaw failure: only retry if the class was actually removed.
-                    this.virtualizer.thawDiv(child);
-                    if (!this.virtualizer.isFrozen(child)) this.setVisibleOffset(offset);
+                    virt.thawDiv(child);
+                    if (!virt.isFrozen(child)) this.setVisibleOffset(offset);
                     return;
                 }
                 remaining -= viewLen;
                 continue;
             }
 
-            // Real div: walk its text nodes.
+            // Live div: walk its text nodes.
             const walker = document.createTreeWalker(child, NodeFilter.SHOW_TEXT);
             let node = walker.nextNode() as Text | null;
             while (node) {
@@ -820,10 +860,10 @@ export class EditorElement {
                             const text = node.textContent ?? '';
                             actualOffset = 0;
                             let visible = 0;
-                            for (let i = 0; i < text.length; i++) {
-                                if (visible === remaining) { actualOffset = i; break; }
-                                if (text[i] !== '\u200B') visible++;
-                                actualOffset = i + 1;
+                            for (let ci = 0; ci < text.length; ci++) {
+                                if (visible === remaining) { actualOffset = ci; break; }
+                                if (text[ci] !== '\u200B') visible++;
+                                actualOffset = ci + 1;
                             }
                         } else {
                             actualOffset = remaining;

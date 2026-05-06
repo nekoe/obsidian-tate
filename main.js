@@ -1942,13 +1942,23 @@ var EditorElement = class {
   }
   getValue() {
     const virt = this.virtualizer;
-    return Array.from(this.el.childNodes).map((n) => {
-      if (virt && n instanceof HTMLElement && virt.isFrozen(n)) {
-        const src = virt.getSrcLine(n);
-        return n.previousElementSibling !== null ? "\n" + src : src;
+    if (!virt || virt.domEnd < 0) {
+      return Array.from(this.el.childNodes).map((n) => serializeNode(n, this.el)).join("");
+    }
+    const parts = [];
+    for (let i = 0; i < virt.paragraphRecords.length; i++) {
+      const div = virt.getWindowDiv(i);
+      let src;
+      if (!div) {
+        src = virt.paragraphRecords[i].src;
+      } else if (virt.isFrozen(div)) {
+        src = virt.getSrcLine(div);
+      } else {
+        src = Array.from(div.childNodes).map((n) => serializeNode(n, this.el)).join("");
       }
-      return serializeNode(n, this.el);
-    }).join("");
+      parts.push(i === 0 ? src : "\n" + src);
+    }
+    return parts.join("");
   }
   setValue(content, preserveCursor) {
     var _a, _b, _c;
@@ -2478,10 +2488,11 @@ var EditorElement = class {
   }
   // ---- Cursor operations (offset managed in visible character count, excluding <rt> and U+200B) ----
   getVisibleOffset() {
-    var _a, _b, _c, _d;
+    var _a, _b;
     const sel = window.getSelection();
     if (!sel || sel.rangeCount === 0) return 0;
     const range = sel.getRangeAt(0);
+    const virt = this.virtualizer;
     let cursorDiv = null;
     let node = range.startContainer;
     while (node && node !== this.el) {
@@ -2492,40 +2503,67 @@ var EditorElement = class {
       node = node.parentElement;
     }
     let count = 0;
-    for (const child of Array.from(this.el.children)) {
-      if (child === cursorDiv) break;
-      count += ((_a = this.virtualizer) == null ? void 0 : _a.isFrozen(child)) ? this.virtualizer.getViewLen(child) : computeDivViewLen(child, this.el);
+    if (virt && virt.domEnd >= 0) {
+      for (let i = 0; i < virt.paragraphRecords.length; i++) {
+        const div = virt.getWindowDiv(i);
+        if (div === cursorDiv) break;
+        if (!div) {
+          count += virt.paragraphRecords[i].viewLen;
+        } else if (virt.isFrozen(div)) {
+          count += virt.getViewLen(div);
+        } else {
+          count += computeDivViewLen(div, this.el);
+        }
+      }
+    } else {
+      for (const child of Array.from(this.el.children)) {
+        if (child === cursorDiv) break;
+        count += (virt == null ? void 0 : virt.isFrozen(child)) ? virt.getViewLen(child) : computeDivViewLen(child, this.el);
+      }
     }
-    if (!cursorDiv || ((_b = this.virtualizer) == null ? void 0 : _b.isFrozen(cursorDiv))) return count;
+    if (!cursorDiv || (virt == null ? void 0 : virt.isFrozen(cursorDiv))) return count;
     const walker = document.createTreeWalker(cursorDiv, NodeFilter.SHOW_TEXT);
     let textNode = walker.nextNode();
     while (textNode) {
       if (textNode === range.startContainer) {
         if (!isInsideRtNode(textNode, this.el)) {
-          const text = (_c = textNode.textContent) != null ? _c : "";
+          const text = (_a = textNode.textContent) != null ? _a : "";
           count += findCursorAnchorAncestor(textNode, this.el) ? text.slice(0, range.startOffset).replace(/\u200B/g, "").length : range.startOffset;
         }
         break;
       }
       if (range.comparePoint(textNode, 0) >= 0) break;
       if (!isInsideRtNode(textNode, this.el)) {
-        count += findCursorAnchorAncestor(textNode, this.el) ? ((_d = textNode.textContent) != null ? _d : "").replace(/\u200B/g, "").length : textNode.length;
+        count += findCursorAnchorAncestor(textNode, this.el) ? ((_b = textNode.textContent) != null ? _b : "").replace(/\u200B/g, "").length : textNode.length;
       }
       textNode = walker.nextNode();
     }
     return count;
   }
   setVisibleOffset(offset) {
-    var _a, _b, _c;
+    var _a, _b;
     const sel = window.getSelection();
     if (!sel) return;
+    const virt = this.virtualizer;
     let remaining = offset;
-    for (const child of Array.from(this.el.children)) {
-      if ((_a = this.virtualizer) == null ? void 0 : _a.isFrozen(child)) {
-        const viewLen = this.virtualizer.getViewLen(child);
+    const N = virt && virt.domEnd >= 0 ? virt.paragraphRecords.length : this.el.children.length;
+    for (let idx = 0; idx < N; idx++) {
+      const child = virt && virt.domEnd >= 0 ? virt.getWindowDiv(idx) : this.el.children[idx];
+      if (!child) {
+        virt.ensureInWindow(idx);
+        const retryChild = virt.getWindowDiv(idx);
+        if (retryChild) {
+          idx--;
+          continue;
+        }
+        remaining -= virt.paragraphRecords[idx].viewLen;
+        continue;
+      }
+      if (virt == null ? void 0 : virt.isFrozen(child)) {
+        const viewLen = virt.getViewLen(child);
         if (remaining <= viewLen) {
-          this.virtualizer.thawDiv(child);
-          if (!this.virtualizer.isFrozen(child)) this.setVisibleOffset(offset);
+          virt.thawDiv(child);
+          if (!virt.isFrozen(child)) this.setVisibleOffset(offset);
           return;
         }
         remaining -= viewLen;
@@ -2536,21 +2574,21 @@ var EditorElement = class {
       while (node) {
         if (!isInsideRtNode(node, this.el)) {
           const isAnchor = !!findCursorAnchorAncestor(node, this.el);
-          const visLen = isAnchor ? ((_b = node.textContent) != null ? _b : "").replace(/\u200B/g, "").length : node.length;
+          const visLen = isAnchor ? ((_a = node.textContent) != null ? _a : "").replace(/\u200B/g, "").length : node.length;
           if (remaining <= visLen) {
             const range2 = document.createRange();
             let actualOffset;
             if (isAnchor) {
-              const text = (_c = node.textContent) != null ? _c : "";
+              const text = (_b = node.textContent) != null ? _b : "";
               actualOffset = 0;
               let visible = 0;
-              for (let i = 0; i < text.length; i++) {
+              for (let ci = 0; ci < text.length; ci++) {
                 if (visible === remaining) {
-                  actualOffset = i;
+                  actualOffset = ci;
                   break;
                 }
-                if (text[i] !== "\u200B") visible++;
-                actualOffset = i + 1;
+                if (text[ci] !== "\u200B") visible++;
+                actualOffset = ci + 1;
               }
             } else {
               actualOffset = remaining;
@@ -3178,9 +3216,19 @@ var ParagraphVirtualizer = class {
     // switches away — freezing those divs produces a style.width that may not match
     // the natural content width, causing a scroll-position shift on re-activation.
     this.viewActive = true;
-    // Per-paragraph data store. Indexed 1:1 with editorEl.children.
-    // Maintained by initRecords() / spliceRecords() / freezeDiv(). Used for Phase 2 (DOM windowing).
+    // Per-paragraph data store. Indexed 1:1 with paragraphs (not DOM children).
+    // Maintained by initRecords() / spliceRecords() / freezeDiv().
+    // Phase 2 read paths use this for off-window paragraphs that have no DOM node.
     this.paragraphRecords = [];
+    // DOM window state (Phase 2). domStart and domEnd are inclusive indices into paragraphRecords.
+    // In Phase 1 mode (all divs in DOM) domStart = 0, domEnd = paragraphRecords.length - 1.
+    // domEnd = -1 signals "no records loaded yet" (initial state before first setValue).
+    this.domStart = 0;
+    this.domEnd = -1;
+    // Set to non-null in Phase 2b when spacers are inserted into editorEl.
+    // Used by getWindowDiv() to compute the correct child index (offset by +1 for rightSpacer).
+    this.rightSpacer = null;
+    this.leftSpacer = null;
     // Source of truth for frozen div content, keyed by div identity (not DOM position).
     // Set by freezeDiv() / setFrozenContent(); read by getSrcLine() and getViewLen().
     // Identity-keyed so that reads remain correct even after other divs are inserted or
@@ -3215,6 +3263,8 @@ var ParagraphVirtualizer = class {
     this.frozenViewLen = /* @__PURE__ */ new WeakMap();
     this.viewActive = true;
     this.paragraphRecords.length = 0;
+    this.domStart = 0;
+    this.domEnd = -1;
   }
   // Registers all current editorEl children with the observer (call after setValue).
   // If tate-scroll-restoring is active, content-visibility:visible is in effect for all
@@ -3262,7 +3312,7 @@ var ParagraphVirtualizer = class {
     this.observer.unobserve(div);
     this.observer.observe(div);
   }
-  // Initializes paragraphRecords from content lines.
+  // Initializes paragraphRecords from content lines and resets the window to span all records.
   // Call from EditorElement.setValue() and the patchParagraphs fallback after replaceChildren.
   // width is 0 for all entries (updated to the measured value when the div is first frozen).
   initRecords(lines) {
@@ -3274,6 +3324,8 @@ var ParagraphVirtualizer = class {
         width: 0
       });
     }
+    this.domStart = 0;
+    this.domEnd = this.paragraphRecords.length - 1;
   }
   // Mirrors the DOM splice performed by patchParagraphs, keeping paragraphRecords in sync.
   // lo: first changed index; deleteCount: number of old records to remove;
@@ -3287,16 +3339,31 @@ var ParagraphVirtualizer = class {
     this.paragraphRecords.splice(lo, deleteCount, ...newRecords);
   }
   // Returns the Aozora source for the paragraph at index i. O(1).
-  // Use in getValue() and extractHybridText() where the caller already has the index.
   getSrcByIndex(i) {
     var _a, _b;
     return (_b = (_a = this.paragraphRecords[i]) == null ? void 0 : _a.src) != null ? _b : "";
   }
   // Returns the visible character count for the paragraph at index i. O(1).
-  // Use in getVisibleOffset() and setVisibleOffset() where the caller already has the index.
   getViewLenByIndex(i) {
     var _a, _b;
     return (_b = (_a = this.paragraphRecords[i]) == null ? void 0 : _a.viewLen) != null ? _b : 0;
+  }
+  // Returns true if paragraph i is currently in the DOM window.
+  isInWindow(i) {
+    return i >= this.domStart && i <= this.domEnd;
+  }
+  // Returns the DOM div for paragraph i, or null if i is outside the DOM window.
+  // spacerOffset is 1 when rightSpacer occupies children[0]; 0 otherwise.
+  getWindowDiv(i) {
+    var _a;
+    if (!this.isInWindow(i)) return null;
+    const spacerOffset = this.rightSpacer ? 1 : 0;
+    return (_a = this.editorEl.children[i - this.domStart + spacerOffset]) != null ? _a : null;
+  }
+  // Ensures paragraph i is in the DOM window. No-op in Phase 2a (all divs are in-window).
+  // Phase 2c replaces this with the actual window-shift logic.
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  ensureInWindow(_i) {
   }
   // Returns true if div is currently frozen (has the tate-frozen class).
   isFrozen(div) {
