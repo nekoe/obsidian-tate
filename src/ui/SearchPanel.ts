@@ -3,28 +3,21 @@ import type { EditorElement } from './EditorElement';
 import type { ParagraphVirtualizer } from './ParagraphVirtualizer';
 import { isInsideRtNode } from './domHelpers';
 import { buildSegmentMap, viewToSrc, type Segment } from './SegmentMap';
-import { parseInlineToHtml } from './AozoraParser';
+import { parseInlineToHtml, serializeNode } from './AozoraParser';
 
 // ---- Match entry types ----
 
-interface ThawedMatchEntry {
-    kind: 'thawed';
-    div: HTMLElement;
-    localStart: number; // visible offset within this paragraph
+// A match entry may refer to an in-window div (div != null, range != null) or an off-window
+// paragraph (div/range null). Off-window entries are resolved lazily via ensureInWindow() when
+// the user navigates to them.
+interface MatchEntry {
+    paragraphIndex: number;
+    div: HTMLElement | null;  // null = off-window (no DOM node)
+    localStart: number;       // visible offset within this paragraph
     localEnd: number;
-    range: Range;
-    viewStart: number; // visible-text offset of match start in combined text
+    range: Range | null;      // null until div is in-window
+    viewStart: number;        // visible-text offset of match start in combined text
 }
-
-interface FrozenMatchEntry {
-    kind: 'frozen';
-    div: HTMLElement;
-    localStart: number; // visible offset within this paragraph
-    localEnd: number;
-    viewStart: number; // visible-text offset in combined text
-}
-
-type MatchEntry = ThawedMatchEntry | FrozenMatchEntry;
 
 // ---- Text extraction helpers ----
 
@@ -35,11 +28,11 @@ interface LocalSegment {
 }
 
 interface ParagraphTextData {
-    div: HTMLElement;
-    frozen: boolean;
-    globalStart: number; // where this paragraph's visible text starts in the combined string
-    text: string;        // visible text for this paragraph
-    segments: LocalSegment[]; // populated for thawed divs; empty for frozen
+    paragraphIndex: number;
+    div: HTMLElement | null;  // null for off-window paragraphs
+    globalStart: number;      // where this paragraph's visible text starts in the combined string
+    text: string;             // visible text for this paragraph
+    segments: LocalSegment[]; // populated for in-window divs; empty for off-window
 }
 
 // Maps a visible character offset (excluding U+200B) to the raw text node offset.
@@ -71,7 +64,8 @@ function extractSegmentsFromDiv(div: HTMLElement, editorEl: HTMLElement): LocalS
     return segments;
 }
 
-// Frozen divs contribute their visible text via getSrcLine (frozenSrc WeakMap) without thawing.
+// Iterates paragraphRecords by index: in-window divs are read from DOM text nodes,
+// off-window paragraphs are read from paragraphRecords[i].src via buildParagraphVisibleText.
 function extractHybridText(
     editorEl: HTMLDivElement,
     virtualizer: ParagraphVirtualizer,
@@ -79,17 +73,17 @@ function extractHybridText(
     const paragraphs: ParagraphTextData[] = [];
     let globalOffset = 0;
 
-    for (const child of Array.from(editorEl.children)) {
-        if (!(child instanceof HTMLElement)) continue;
-        if (virtualizer.isFrozen(child)) {
-            const src = virtualizer.getSrcLine(child);
+    for (let i = 0; i < virtualizer.paragraphRecords.length; i++) {
+        const div = virtualizer.getWindowDiv(i);
+        if (!div) {
+            const src = virtualizer.paragraphRecords[i].src;
             const text = virtualizer.buildParagraphVisibleText(src);
-            paragraphs.push({ div: child, frozen: true, globalStart: globalOffset, text, segments: [] });
+            paragraphs.push({ paragraphIndex: i, div: null, globalStart: globalOffset, text, segments: [] });
             globalOffset += text.length;
         } else {
-            const segments = extractSegmentsFromDiv(child, editorEl);
+            const segments = extractSegmentsFromDiv(div, editorEl);
             const text = segments.map(s => (s.node.textContent ?? '').replace(/​/g, '')).join('');
-            paragraphs.push({ div: child, frozen: false, globalStart: globalOffset, text, segments });
+            paragraphs.push({ paragraphIndex: i, div, globalStart: globalOffset, text, segments });
             globalOffset += text.length;
         }
     }
@@ -265,8 +259,6 @@ export class SearchPanel {
         this.editorFocused = false;
         this.matchEntries = [];
         this.currentIndex = -1;
-        // Suppress freeze while the panel is open so DOM ranges remain valid.
-        this.virtualizer.suppressFreeze(true);
         this.buildPanel(expandReplace);
         this.app.keymap.pushScope(this.searchScope);
         this.inputEl?.focus();
@@ -277,8 +269,6 @@ export class SearchPanel {
 
         this.app.keymap.popScope(this.searchScope);
         this.clearHighlights();
-        // Re-enable freezing after closing (IntersectionObserver will gradually freeze off-screen divs).
-        this.virtualizer.suppressFreeze(false);
 
         this.panelEl?.remove();
         this.panelEl = null;
@@ -468,17 +458,17 @@ export class SearchPanel {
     private replaceCurrentMatch(): void {
         if (this.currentIndex < 0 || this.currentIndex >= this.matchEntries.length) return;
         const entry = this.matchEntries[this.currentIndex];
-        // setFocus() guarantees thawed after any navigation; guard just in case.
-        if (entry.kind !== 'thawed') return;
+        // setFocus() guarantees div is in-window after navigation; guard just in case.
+        if (!entry.div) return;
 
         const replacement = this.replaceInputEl?.value ?? '';
-        const srcLine = this.virtualizer.getSrcLine(entry.div);
+        const srcLine = Array.from(entry.div.childNodes)
+            .map(n => serializeNode(n, this.editorElementRef.el))
+            .join('');
         const segs = buildSegmentMap(srcLine);
         const newSrc = buildReplacedSrc(srcLine, segs, entry.localStart, entry.localEnd, replacement);
 
-        this.virtualizer.unfrostDiv(entry.div);
         entry.div.replaceChildren(sanitizeHTMLToDom(parseInlineToHtml(newSrc) || '<br>'));
-        this.virtualizer.observeOne(entry.div);
 
         this.commitCallback?.();
 
@@ -497,30 +487,36 @@ export class SearchPanel {
         if (this.matchEntries.length === 0) return;
         const replacement = this.replaceInputEl?.value ?? '';
 
-        // Group matches by div so multiple matches in the same paragraph are applied together.
-        const byDiv = new Map<HTMLElement, MatchEntry[]>();
+        // Group matches by paragraph index so multiple matches in one paragraph are applied together.
+        const byParagraph = new Map<number, MatchEntry[]>();
         for (const entry of this.matchEntries) {
-            const arr = byDiv.get(entry.div) ?? [];
+            const arr = byParagraph.get(entry.paragraphIndex) ?? [];
             arr.push(entry);
-            byDiv.set(entry.div, arr);
+            byParagraph.set(entry.paragraphIndex, arr);
         }
 
         // Apply replacements right-to-left within each paragraph so earlier view offsets
         // remain valid after each successive replacement shifts the source string.
-        for (const [div, entries] of byDiv) {
+        for (const [, entries] of byParagraph) {
             entries.sort((a, b) => b.localStart - a.localStart);
-            let srcLine = this.virtualizer.getSrcLine(div);
+            // Ensure the paragraph div is in the DOM window before modifying.
+            const firstEntry = entries[0];
+            this.virtualizer.ensureInWindow(firstEntry.paragraphIndex);
+            const div = this.virtualizer.getWindowDiv(firstEntry.paragraphIndex);
+            if (!div) continue;
+            // Update the entry reference so replaceCurrentMatch callers see the resolved div.
+            for (const e of entries) e.div = div;
+            let srcLine = Array.from(div.childNodes)
+                .map(n => serializeNode(n, this.editorElementRef.el))
+                .join('');
             for (const entry of entries) {
                 const segs = buildSegmentMap(srcLine);
                 srcLine = buildReplacedSrc(srcLine, segs, entry.localStart, entry.localEnd, replacement);
             }
-            this.virtualizer.unfrostDiv(div);
             div.replaceChildren(sanitizeHTMLToDom(parseInlineToHtml(srcLine) || '<br>'));
-            this.virtualizer.observeOne(div);
         }
 
-        // Sync paragraphRecords with the updated DOM, then commit all changes as one transaction.
-        this.virtualizer.initRecords(this.editorElementRef.getValue().split('\n'));
+        // Commit all changes as one transaction (syncWindowSrcs is called inside commitToCm6).
         this.commitCallback?.();
         this.runSearch(false);
         if (this.matchEntries.length > 0) {
@@ -541,8 +537,7 @@ export class SearchPanel {
             return;
         }
 
-        // Build combined visible text without thawing frozen divs.
-        // Frozen divs contribute their visible text via buildParagraphVisibleText(data-src).
+        // Build combined visible text. In-window divs are read from DOM; off-window from records.
         const editorEl = this.editorElementRef.el;
         const { text, paragraphs } = extractHybridText(editorEl, this.virtualizer);
         const re = new RegExp(escapeRegex(query), 'gi');
@@ -561,8 +556,7 @@ export class SearchPanel {
             }
             if (!para) { if (m[0].length === 0) re.lastIndex++; continue; }
 
-            // Skip matches that span paragraph boundaries — they cannot be represented
-            // as a single Range (cross-paragraph Ranges are impractical with frozen divs).
+            // Skip matches that span paragraph boundaries (cross-paragraph Ranges are not supported).
             if (matchEnd > para.globalStart + para.text.length) {
                 if (m[0].length === 0) re.lastIndex++;
                 continue;
@@ -571,13 +565,13 @@ export class SearchPanel {
             const localStart = matchStart - para.globalStart;
             const localEnd = matchEnd - para.globalStart;
 
-            if (para.frozen) {
-                // Frozen div: store div + local offsets; thaw on demand when navigated to.
-                this.matchEntries.push({ kind: 'frozen', div: para.div, localStart, localEnd, viewStart: matchStart });
+            if (!para.div) {
+                // Off-window: no DOM node yet; range created lazily on navigation.
+                this.matchEntries.push({ paragraphIndex: para.paragraphIndex, div: null, localStart, localEnd, range: null, viewStart: matchStart });
             } else {
                 const range = createRangeInParagraph(para.segments, localStart, localEnd);
                 if (range) {
-                    this.matchEntries.push({ kind: 'thawed', div: para.div, localStart, localEnd, range, viewStart: matchStart });
+                    this.matchEntries.push({ paragraphIndex: para.paragraphIndex, div: para.div, localStart, localEnd, range, viewStart: matchStart });
                 }
             }
 
@@ -629,25 +623,21 @@ export class SearchPanel {
         // so the focus highlight is shown again and close() will restore the cursor.
         this.editorFocused = false;
 
-        // Resolve the range: thaw frozen div on demand when the user navigates to it.
+        // Resolve range: bring off-window paragraph into the DOM window if needed.
         let range: Range;
-        if (entry.kind === 'thawed') {
+        if (entry.range) {
             range = entry.range;
         } else {
-            this.virtualizer.thawDiv(entry.div);
-            const segments = extractSegmentsFromDiv(entry.div, this.editorElementRef.el);
+            this.virtualizer.ensureInWindow(entry.paragraphIndex);
+            const div = this.virtualizer.getWindowDiv(entry.paragraphIndex);
+            if (!div) return;
+            const segments = extractSegmentsFromDiv(div, this.editorElementRef.el);
             const r = createRangeInParagraph(segments, entry.localStart, entry.localEnd);
             if (!r) return;
             range = r;
-            // Upgrade entry to thawed so subsequent navigation and highlighting use the live Range.
-            this.matchEntries[index] = {
-                kind: 'thawed',
-                div: entry.div,
-                localStart: entry.localStart,
-                localEnd: entry.localEnd,
-                range,
-                viewStart: entry.viewStart,
-            };
+            // Cache the resolved div and range so subsequent navigation reuses them.
+            entry.div   = div;
+            entry.range = range;
             this.applyFocusHighlight();
         }
 
@@ -668,29 +658,6 @@ export class SearchPanel {
         this.scrollRangeIntoView(range);
     }
 
-    // Upgrades FrozenMatchEntries whose divs have since been thawed by the IntersectionObserver.
-    // Called in the scrollRangeIntoView rAF callback so hits on divs that entered the viewport
-    // after navigation are included in the next highlight paint.
-    private updateFrozenToThawedEntries(): void {
-        for (let i = 0; i < this.matchEntries.length; i++) {
-            const entry = this.matchEntries[i];
-            if (entry.kind !== 'frozen') continue;
-            if (this.virtualizer.isFrozen(entry.div)) continue;
-            const segments = extractSegmentsFromDiv(entry.div, this.editorElementRef.el);
-            const range = createRangeInParagraph(segments, entry.localStart, entry.localEnd);
-            if (range) {
-                this.matchEntries[i] = {
-                    kind: 'thawed',
-                    div: entry.div,
-                    localStart: entry.localStart,
-                    localEnd: entry.localEnd,
-                    range,
-                    viewStart: entry.viewStart,
-                };
-            }
-        }
-    }
-
     private scrollRangeIntoView(range: Range): void {
         this.editorElementRef.scrollToRange(range);
         // After a compositor-thread scroll, content-visibility:auto paragraphs that just
@@ -703,9 +670,6 @@ export class SearchPanel {
         // next rAF, so it is never visible to the user.
         requestAnimationFrame(() => {
             this.editorElementRef.el.classList.add('tate-search-repaint');
-            // Upgrade any entries whose divs were thawed by the IntersectionObserver
-            // during the scroll (e.g. divs adjacent to the navigated-to paragraph).
-            this.updateFrozenToThawedEntries();
             this.applyHitHighlights();
             this.applyFocusHighlight();
             requestAnimationFrame(() => {
@@ -716,12 +680,12 @@ export class SearchPanel {
 
     private applyHitHighlights(): void {
         if (typeof CSS === 'undefined' || !CSS.highlights) return;
-        // Only thawed entries have live Ranges; frozen entries are off-screen and unhighlighted.
-        const thawedRanges = this.matchEntries
-            .filter((e): e is ThawedMatchEntry => e.kind === 'thawed')
+        // Only in-window entries have live Ranges; off-window entries are skipped.
+        const liveRanges = this.matchEntries
+            .filter((e): e is MatchEntry & { range: Range } => e.range !== null)
             .map(e => e.range);
-        if (thawedRanges.length > 0) {
-            CSS.highlights.set('tate-search-hit', new Highlight(...thawedRanges));
+        if (liveRanges.length > 0) {
+            CSS.highlights.set('tate-search-hit', new Highlight(...liveRanges));
         } else {
             CSS.highlights.delete('tate-search-hit');
         }
@@ -731,7 +695,7 @@ export class SearchPanel {
         if (typeof CSS === 'undefined' || !CSS.highlights) return;
         if (this.editorFocused) return;
         const entry = this.matchEntries[this.currentIndex];
-        if (entry && entry.kind === 'thawed') {
+        if (entry?.range) {
             const h = new Highlight(entry.range);
             // Must be higher than tate-search-hit (default 0) so the focused style wins
             // when the same range is present in both highlight sets.

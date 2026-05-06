@@ -174,7 +174,7 @@ export class CursorAnchorManager {
         if (!parentDiv) return null;
         let next = parentDiv.nextSibling;
         while (next) {
-            if (next instanceof HTMLElement) this.virtualizer?.thawDiv(next);
+            if (!(next instanceof HTMLElement)) { next = next.nextSibling; continue; }
             const walker = document.createTreeWalker(next, NodeFilter.SHOW_TEXT);
             let node = walker.nextNode() as Text | null;
             while (node) {
@@ -207,7 +207,7 @@ export class CursorAnchorManager {
         if (!parentDiv) return null;
         let prevDiv = parentDiv.previousSibling;
         while (prevDiv) {
-            if (prevDiv instanceof HTMLElement) this.virtualizer?.thawDiv(prevDiv);
+            if (!(prevDiv instanceof HTMLElement)) { prevDiv = prevDiv.previousSibling; continue; }
             const walker = document.createTreeWalker(prevDiv, NodeFilter.SHOW_TEXT);
             let lastText: Text | null = null;
             let node = walker.nextNode() as Text | null;

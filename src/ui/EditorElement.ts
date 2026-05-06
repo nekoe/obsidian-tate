@@ -43,11 +43,8 @@ export class EditorElement {
             const div = virt.getWindowDiv(i);
             let src: string;
             if (!div) {
-                // Off-window: read from records (Phase 2c+; unreachable in Phase 2a).
+                // Off-window: read from records.
                 src = virt.paragraphRecords[i].src;
-            } else if (virt.isFrozen(div)) {
-                // In-window frozen: read from frozenSrc WeakMap (identity-keyed, always correct).
-                src = virt.getSrcLine(div);
             } else {
                 src = Array.from(div.childNodes).map(n => serializeNode(n, this.el)).join('');
             }
@@ -89,7 +86,6 @@ export class EditorElement {
             this.replaceEditorContent(sanitizeHTMLToDom(parseToHtml(content)));
             this.virtualizer?.initRecords(content.split('\n'));
         }
-        this.virtualizer?.observeAll();
     }
 
     // ---- Inline expand/collapse (call from selectionchange) ----
@@ -236,15 +232,15 @@ export class EditorElement {
     // Multi-line paste creates one <div> per line (matching Enter-key paragraph behavior).
     // Returns newly created off-screen divs that need a proactive layout cache refresh.
     // Single-line paste into a visible cursor div returns [] (cache updates naturally on-screen).
-    handlePaste(e: ClipboardEvent): HTMLDivElement[] {
+    handlePaste(e: ClipboardEvent): void {
         e.preventDefault();
         // Normalize CRLF/CR to LF before splitting; otherwise \r remains at each line end,
         // and the HTML parser inside sanitizeHTMLToDom converts it to \n, doubling newlines.
         const text = (e.clipboardData?.getData('text/plain') ?? '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-        if (!text) return [];
+        if (!text) return;
 
         const sel = window.getSelection();
-        if (!sel || sel.rangeCount === 0) return [];
+        if (!sel || sel.rangeCount === 0) return;
 
         const range = sel.getRangeAt(0);
         range.deleteContents();
@@ -279,18 +275,15 @@ export class EditorElement {
         // When the cursor is still at the editor root level (no adjacent empty div to adopt),
         // route single-line paste through insertParsedParagraphs, which has a dedicated
         // handler for the this.el case and creates a proper <div> instead of a bare text node.
-        let newDivs: HTMLDivElement[];
         if (lines.length === 1 && range.startContainer !== this.el) {
             this.insertParsedInline(range, lines[0]);
-            newDivs = []; // cursor div is always visible; cache updates naturally
         } else {
-            newDivs = this.insertParsedParagraphs(range, lines);
+            this.insertParsedParagraphs(range, lines);
         }
 
         // beforeinput does not fire for paste, so set inBurst manually
         this.inlineEditor.onBeforeInput();
         // view.ts calls commitToCm6() after paste
-        return newDivs;
     }
 
     // Inserts parsed Aozora inline elements at the range position (single-line paste).
@@ -312,26 +305,18 @@ export class EditorElement {
     // Splits the current paragraph at the cursor: first line appends to it,
     // each remaining line becomes a new <div>, and after-cursor content moves to the last.
     // Returns newly created <div>s that may be off-screen and need a layout cache refresh.
-    private insertParsedParagraphs(range: Range, lines: string[]): HTMLDivElement[] {
+    private insertParsedParagraphs(range: Range, lines: string[]): void {
         const sel = window.getSelection()!;
         const paragraphDiv = this.findParagraphDiv(range.startContainer);
 
         // Cursor is directly on the editor element (between paragraph divs, not inside one).
-        // This happens after deleteContents() removes whole-paragraph divs and collapses
-        // the range to an inter-div offset on the editor root. Insert new <div>s at that
-        // position instead of falling through to the <br> fallback, which would create
-        // bare text nodes and <br>s directly inside the editor and corrupt patchParagraphs.
         if (!this.inlineEditor.isExpanded() && range.startContainer === this.el) {
-            // Fall back to leftSpacer when the cursor offset points past all paragraph nodes,
-            // so insertBefore places the new divs before leftSpacer, not after it.
             const refNode = this.el.childNodes[range.startOffset] ?? this.virtualizer?.leftSpacer ?? null;
-            const newDivs: HTMLDivElement[] = [];
             let lastDiv: HTMLDivElement | null = null;
             for (const line of lines) {
                 const div = document.createElement('div');
                 div.replaceChildren(sanitizeHTMLToDom(parseInlineToHtml(line) || '<br>'));
                 this.el.insertBefore(div, refNode);
-                newDivs.push(div);
                 lastDiv = div;
             }
             if (lastDiv) {
@@ -341,7 +326,7 @@ export class EditorElement {
                 sel.removeAllRanges();
                 sel.addRange(r);
             }
-            return newDivs;
+            return;
         }
 
         if (!paragraphDiv || this.inlineEditor.isExpanded()) {
@@ -365,7 +350,7 @@ export class EditorElement {
             }
             sel.removeAllRanges();
             sel.addRange(range);
-            return []; // same div, always visible; no cache refresh needed
+            return;
         }
 
         // Extract content from cursor to end of paragraph
@@ -395,7 +380,6 @@ export class EditorElement {
         // Create a new <div> for each remaining line
         let insertAfter: Element = paragraphDiv;
         let lastPastedNode: Node | null = null;
-        const newDivs: HTMLDivElement[] = [];
 
         for (let i = 1; i < lines.length; i++) {
             const div = document.createElement('div');
@@ -410,10 +394,8 @@ export class EditorElement {
             }
 
             ensureBrPlaceholder(div);
-
             insertAfter.after(div);
             insertAfter = div;
-            newDivs.push(div); // these N-1 divs may be off-screen
         }
 
         // Position cursor at end of pasted content (before the after-cursor content)
@@ -426,7 +408,6 @@ export class EditorElement {
         newRange.collapse(true);
         sel.removeAllRanges();
         sel.addRange(newRange);
-        return newDivs;
     }
 
     // Returns the direct <div> child of this.el that contains node, or null.
@@ -626,7 +607,6 @@ export class EditorElement {
         if (!this.hasCleanDivStructure(prevLines.length)) {
             this.replaceEditorContent(sanitizeHTMLToDom(parseToHtml(nextContent)));
             this.virtualizer?.initRecords(nextLines);
-            this.virtualizer?.observeAll();
             return null;
         }
 
@@ -663,11 +643,8 @@ export class EditorElement {
         const changedDivs: HTMLDivElement[] = [];
         for (let i = lo; i < hiNext; i++) {
             const div = el.children[this.paragraphChildIndex(i)] as HTMLDivElement;
-            // Strip frozen markers before replacing children (avoids a stale data-src after update).
-            this.virtualizer?.unfrostDiv(div);
             const html = parseInlineToHtml(nextLines[i]) || '<br>';
             div.replaceChildren(sanitizeHTMLToDom(html));
-            this.virtualizer?.observeOne(div);
             changedDivs.push(div);
         }
 
@@ -804,10 +781,8 @@ export class EditorElement {
                 const div = virt.getWindowDiv(i);
                 if (div === cursorDiv) break;
                 if (!div) {
-                    // Off-window: use record's viewLen (Phase 2c+; unreachable in Phase 2a).
+                    // Off-window: use record's viewLen.
                     count += virt.paragraphRecords[i].viewLen;
-                } else if (virt.isFrozen(div)) {
-                    count += virt.getViewLen(div); // frozenViewLen WeakMap (O(1))
                 } else {
                     count += computeDivViewLen(div, this.el);
                 }
@@ -816,14 +791,12 @@ export class EditorElement {
             // Fallback: no records loaded yet; walk DOM directly.
             for (const child of Array.from(this.el.children) as HTMLElement[]) {
                 if (child === cursorDiv) break;
-                count += virt?.isFrozen(child)
-                    ? (virt.getViewLen(child))
-                    : computeDivViewLen(child, this.el);
+                count += computeDivViewLen(child, this.el);
             }
         }
 
         // If the cursor is not inside any child div (e.g. cursor on el itself), return 0.
-        if (!cursorDiv || virt?.isFrozen(cursorDiv)) return count;
+        if (!cursorDiv) return count;
 
         // Walk text nodes inside the cursor div to find the exact offset.
         const walker = document.createTreeWalker(cursorDiv, NodeFilter.SHOW_TEXT);
@@ -872,19 +845,7 @@ export class EditorElement {
                 continue;
             }
 
-            if (virt?.isFrozen(child)) {
-                const viewLen = virt.getViewLen(child);
-                if (remaining <= viewLen) {
-                    // Offset falls inside this frozen div — thaw it first, then retry once.
-                    virt.thawDiv(child);
-                    if (!virt.isFrozen(child)) this.setVisibleOffset(offset);
-                    return;
-                }
-                remaining -= viewLen;
-                continue;
-            }
-
-            // Live div: walk its text nodes.
+            // Walk text nodes of the in-window div.
             const walker = document.createTreeWalker(child, NodeFilter.SHOW_TEXT);
             let node = walker.nextNode() as Text | null;
             while (node) {

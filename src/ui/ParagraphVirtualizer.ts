@@ -1,16 +1,10 @@
 import { sanitizeHTMLToDom } from 'obsidian';
 import { buildSegmentMap } from './SegmentMap';
-import { parseInlineToHtml, serializeNode } from './AozoraParser';
-import { computeDivViewLen } from './domHelpers';
+import { parseInlineToHtml } from './AozoraParser';
 
-// Keep export for test helpers (tests use FROZEN_CLASS to create frozen divs directly).
-export const FROZEN_CLASS = 'tate-frozen';
 // CSS class applied to both spacer divs so DOM walkers can skip them.
 export const SPACER_CLASS = 'tate-spacer';
-const FREEZE_DELAY_MS = 50;
 // Estimated pixel width for paragraphs that have never entered the viewport.
-// Matches the content-visibility:auto intrinsic fallback used in Phase 1 (44px).
-// Acceptable inaccuracy: corrects on first viewport entry; adjustable later.
 const UNRENDERED_WIDTH_PX = 44;
 
 export interface ParagraphRecord {
@@ -21,88 +15,46 @@ export interface ParagraphRecord {
 
 // Manages DOM virtualization.
 //
-// Phase 1 (current): off-screen paragraph divs are replaced with lightweight frozen
-// placeholders (<div class="tate-frozen">). frozenSrc / frozenViewLen WeakMaps (keyed by
-// div identity) are the source of truth for all frozen-div reads. paragraphRecords[]
-// mirrors paragraph content indexed by DOM position and is used by the Phase 2 read paths.
+// A sliding DOM window [domStart, domEnd] is kept in the DOM. Off-window paragraphs have no
+// DOM node; getValue() / getVisibleOffset() read from paragraphRecords[]. Two spacer divs
+// (rightSpacer, leftSpacer) compensate for the missing width so scrollWidth stays constant.
 //
-// Phase 2 (in progress): only a sliding DOM window [domStart, domEnd] is kept in the DOM.
-// Off-window paragraphs have no DOM node; getValue() / getVisibleOffset() read from
-// paragraphRecords[]. Two spacer divs (rightSpacer, leftSpacer) compensate for the missing
-// width so scrollWidth stays constant.
-//
-// Read path summary:
-//   in-window, not frozen → serializeNode / computeDivViewLen (DOM)
-//   in-window, frozen     → frozenSrc / frozenViewLen WeakMaps (Phase 1 compat)
-//   off-window            → paragraphRecords[i].src / .viewLen (Phase 2+)
+// Read path: in-window → serializeNode / computeDivViewLen (DOM)
+//            off-window → paragraphRecords[i].src / .viewLen
 export class ParagraphVirtualizer {
-    private observer: IntersectionObserver | null = null;
-    private freezeTimers = new Map<HTMLElement, ReturnType<typeof setTimeout>>();
-    // Pixel widths captured in onIntersection (no layout flush needed) and applied as
-    // style.width when freezing, so the scroll container does not change width when a
-    // div's real content is removed.
-    // WeakMap: deleted div elements are GC-eligible even if not explicitly removed here
-    // (e.g. after patchParagraphs replaces the DOM without calling unfrostDiv).
-    private lastKnownWidths = new WeakMap<HTMLElement, number>();
-    // Divs that have entered the viewport at least once (rendered by the browser).
-    // Only seen divs are eligible for freezing: a never-seen div has no accurate width
-    // measurement (content-visibility:auto returns the 44px fallback for such divs),
-    // so freezing it would produce the wrong style.width and cause a layout shift on thaw.
-    // WeakSet: same GC rationale as lastKnownWidths.
-    private seenDivs = new WeakSet<HTMLElement>();
-    private freezeSuppressed = false;
-    // Set to false while the tate view is not the active leaf. Prevents freezing of
-    // viewport-visible divs that receive isIntersecting:false callbacks when the tab
-    // switches away — freezing those divs produces a style.width that may not match
-    // the natural content width, causing a scroll-position shift on re-activation.
-    private viewActive = true;
-
-    // Per-paragraph data store. Indexed 1:1 with paragraphs (not DOM children).
-    // Maintained by initRecords() / spliceRecords() / freezeDiv().
-    // Phase 2 read paths use this for off-window paragraphs that have no DOM node.
+    // Per-paragraph data store indexed 1:1 with paragraphs (not DOM children).
+    // Maintained by initRecords() / spliceRecords() / syncWindowSrcs().
     readonly paragraphRecords: ParagraphRecord[] = [];
 
-    // DOM window state (Phase 2). domStart and domEnd are inclusive indices into paragraphRecords.
-    // In Phase 1 mode (all divs in DOM) domStart = 0, domEnd = paragraphRecords.length - 1.
+    // DOM window state. domStart and domEnd are inclusive indices into paragraphRecords.
     // domEnd = -1 signals "no records loaded yet" (initial state before first setValue).
     domStart = 0;
     domEnd   = -1;
 
-    // Set to non-null in Phase 2b when spacers are inserted into editorEl.
-    // Used by getWindowDiv() to compute the correct child index (offset by +1 for rightSpacer).
+    // Spacer divs inserted at the right (first child) and left (last child) of editorEl.
     rightSpacer: HTMLElement | null = null;
     leftSpacer:  HTMLElement | null = null;
 
     // Accumulated pixel widths of paragraphs evicted to the right and left spacers.
-    // Maintained by expandRight/Left and shrinkRight/Left (Phase 2c+).
     private rightSpacerWidth = 0;
     private leftSpacerWidth  = 0;
 
-    // Dedicated IntersectionObserver that watches only the two boundary divs of the window.
-    // Separate from the freeze/thaw observer so boundary detection is not conflated with freeze logic.
+    // Watches the two boundary divs of the window; expands/shrinks the window on intersection.
     private windowObserver: IntersectionObserver | null = null;
 
     // True while a drag selection is in progress (mousedown → mouseup).
-    // Prevents shrinking the window when the anchor/focus nodes are in the edge div.
     private isDragging = false;
-
-    // Source of truth for frozen div content, keyed by div identity (not DOM position).
-    // Set by freezeDiv() / setFrozenContent(); read by getSrcLine() and getViewLen().
-    // Identity-keyed so that reads remain correct even after other divs are inserted or
-    // removed (DOM positions shift, but a WeakMap entry stays with its div element).
-    private frozenSrc = new WeakMap<HTMLElement, string>();
-    private frozenViewLen = new WeakMap<HTMLElement, number>();
 
     constructor(
         private readonly editorEl: HTMLElement,
         private readonly scrollArea: HTMLElement,
     ) {}
 
-    // Starts IntersectionObservers, inserts spacer divs, and begins observing all children.
+    // Starts the window boundary observer and inserts spacer divs.
     attach(): void {
-        if (this.observer) return;
-        this.observer = new IntersectionObserver(
-            (entries) => this.onIntersection(entries),
+        if (this.windowObserver) return;
+        this.windowObserver = new IntersectionObserver(
+            (entries) => this.onWindowBoundaryIntersection(entries),
             {
                 root: this.scrollArea,
                 // 440px margin on each side covers ~10 paragraphs (44px each) outside the viewport.
@@ -110,25 +62,12 @@ export class ParagraphVirtualizer {
                 threshold: 0,
             },
         );
-        this.windowObserver = new IntersectionObserver(
-            (entries) => this.onWindowBoundaryIntersection(entries),
-            {
-                root: this.scrollArea,
-                // Same margin as the freeze/thaw observer: expand the window before divs
-                // reach the viewport edge so there is no visible gap during fast scrolling.
-                rootMargin: '0px 440px 0px 440px',
-                threshold: 0,
-            },
-        );
         this.initSpacers();
-        this.observeAll();
-        // Register drag-selection guards to prevent evicting divs that contain an active selection.
         this.editorEl.addEventListener('mousedown', this.onMouseDown);
         document.addEventListener('mouseup', this.onMouseUp);
     }
 
-    // Inserts rightSpacer (first child) and leftSpacer (last child) into editorEl.
-    // Both start at width 0 (no off-window paragraphs in Phase 2a/2b; Phase 2c sets real widths).
+    // Inserts rightSpacer and leftSpacer into editorEl.
     private initSpacers(): void {
         if (this.rightSpacer) return; // already initialised
         const right = document.createElement('div');
@@ -145,26 +84,15 @@ export class ParagraphVirtualizer {
         this.leftSpacer  = left;
     }
 
-    // Stops observers, removes spacers, and cancels all pending freeze timers.
+    // Stops observer, removes spacers.
     detach(): void {
-        this.observer?.disconnect();
-        this.observer = null;
         this.windowObserver?.disconnect();
         this.windowObserver = null;
-        for (const timer of this.freezeTimers.values()) clearTimeout(timer);
-        this.freezeTimers.clear();
-        // WeakMap/WeakSet have no .clear() — reassign to drop all references.
-        this.lastKnownWidths = new WeakMap();
-        this.seenDivs = new WeakSet();
-        this.frozenSrc = new WeakMap();
-        this.frozenViewLen = new WeakMap();
-        this.viewActive = true;
         this.paragraphRecords.length = 0;
         this.domStart = 0;
         this.domEnd   = -1;
         this.rightSpacerWidth = 0;
         this.leftSpacerWidth  = 0;
-        // Remove spacers from the DOM. A future attach() will recreate them.
         this.rightSpacer?.remove();
         this.leftSpacer?.remove();
         this.rightSpacer = null;
@@ -172,60 +100,6 @@ export class ParagraphVirtualizer {
         this.isDragging = false;
         this.editorEl.removeEventListener('mousedown', this.onMouseDown);
         document.removeEventListener('mouseup', this.onMouseUp);
-    }
-
-    // Registers all current paragraph children with the observer (call after setValue).
-    // Skips spacer divs (SPACER_CLASS) because they have no content and measuring them is meaningless.
-    // If tate-scroll-restoring is active, real widths are available via getBoundingClientRect.
-    // Capturing them here marks every div as seen and stores an accurate width, making all
-    // paragraphs immediately eligible for freezing once the class is removed.
-    observeAll(): void {
-        if (!this.observer) return;
-        // Disconnect first so the observer releases all references to the previous set of divs
-        // (e.g. after setValue replaceChildren). Without this, the observer holds a strong
-        // reference to every previously-observed element, blocking GC after large deletions.
-        this.observer.disconnect();
-        const captureWidths = this.editorEl.classList.contains('tate-scroll-restoring');
-        for (const child of Array.from(this.editorEl.children)) {
-            if (child instanceof HTMLElement && child.classList.contains(SPACER_CLASS)) continue;
-            this.observer.observe(child);
-            if (captureWidths && child instanceof HTMLElement) {
-                const w = child.getBoundingClientRect().width;
-                if (w > 0) {
-                    this.seenDivs.add(child);
-                    this.lastKnownWidths.set(child, w);
-                }
-            }
-        }
-    }
-
-    // Unobserves then re-observes all paragraph children (skips spacers), forcing the
-    // IntersectionObserver to fire fresh callbacks. Call after tate-scroll-restoring is removed
-    // so divs that are now off-screen (but seenDivs-eligible) get their freeze timers scheduled.
-    reobserveAll(): void {
-        if (!this.observer) return;
-        for (const child of Array.from(this.editorEl.children)) {
-            if (child instanceof HTMLElement && child.classList.contains(SPACER_CLASS)) continue;
-            this.observer.unobserve(child);
-            this.observer.observe(child);
-        }
-    }
-
-    // Registers a single div with the observer (call after patchParagraphs inserts a new div).
-    observeOne(div: HTMLElement): void {
-        this.observer?.observe(div);
-    }
-
-    // Unobserves then re-observes a single div, forcing the IntersectionObserver to fire a
-    // fresh callback for it. Call after tate-layout-refreshing is removed for a div that was
-    // off-screen throughout the mutation, so off-screen divs get their freeze rescheduled with
-    // an accurate width (from the contain-intrinsic-block-size cache updated by Frame N).
-    // Skips divs that are no longer in the editor (removed between schedule and fire).
-    reobserveOne(div: HTMLElement): void {
-        if (!this.observer) return;
-        if (!this.editorEl.contains(div)) return;
-        this.observer.unobserve(div);
-        this.observer.observe(div);
     }
 
     // Initializes paragraphRecords from content lines and resets the window to span all records.
@@ -248,6 +122,27 @@ export class ParagraphVirtualizer {
         if (this.rightSpacer) this.rightSpacer.style.removeProperty('width');
         if (this.leftSpacer)  this.leftSpacer.style.removeProperty('width');
         this.reobserveBoundaries();
+    }
+
+    // Updates src/viewLen for all records in-place WITHOUT touching domStart, domEnd, or spacer
+    // widths. Used by commitToCm6() to keep outline data current after typing, where the DOM
+    // window has already settled and a full initRecords() reset would corrupt getWindowDiv().
+    syncWindowSrcs(lines: string[]): void {
+        const n = lines.length;
+        const cur = this.paragraphRecords;
+        // Grow or shrink the record array to match the new line count while preserving widths.
+        if (n > cur.length) {
+            for (let i = cur.length; i < n; i++) {
+                cur.push({ src: lines[i], viewLen: this.buildParagraphVisibleText(lines[i]).length, width: 0 });
+            }
+        } else if (n < cur.length) {
+            cur.splice(n);
+            this.domEnd = Math.min(this.domEnd, n - 1);
+        }
+        for (let i = 0; i < n; i++) {
+            cur[i].src     = lines[i];
+            cur[i].viewLen = this.buildParagraphVisibleText(lines[i]).length;
+        }
     }
 
     // Mirrors the DOM splice performed by patchParagraphs, keeping paragraphRecords in sync.
@@ -324,24 +219,13 @@ export class ParagraphVirtualizer {
         this.leftSpacerWidth  = 0;
         if (this.rightSpacer) this.rightSpacer.style.removeProperty('width');
         if (this.leftSpacer)  this.leftSpacer.style.removeProperty('width');
-        this.observeAll();
         this.reobserveBoundaries();
     }
 
-    // Ensures cursor paragraph and its neighbors are in the DOM window (replaces ensureThawedAtCursor).
+    // Called on selectionchange. The window mechanism (IntersectionObserver) keeps the cursor
+    // paragraph in the window proactively, so this is normally a no-op safety hook.
     ensureWindowAroundCursor(): void {
-        const sel = window.getSelection();
-        if (!sel || sel.rangeCount === 0) return;
-        let node: Node | null = sel.getRangeAt(0).startContainer;
-        while (node && node !== this.editorEl) {
-            if (node instanceof HTMLElement && node.parentElement === this.editorEl) {
-                // The div is already in the DOM (it's a direct child of editorEl), so no
-                // window expansion is needed. The frozen infrastructure below handles thawing.
-                this.ensureThawed(node, 10);
-                return;
-            }
-            node = node.parentElement;
-        }
+        // No-op: cursor paragraph is always in the window (IO expands before viewport edges).
     }
 
     // ---- Window expand / shrink helpers ----
@@ -363,8 +247,6 @@ export class ParagraphVirtualizer {
         this.rightSpacerWidth = Math.max(0, this.rightSpacerWidth - w);
         if (this.rightSpacer) this.rightSpacer.style.setProperty('width', `${this.rightSpacerWidth}px`);
         this.domStart--;
-        // Register new div with the freeze/thaw observer.
-        this.observer?.observe(div);
     }
 
     // Adds a div for paragraphRecords[domEnd+1] at the left end of the window.
@@ -380,7 +262,6 @@ export class ParagraphVirtualizer {
         this.leftSpacerWidth = Math.max(0, this.leftSpacerWidth - w);
         if (this.leftSpacer) this.leftSpacer.style.setProperty('width', `${this.leftSpacerWidth}px`);
         this.domEnd++;
-        this.observer?.observe(div);
     }
 
     // Removes the rightmost div of the window (paragraphs[domEnd]) and grows leftSpacer.
@@ -393,7 +274,6 @@ export class ParagraphVirtualizer {
         if (this.isDragging && this.selectionOverlaps(div)) return;
         const w = div.getBoundingClientRect().width || UNRENDERED_WIDTH_PX;
         this.paragraphRecords[this.domEnd].width = w;
-        this.observer?.unobserve(div);
         div.remove();
         this.leftSpacerWidth += w;
         if (this.leftSpacer) this.leftSpacer.style.setProperty('width', `${this.leftSpacerWidth}px`);
@@ -409,7 +289,6 @@ export class ParagraphVirtualizer {
         if (this.isDragging && this.selectionOverlaps(div)) return;
         const w = div.getBoundingClientRect().width || UNRENDERED_WIDTH_PX;
         this.paragraphRecords[this.domStart].width = w;
-        this.observer?.unobserve(div);
         div.remove();
         this.rightSpacerWidth += w;
         if (this.rightSpacer) this.rightSpacer.style.setProperty('width', `${this.rightSpacerWidth}px`);
@@ -474,131 +353,7 @@ export class ParagraphVirtualizer {
     private readonly onMouseDown = () => { this.isDragging = true; };
     private readonly onMouseUp   = () => { this.isDragging = false; };
 
-    // Returns true if div is currently frozen (has the tate-frozen class).
-    isFrozen(div: HTMLElement): boolean {
-        return div.classList.contains(FROZEN_CLASS);
-    }
-
-    // Sets the frozen content for a div in frozenSrc / frozenViewLen.
-    // Called by freezeDiv() internally. Also exposed for test helpers that create frozen
-    // divs directly (outside the normal freeze/thaw lifecycle).
-    setFrozenContent(div: HTMLElement, src: string, viewLen: number): void {
-        this.frozenSrc.set(div, src);
-        this.frozenViewLen.set(div, viewLen);
-    }
-
-    // Returns the Aozora source line for a div.
-    // Frozen div: reads from frozenSrc (keyed by div identity, O(1), correct after DOM shifts).
-    // Real div: serializes child nodes.
-    getSrcLine(div: HTMLElement): string {
-        if (div.classList.contains(FROZEN_CLASS)) {
-            return this.frozenSrc.get(div) ?? '';
-        }
-        return Array.from(div.childNodes)
-            .map(n => serializeNode(n, this.editorEl))
-            .join('');
-    }
-
-    // Returns the visible character count for a div.
-    // Frozen div: reads from frozenViewLen (keyed by div identity, O(1), correct after DOM shifts).
-    // Real div: walks text nodes.
-    getViewLen(div: HTMLElement): number {
-        if (div.classList.contains(FROZEN_CLASS)) {
-            return this.frozenViewLen.get(div) ?? 0;
-        }
-        return computeDivViewLen(div, this.editorEl);
-    }
-
-    // Thaws a frozen div: restores real DOM content from paragraphRecords and re-registers with observer.
-    thawDiv(div: HTMLElement): void {
-        if (!div.classList.contains(FROZEN_CLASS)) return;
-        this.cancelFreeze(div);
-        // Read src from records before removing the frozen class (getSrcLine uses the class to branch).
-        const src = this.getSrcLine(div);
-        div.classList.remove(FROZEN_CLASS);
-        // Remove the frozen width pin and any stale contain-intrinsic-block-size from a
-        // previous freeze cycle. Both operations and replaceChildren are batched into a
-        // single browser layout pass, so there is no intermediate size flash.
-        div.style.removeProperty('width');
-        div.style.removeProperty('contain-intrinsic-block-size');
-        div.replaceChildren(sanitizeHTMLToDom(parseInlineToHtml(src) || '<br>'));
-        this.observeOne(div); // re-register so future viewport exits trigger a new freeze
-    }
-
-    // Removes frozen state markers without reconstructing DOM (for patchParagraphs, which will
-    // immediately replace children itself — avoids a double replaceChildren).
-    unfrostDiv(div: HTMLElement): void {
-        if (!div.classList.contains(FROZEN_CLASS)) return;
-        this.cancelFreeze(div);
-        div.classList.remove(FROZEN_CLASS);
-        div.style.removeProperty('width');
-        div.style.removeProperty('contain-intrinsic-block-size');
-    }
-
-    // Thaws the given div and up to neighborCount divs on each side.
-    ensureThawed(div: HTMLElement, neighborCount = 10): void {
-        this.thawDiv(div);
-        let prev: Element | null = div.previousElementSibling;
-        for (let i = 0; i < neighborCount && prev; i++, prev = prev.previousElementSibling) {
-            if (prev instanceof HTMLElement) this.thawDiv(prev);
-        }
-        let next: Element | null = div.nextElementSibling;
-        for (let i = 0; i < neighborCount && next; i++, next = next.nextElementSibling) {
-            if (next instanceof HTMLElement) this.thawDiv(next);
-        }
-    }
-
-    // Thaws the paragraph containing the cursor and its neighbors. Called on selectionchange.
-    ensureThawedAtCursor(): void {
-        const sel = window.getSelection();
-        if (!sel || sel.rangeCount === 0) return;
-        let node: Node | null = sel.getRangeAt(0).startContainer;
-        while (node && node !== this.editorEl) {
-            if (node instanceof HTMLElement && node.parentElement === this.editorEl) {
-                this.ensureThawed(node, 10);
-                return;
-            }
-            node = node.parentElement;
-        }
-    }
-
-    // Toggles freeze suppression. When suppressed, no divs will be frozen.
-    // Used by SearchPanel (suppress while open, resume on close).
-    suppressFreeze(value: boolean): void {
-        this.freezeSuppressed = value;
-    }
-
-    // Called when the tate view loses focus (another leaf becomes active).
-    // Suppresses freeze and cancels pending timers so that viewport-visible divs
-    // that receive isIntersecting:false during the tab switch are not frozen with
-    // potentially inaccurate widths (inactive-tab layout may differ).
-    onViewDeactivated(): void {
-        this.viewActive = false;
-        this.cancelAllPendingFreezeTimers();
-    }
-
-    // Called when the tate view becomes the active leaf again.
-    // Re-enables freeze and cancels any stale timers that were scheduled during
-    // the inactive period so they do not fire and freeze now-visible divs.
-    onViewActivated(): void {
-        this.viewActive = true;
-        this.cancelAllPendingFreezeTimers();
-    }
-
-    // Returns true if the given div may be frozen.
-    shouldFreeze(div: HTMLElement): boolean {
-        if (this.freezeSuppressed) return false;
-        if (!this.viewActive) return false;
-        if (this.editorEl.classList.contains('tate-scroll-restoring')) return false;
-        if (div.classList.contains('tate-layout-refreshing')) return false;
-        if (!this.editorEl.contains(div)) return false; // div was removed from the DOM
-        const sel = window.getSelection();
-        if (sel && sel.rangeCount > 0 && div.contains(sel.getRangeAt(0).startContainer)) return false;
-        if (div.querySelector('.tate-editing')) return false;
-        return true;
-    }
-
-    // Computes visible text for an Aozora source line (for SearchPanel text extraction on frozen divs).
+    // Computes visible text for an Aozora source line.
     // For every segment: take viewLen visible characters starting at srcStart.
     // ruby-explicit is the only exception: it has a leading ｜ marker (+1 offset before the base text).
     buildParagraphVisibleText(src: string): string {
@@ -612,94 +367,5 @@ export class ParagraphVirtualizer {
         return result.join('');
     }
 
-    // Returns the index of div in editorEl.children, or -1 if not found.
-    // Used by freezeDiv() to sync paragraphRecords[idx] when a div is frozen (O(N) scan;
-    // acceptable because freezeDiv fires at most once per div after a 50ms timer delay).
-    private indexOfDiv(div: HTMLElement): number {
-        for (let i = 0; i < this.editorEl.children.length; i++) {
-            if (this.editorEl.children[i] === div) return i;
-        }
-        return -1;
-    }
-
-    // Cancels all pending freeze timers without touching lastKnownWidths, preserving
-    // accurate widths for the next freeze cycle. Used by onViewDeactivated/onViewActivated.
-    private cancelAllPendingFreezeTimers(): void {
-        for (const timer of this.freezeTimers.values()) clearTimeout(timer);
-        this.freezeTimers.clear();
-    }
-
-    private scheduleFreeze(div: HTMLElement): void {
-        if (div.classList.contains(FROZEN_CLASS)) return;
-        if (this.freezeTimers.has(div)) return;
-        const timer = setTimeout(() => {
-            this.freezeTimers.delete(div);
-            this.freezeDiv(div);
-        }, FREEZE_DELAY_MS);
-        this.freezeTimers.set(div, timer);
-    }
-
-    private cancelFreeze(div: HTMLElement): void {
-        const timer = this.freezeTimers.get(div);
-        if (timer !== undefined) {
-            clearTimeout(timer);
-            this.freezeTimers.delete(div);
-        }
-        this.lastKnownWidths.delete(div);
-    }
-
-    private freezeDiv(div: HTMLElement): void {
-        if (div.classList.contains(FROZEN_CLASS)) return;
-        if (!this.shouldFreeze(div)) return;
-        // Never freeze a div that has not been rendered at least once. Its width is unknown
-        // (content-visibility:auto reports the 44px fallback for never-rendered elements).
-        if (!this.seenDivs.has(div)) return;
-        const src = this.getSrcLine(div);
-        const viewLen = this.buildParagraphVisibleText(src).length;
-        const pixelWidth = this.lastKnownWidths.get(div) ?? 0;
-
-        // Store content keyed by div identity (WeakMap) so getSrcLine/getViewLen remain
-        // correct even if other divs are inserted or removed after this freeze (DOM positions
-        // shift, but each WeakMap entry travels with its own div element).
-        this.setFrozenContent(div, src, viewLen);
-
-        // Also sync paragraphRecords for Phase 2 (DOM windowing). Records are indexed by
-        // current DOM position; they become stale after DOM insertions/deletions outside
-        // patchParagraphs, but frozenSrc/frozenViewLen are always authoritative for reads.
-        const idx = this.indexOfDiv(div);
-        if (idx >= 0 && this.paragraphRecords[idx] !== undefined) {
-            this.paragraphRecords[idx].src = src;
-            this.paragraphRecords[idx].viewLen = viewLen;
-            this.paragraphRecords[idx].width = pixelWidth;
-        }
-
-        // Set style.width before emptying content so both changes are batched into a single
-        // layout pass — the div stays at pixelWidth throughout the transition with no size
-        // flash regardless of whether it is inside or outside Chrome's content-visibility
-        // rendering buffer (~3600px). contain-intrinsic-block-size only applies when
-        // content-visibility:auto skips layout (>~3600px away), which is too narrow a
-        // condition to rely on for scroll-container stability.
-        if (pixelWidth > 0) div.style.setProperty('width', `${pixelWidth}px`);
-        div.replaceChildren();
-        div.classList.add(FROZEN_CLASS);
-    }
-
-    private onIntersection(entries: IntersectionObserverEntry[]): void {
-        for (const entry of entries) {
-            const div = entry.target as HTMLElement;
-            if (entry.isIntersecting) {
-                this.seenDivs.add(div); // mark as rendered; now eligible for future freezing
-                this.cancelFreeze(div);
-                if (div.classList.contains(FROZEN_CLASS)) this.thawDiv(div);
-            } else {
-                if (!div.classList.contains(FROZEN_CLASS)) {
-                    // Cache the real pixel width now (no layout flush: boundingClientRect is
-                    // provided by the observer callback) so freezeDiv can pin style.width.
-                    const w = entry.boundingClientRect.width;
-                    if (w > 0) this.lastKnownWidths.set(div, w);
-                    this.scheduleFreeze(div);
-                }
-            }
-        }
-    }
 }
+

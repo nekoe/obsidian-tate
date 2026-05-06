@@ -40,12 +40,6 @@
     pointer-events: none;
 }
 
-/* Frozen paragraph placeholder: no children, stores content in ParagraphVirtualizer.frozenSrc.
-   pointer-events:none avoids inadvertent click/selection on the empty element. */
-.tate-editor > div.tate-frozen {
-    pointer-events: none;
-}
-
 /* Spacer divs that represent the total width of off-window paragraphs (Phase 2+).
    pointer-events:none prevents clicks/selection; user-select:none prevents accidental
    text selection from extending into the spacer area. */

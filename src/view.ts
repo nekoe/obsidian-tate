@@ -147,9 +147,8 @@ export class VerticalWritingView extends ItemView {
         });
         this.registerDomEvent(editorEl.el, 'paste', (e: ClipboardEvent) => {
             if (!this.guardCm6(e)) return; // Block if CM6 is unavailable
-            const newDivs = editorEl.handlePaste(e);
+            editorEl.handlePaste(e);
             this.commitToCm6(); // Paste is an immediate commit point
-            this.scheduleLayoutRefresh(newDivs);
             this.searchPanel?.onContentChanged();
         });
         this.registerDomEvent(editorEl.el, 'beforeinput', (e: InputEvent) => {
@@ -400,7 +399,6 @@ export class VerticalWritingView extends ItemView {
                     this.onThisLeafActivated();
                 } else {
                     this.popEscScope();
-                    this.virtualizer?.onViewDeactivated();
                     if (!this.app.workspace.getLeavesOfType(TATE_VIEW_TYPE).includes(leaf)) {
                         // Hide only when the newly active leaf is not any tate view
                         this.plugin.updateCharCount(null);
@@ -503,7 +501,6 @@ export class VerticalWritingView extends ItemView {
                 requestAnimationFrame(() => {
                     if (this.scrollRestoringGeneration === gen) {
                         el.el.classList.remove('tate-scroll-restoring');
-                        this.virtualizer?.reobserveAll();
                     }
                 });
             });
@@ -569,7 +566,6 @@ export class VerticalWritingView extends ItemView {
             if (this.scrollRestoringGeneration === gen) {
                 this.editorEl?.el.classList.remove('tate-scroll-restoring');
                 this.hideLoadingSpinner();
-                this.virtualizer?.reobserveAll();
             }
         });
     }
@@ -580,31 +576,6 @@ export class VerticalWritingView extends ItemView {
         ++this.scrollRestoringGeneration;
         this.editorEl?.el.classList.remove('tate-scroll-restoring');
         this.hideLoadingSpinner();
-        this.virtualizer?.reobserveAll();
-    }
-
-    /** Proactively refreshes the contain-intrinsic-block-size:auto cache for divs that
-     *  were mutated while off-screen (paste, Undo/Redo). Adds tate-layout-refreshing
-     *  synchronously so Frame N's layout runs with content-visibility:visible and writes
-     *  the actual size into the cache. Removes the class in the second rAF (Frame N+1)
-     *  so Frame N's layout is not skipped. No spinner — two frames is imperceptible. */
-    private scheduleLayoutRefresh(divs: HTMLDivElement[]): void {
-        if (divs.length === 0) return;
-        divs.forEach(d => d.classList.add('tate-layout-refreshing'));
-        requestAnimationFrame(() => {
-            requestAnimationFrame(() => {
-                divs.forEach(d => {
-                    d.classList.remove('tate-layout-refreshing');
-                    // Re-trigger the IntersectionObserver for divs that were off-screen throughout
-                    // the mutation (Undo/Redo, paste). Continuously off-screen divs never produce a
-                    // new IO callback, so without this they would stay thawed indefinitely. After
-                    // reobserveOne, the IO fires isIntersecting:false → lastKnownWidths is updated
-                    // with the correct post-mutation width (from the contain-intrinsic-block-size
-                    // cache written by Frame N) → scheduleFreeze re-freezes the div.
-                    this.virtualizer?.reobserveOne(d);
-                });
-            });
-        });
     }
 
     applySettings(settings: TatePluginSettings): void {
@@ -627,7 +598,6 @@ export class VerticalWritingView extends ItemView {
     // and notifyActivated() (called when revealLeaf doesn't fire active-leaf-change).
     private onThisLeafActivated(): void {
         this.pushEscScope();
-        this.virtualizer?.onViewActivated();
         this.plugin.updateCharCount(countChars(this.lastCommittedContent));
         const el = this.editorEl;
         if (el) {
@@ -653,7 +623,6 @@ export class VerticalWritingView extends ItemView {
                     requestAnimationFrame(() => {
                         if (this.scrollRestoringGeneration === gen) {
                             el.el.classList.remove('tate-scroll-restoring');
-                            this.virtualizer?.reobserveAll();
                         }
                     });
                 });
@@ -838,7 +807,8 @@ export class VerticalWritingView extends ItemView {
         el.afterCommit();
         // paragraphRecords are not updated during normal typing; sync them now so
         // refreshOutline() sees current src/viewLen values for accurate jump offsets.
-        this.virtualizer?.initRecords(content.split('\n'));
+        // syncWindowSrcs updates only src/viewLen without resetting domStart/domEnd/spacers.
+        this.virtualizer?.syncWindowSrcs(content.split('\n'));
         this.plugin.refreshOutline();
     }
 
@@ -875,15 +845,10 @@ export class VerticalWritingView extends ItemView {
                 requestAnimationFrame(() => {
                     if (this.scrollRestoringGeneration === gen) {
                         editorEl.el.classList.remove('tate-scroll-restoring');
-                        this.virtualizer?.reobserveAll();
                     }
                 });
             });
         } else {
-            // Add tate-layout-refreshing synchronously first so the subsequent layout flush
-            // from scrollCursorIntoView sees accurate sizes for changed divs and writes their
-            // contain-intrinsic-block-size cache.
-            this.scheduleLayoutRefresh(changedDivs);
             editorEl.scrollCursorIntoView('nearest', 'nearest');
         }
         // Update last committed content to reflect the new CM6 state.
