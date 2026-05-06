@@ -80,6 +80,11 @@ export class VerticalWritingView extends ItemView {
         this.searchPanel = new SearchPanel(editorEl, container, this.app, virtualizer);
         this.searchPanel.setCommitCallback(() => this.commitToCm6());
 
+        // Toolbar button to open the outline panel (added to this view's header).
+        this.addAction('list', 'アウトラインパネルを開く', () => {
+            void this.plugin.activateOutlineView();
+        });
+
         const spinnerEl = container.createEl('div', { cls: 'tate-loading-spinner' });
         this.spinnerEl = spinnerEl;
 
@@ -100,6 +105,7 @@ export class VerticalWritingView extends ItemView {
                     this.beginScrollRestoring();       // adds class BEFORE setValue
                     editorEl.setValue(content, false); // new divs born with class active
                     this.plugin.updateCharCount(countChars(content));
+                    this.plugin.refreshOutline();
                     // restoreViewOffset handles both cases:
                     //   active view  → rAF 1: scroll, rAF 2: remove class
                     //   inactive view → pendingCursorOffset set; active-leaf-change scrolls
@@ -108,6 +114,7 @@ export class VerticalWritingView extends ItemView {
                     // File load or file delete: caller manages the tate-scroll-restoring lifecycle.
                     editorEl.setValue(content, false);
                     this.plugin.updateCharCount(countChars(content));
+                    this.plugin.refreshOutline();
                 }
             },
         );
@@ -310,10 +317,12 @@ export class VerticalWritingView extends ItemView {
                     // Markdown view is closed while the tate view is not the active leaf).
                     syncCoordinator.clearCurrentFile();
                     editorEl.clearContent();
+                    virtualizer.initRecords([]);
                     this.lastCommittedContent = '';
                     this.pendingCursorOffset = null;
                     this.lastKnownViewOffset = null;
                     this.plugin.updateCharCount(null);
+                    this.plugin.refreshOutline();
                     this.cancelScrollRestoring();
                     return;
                 }
@@ -360,10 +369,12 @@ export class VerticalWritingView extends ItemView {
                     }
                     syncCoordinator.clearCurrentFile();
                     editorEl.clearContent();
+                    virtualizer.initRecords([]);
                     this.lastCommittedContent = '';
                     this.pendingCursorOffset = null;
                     this.lastKnownViewOffset = null;
                     this.plugin.updateCharCount(null);
+                    this.plugin.refreshOutline();
                     this.cancelScrollRestoring();
                 }
             })
@@ -698,6 +709,21 @@ export class VerticalWritingView extends ItemView {
         this.applyAnnotation(el => el.applyHeading(level));
     }
 
+    /** Moves the editor cursor to viewOffset and scrolls it into view. Used by OutlineView. */
+    jumpToViewOffset(offset: number): void {
+        const el = this.editorEl;
+        if (!el) return;
+        el.el.focus({ preventScroll: true });
+        el.setViewCursorOffset(offset);
+        this.lastKnownViewOffset = offset;
+        el.scrollCursorIntoView();
+    }
+
+    /** Returns the current paragraphRecords for outline extraction. */
+    getParagraphRecords(): readonly import('./ui/ParagraphVirtualizer').ParagraphRecord[] {
+        return this.virtualizer?.paragraphRecords ?? [];
+    }
+
     private applyAnnotation(wrap: (el: EditorElement) => boolean): void {
         if (!this.editorEl) return;
         if (!wrap(this.editorEl)) {
@@ -791,6 +817,7 @@ export class VerticalWritingView extends ItemView {
             cm6.setCursor(cm6.offsetToPos(viewToSrc(segs, viewOffset)));
         }
         el.afterCommit();
+        this.plugin.refreshOutline();
     }
 
     /** Delegates Undo (isRedo=false) or Redo (isRedo=true) to CM6 and restores

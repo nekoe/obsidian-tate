@@ -28,7 +28,7 @@ __export(main_exports, {
   default: () => TatePlugin
 });
 module.exports = __toCommonJS(main_exports);
-var import_obsidian7 = require("obsidian");
+var import_obsidian8 = require("obsidian");
 
 // src/view.ts
 var import_obsidian6 = require("obsidian");
@@ -3546,6 +3546,9 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
     virtualizer.attach();
     this.searchPanel = new SearchPanel(editorEl, container, this.app, virtualizer);
     this.searchPanel.setCommitCallback(() => this.commitToCm6());
+    this.addAction("list", "\u30A2\u30A6\u30C8\u30E9\u30A4\u30F3\u30D1\u30CD\u30EB\u3092\u958B\u304F", () => {
+      void this.plugin.activateOutlineView();
+    });
     const spinnerEl = container.createEl("div", { cls: "tate-loading-spinner" });
     this.spinnerEl = spinnerEl;
     const syncCoordinator = new SyncCoordinator(
@@ -3560,10 +3563,12 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
           this.beginScrollRestoring();
           editorEl.setValue(content, false);
           this.plugin.updateCharCount(countChars(content));
+          this.plugin.refreshOutline();
           this.restoreViewOffset(savedOffset);
         } else {
           editorEl.setValue(content, false);
           this.plugin.updateCharCount(countChars(content));
+          this.plugin.refreshOutline();
         }
       }
     );
@@ -3730,10 +3735,12 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
         if (!file) {
           syncCoordinator.clearCurrentFile();
           editorEl.clearContent();
+          virtualizer.initRecords([]);
           this.lastCommittedContent = "";
           this.pendingCursorOffset = null;
           this.lastKnownViewOffset = null;
           this.plugin.updateCharCount(null);
+          this.plugin.refreshOutline();
           this.cancelScrollRestoring();
           return;
         }
@@ -3774,10 +3781,12 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
           }
           syncCoordinator.clearCurrentFile();
           editorEl.clearContent();
+          virtualizer.initRecords([]);
           this.lastCommittedContent = "";
           this.pendingCursorOffset = null;
           this.lastKnownViewOffset = null;
           this.plugin.updateCharCount(null);
+          this.plugin.refreshOutline();
           this.cancelScrollRestoring();
         }
       })
@@ -4063,6 +4072,20 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
   applyHeading(level) {
     this.applyAnnotation((el) => el.applyHeading(level));
   }
+  /** Moves the editor cursor to viewOffset and scrolls it into view. Used by OutlineView. */
+  jumpToViewOffset(offset) {
+    const el = this.editorEl;
+    if (!el) return;
+    el.el.focus({ preventScroll: true });
+    el.setViewCursorOffset(offset);
+    this.lastKnownViewOffset = offset;
+    el.scrollCursorIntoView();
+  }
+  /** Returns the current paragraphRecords for outline extraction. */
+  getParagraphRecords() {
+    var _a, _b;
+    return (_b = (_a = this.virtualizer) == null ? void 0 : _a.paragraphRecords) != null ? _b : [];
+  }
   applyAnnotation(wrap) {
     if (!this.editorEl) return;
     if (!wrap(this.editorEl)) {
@@ -4145,6 +4168,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
       cm6.setCursor(cm6.offsetToPos(viewToSrc(segs, viewOffset)));
     }
     el.afterCommit();
+    this.plugin.refreshOutline();
   }
   /** Delegates Undo (isRedo=false) or Redo (isRedo=true) to CM6 and restores
    *  the cursor position derived from the content diff.
@@ -4208,8 +4232,95 @@ function countChars(source) {
   return buildSegmentMap(source).reduce((sum, seg) => sum + seg.viewLen, 0);
 }
 
+// src/ui/OutlineView.ts
+var import_obsidian7 = require("obsidian");
+var TATE_OUTLINE_VIEW_TYPE = "tate-outline";
+var OutlineView = class extends import_obsidian7.ItemView {
+  constructor(leaf, plugin) {
+    super(leaf);
+    this.plugin = plugin;
+    this.listEl = null;
+    this.emptyEl = null;
+  }
+  getViewType() {
+    return TATE_OUTLINE_VIEW_TYPE;
+  }
+  getDisplayText() {
+    return "\u7E26\u66F8\u304D\u30A2\u30A6\u30C8\u30E9\u30A4\u30F3";
+  }
+  getIcon() {
+    return "list";
+  }
+  async onOpen() {
+    const container = this.containerEl.children[1];
+    container.empty();
+    container.addClass("tate-outline-container");
+    this.listEl = container.createEl("ul", { cls: "tate-outline-list" });
+    this.emptyEl = container.createEl("div", {
+      cls: "tate-outline-empty",
+      text: "\u898B\u51FA\u3057\u304C\u3042\u308A\u307E\u305B\u3093"
+    });
+    this.emptyEl.hide();
+    this.registerEvent(
+      this.app.workspace.on("active-leaf-change", () => {
+        this.plugin.refreshOutline();
+      })
+    );
+    this.plugin.refreshOutline();
+  }
+  async onClose() {
+    this.listEl = null;
+    this.emptyEl = null;
+  }
+  updateHeadings(headings) {
+    if (!this.listEl || !this.emptyEl) return;
+    this.listEl.empty();
+    if (headings.length === 0) {
+      this.listEl.hide();
+      this.emptyEl.show();
+      return;
+    }
+    this.emptyEl.hide();
+    this.listEl.show();
+    for (const entry of headings) {
+      const li = this.listEl.createEl("li", {
+        cls: `tate-outline-item tate-outline-${entry.level}`
+      });
+      li.textContent = entry.text;
+      li.addEventListener("click", () => this.jumpTo(entry));
+    }
+  }
+  jumpTo(entry) {
+    const leaves = this.app.workspace.getLeavesOfType(TATE_VIEW_TYPE);
+    if (leaves.length === 0) return;
+    const tateView = leaves[0].view;
+    if (!(tateView instanceof VerticalWritingView)) return;
+    tateView.jumpToViewOffset(entry.viewOffset);
+    void this.app.workspace.revealLeaf(leaves[0]);
+  }
+};
+
+// src/ui/HeadingExtractor.ts
+var HEADING_RE = /［＃「([^「」\n]+)」は(大|中|小)見出し］/g;
+function extractHeadings(records) {
+  const entries = [];
+  let viewOffset = 0;
+  for (let i = 0; i < records.length; i++) {
+    const { src, viewLen } = records[i];
+    HEADING_RE.lastIndex = 0;
+    let m;
+    while ((m = HEADING_RE.exec(src)) !== null) {
+      const text = m[1];
+      const level = m[2] === "\u5927" ? "large" : m[2] === "\u4E2D" ? "mid" : "small";
+      entries.push({ text, level, paragraphIndex: i, viewOffset });
+    }
+    viewOffset += viewLen;
+  }
+  return entries;
+}
+
 // src/main.ts
-var TatePlugin = class extends import_obsidian7.Plugin {
+var TatePlugin = class extends import_obsidian8.Plugin {
   constructor() {
     super(...arguments);
     this.settings = DEFAULT_SETTINGS;
@@ -4222,11 +4333,15 @@ var TatePlugin = class extends import_obsidian7.Plugin {
     this.statusBarItem = this.addStatusBarItem();
     this.statusBarItem.hide();
     const iconEl = this.statusBarItem.createEl("span", { cls: "tate-status-icon" });
-    (0, import_obsidian7.setIcon)(iconEl, "tally-3");
+    (0, import_obsidian8.setIcon)(iconEl, "tally-3");
     this.charCountEl = this.statusBarItem.createEl("span");
     this.registerView(
       TATE_VIEW_TYPE,
       (leaf) => new VerticalWritingView(leaf, this)
+    );
+    this.registerView(
+      TATE_OUTLINE_VIEW_TYPE,
+      (leaf) => new OutlineView(leaf, this)
     );
     this.addCommand({
       id: "open-view",
@@ -4317,6 +4432,11 @@ var TatePlugin = class extends import_obsidian7.Plugin {
         return true;
       }
     });
+    this.addCommand({
+      id: "open-outline",
+      name: "\u30A2\u30A6\u30C8\u30E9\u30A4\u30F3\u30D1\u30CD\u30EB\u3092\u958B\u304F",
+      callback: () => void this.activateOutlineView()
+    });
     this.addSettingTab(new TateSettingTab(this.app, this));
     this.registerEvent(
       this.app.workspace.on("quit", (tasks) => {
@@ -4374,6 +4494,29 @@ var TatePlugin = class extends import_obsidian7.Plugin {
         leaf.view.applySettings(this.settings);
       }
     });
+  }
+  /** Scans the active tate view's paragraphRecords and pushes headings to all open outline panels. */
+  refreshOutline() {
+    var _a;
+    const outlineLeaves = this.app.workspace.getLeavesOfType(TATE_OUTLINE_VIEW_TYPE);
+    if (outlineLeaves.length === 0) return;
+    const tateView = this.app.workspace.getActiveViewOfType(VerticalWritingView);
+    const records = (_a = tateView == null ? void 0 : tateView.getParagraphRecords()) != null ? _a : [];
+    const headings = extractHeadings(records);
+    for (const leaf of outlineLeaves) {
+      if (leaf.view instanceof OutlineView) leaf.view.updateHeadings(headings);
+    }
+  }
+  async activateOutlineView() {
+    const existing = this.app.workspace.getLeavesOfType(TATE_OUTLINE_VIEW_TYPE);
+    if (existing.length > 0) {
+      void this.app.workspace.revealLeaf(existing[0]);
+      return;
+    }
+    const leaf = this.app.workspace.getRightLeaf(false);
+    if (!leaf) return;
+    await leaf.setViewState({ type: TATE_OUTLINE_VIEW_TYPE, active: true });
+    void this.app.workspace.revealLeaf(leaf);
   }
   getActiveTateView() {
     return this.app.workspace.getActiveViewOfType(VerticalWritingView);

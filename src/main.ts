@@ -1,6 +1,8 @@
 import { Plugin, WorkspaceLeaf, setIcon } from 'obsidian';
 import { TATE_VIEW_TYPE, VerticalWritingView } from './view';
 import { DEFAULT_SETTINGS, TatePluginSettings, TateSettingTab } from './settings';
+import { OutlineView, TATE_OUTLINE_VIEW_TYPE } from './ui/OutlineView';
+import { extractHeadings } from './ui/HeadingExtractor';
 
 export default class TatePlugin extends Plugin {
     settings: TatePluginSettings = DEFAULT_SETTINGS;
@@ -22,6 +24,11 @@ export default class TatePlugin extends Plugin {
         this.registerView(
             TATE_VIEW_TYPE,
             (leaf) => new VerticalWritingView(leaf, this)
+        );
+
+        this.registerView(
+            TATE_OUTLINE_VIEW_TYPE,
+            (leaf) => new OutlineView(leaf, this)
         );
 
         this.addCommand({
@@ -122,6 +129,12 @@ export default class TatePlugin extends Plugin {
             },
         });
 
+        this.addCommand({
+            id: 'open-outline',
+            name: 'アウトラインパネルを開く',
+            callback: () => void this.activateOutlineView(),
+        });
+
         this.addSettingTab(new TateSettingTab(this.app, this));
 
         // Best-effort cursor save on app quit. Not guaranteed to run (Obsidian limitation).
@@ -193,6 +206,30 @@ export default class TatePlugin extends Plugin {
                 leaf.view.applySettings(this.settings);
             }
         });
+    }
+
+    /** Scans the active tate view's paragraphRecords and pushes headings to all open outline panels. */
+    refreshOutline(): void {
+        const outlineLeaves = this.app.workspace.getLeavesOfType(TATE_OUTLINE_VIEW_TYPE);
+        if (outlineLeaves.length === 0) return;
+        const tateView = this.app.workspace.getActiveViewOfType(VerticalWritingView);
+        const records = tateView?.getParagraphRecords() ?? [];
+        const headings = extractHeadings(records);
+        for (const leaf of outlineLeaves) {
+            if (leaf.view instanceof OutlineView) leaf.view.updateHeadings(headings);
+        }
+    }
+
+    async activateOutlineView(): Promise<void> {
+        const existing = this.app.workspace.getLeavesOfType(TATE_OUTLINE_VIEW_TYPE);
+        if (existing.length > 0) {
+            void this.app.workspace.revealLeaf(existing[0]);
+            return;
+        }
+        const leaf = this.app.workspace.getRightLeaf(false);
+        if (!leaf) return;
+        await leaf.setViewState({ type: TATE_OUTLINE_VIEW_TYPE, active: true });
+        void this.app.workspace.revealLeaf(leaf);
     }
 
     private getActiveTateView(): VerticalWritingView | null {
