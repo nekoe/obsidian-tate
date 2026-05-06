@@ -4254,7 +4254,7 @@ var OutlineView = class extends import_obsidian7.ItemView {
     return "\u7E26\u66F8\u304D\u30A2\u30A6\u30C8\u30E9\u30A4\u30F3";
   }
   getIcon() {
-    return "list";
+    return "tally-3";
   }
   async onOpen() {
     const container = this.containerEl.children[1];

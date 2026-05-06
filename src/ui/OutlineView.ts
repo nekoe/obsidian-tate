@@ -15,7 +15,7 @@ export class OutlineView extends ItemView {
 
     getViewType(): string { return TATE_OUTLINE_VIEW_TYPE; }
     getDisplayText(): string { return '縦書きアウトライン'; }
-    getIcon(): string { return 'list'; }
+    getIcon(): string { return 'tally-3'; }
 
     async onOpen(): Promise<void> {
         const container = this.containerEl.children[1] as HTMLElement;
