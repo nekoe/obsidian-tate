@@ -97,6 +97,27 @@ When a match partially overlaps a ruby, tate-chu-yoko, emphasis mark, or heading
 
 Closing the panel restores the cursor to the last navigated hit, or to the position it was at when the panel was opened if no navigation occurred.
 
+### Heading Outline Panel
+
+The outline panel lists all heading annotations in the current file in a dedicated sidebar and lets you jump to any heading with a single click.
+
+**Opening the panel**
+
+- Run `アウトラインパネルを開く` from the command palette (only available while the vertical writing view is open).
+- Or click the **tally-3 icon** (☰) in the vertical writing view's toolbar.
+
+**Navigation**
+
+Click any entry to move the cursor to that heading and bring the vertical writing view to the front.
+
+- Large headings are shown at the leftmost indent level (bold).
+- Mid headings are indented one level.
+- Small headings are indented two levels.
+
+**Live updates**
+
+The outline refreshes automatically whenever the file content changes. It clears when the vertical writing view is closed.
+
 ### Other Features
 
 - **Bidirectional real-time sync:** Edits and Undo/Redo operations stay in sync with the Obsidian Markdown view in real time.

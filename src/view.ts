@@ -82,7 +82,7 @@ export class VerticalWritingView extends ItemView {
         this.searchPanel.setCommitCallback(() => this.commitToCm6());
 
         // Toolbar button to open the outline panel (added to this view's header).
-        this.addAction('list', 'アウトラインパネルを開く', () => {
+        this.addAction('tally-3', 'アウトラインパネルを開く', () => {
             void this.plugin.activateOutlineView();
         });
 

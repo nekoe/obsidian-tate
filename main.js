@@ -3546,7 +3546,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
     virtualizer.attach();
     this.searchPanel = new SearchPanel(editorEl, container, this.app, virtualizer);
     this.searchPanel.setCommitCallback(() => this.commitToCm6());
-    this.addAction("list", "\u30A2\u30A6\u30C8\u30E9\u30A4\u30F3\u30D1\u30CD\u30EB\u3092\u958B\u304F", () => {
+    this.addAction("tally-3", "\u30A2\u30A6\u30C8\u30E9\u30A4\u30F3\u30D1\u30CD\u30EB\u3092\u958B\u304F", () => {
       void this.plugin.activateOutlineView();
     });
     const spinnerEl = container.createEl("div", { cls: "tate-loading-spinner" });
