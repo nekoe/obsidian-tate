@@ -366,8 +366,13 @@ describe('ParagraphVirtualizer', () => {
             mockObserve = vi.fn();
             mockUnobserve = vi.fn();
             mockDisconnect = vi.fn();
+            let instanceCount = 0;
             vi.stubGlobal('IntersectionObserver', vi.fn((cb: IntersectionObserverCallback) => {
-                ioCallback = cb;
+                // attach() creates TWO observers: the freeze/thaw observer first, then the
+                // window-boundary observer. Capture only the first (freeze/thaw) callback so
+                // existing tests continue to exercise the correct code path.
+                if (instanceCount === 0) ioCallback = cb;
+                instanceCount++;
                 return { observe: mockObserve, unobserve: mockUnobserve, disconnect: mockDisconnect };
             }));
             virtIO = new ParagraphVirtualizer(editorEl, scrollArea);

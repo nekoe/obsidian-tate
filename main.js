@@ -1928,6 +1928,7 @@ var import_obsidian3 = require("obsidian");
 var FROZEN_CLASS = "tate-frozen";
 var SPACER_CLASS = "tate-spacer";
 var FREEZE_DELAY_MS = 50;
+var UNRENDERED_WIDTH_PX = 44;
 var ParagraphVirtualizer = class {
   constructor(editorEl, scrollArea) {
     this.editorEl = editorEl;
@@ -1965,14 +1966,31 @@ var ParagraphVirtualizer = class {
     // Used by getWindowDiv() to compute the correct child index (offset by +1 for rightSpacer).
     this.rightSpacer = null;
     this.leftSpacer = null;
+    // Accumulated pixel widths of paragraphs evicted to the right and left spacers.
+    // Maintained by expandRight/Left and shrinkRight/Left (Phase 2c+).
+    this.rightSpacerWidth = 0;
+    this.leftSpacerWidth = 0;
+    // Dedicated IntersectionObserver that watches only the two boundary divs of the window.
+    // Separate from the freeze/thaw observer so boundary detection is not conflated with freeze logic.
+    this.windowObserver = null;
+    // True while a drag selection is in progress (mousedown → mouseup).
+    // Prevents shrinking the window when the anchor/focus nodes are in the edge div.
+    this.isDragging = false;
     // Source of truth for frozen div content, keyed by div identity (not DOM position).
     // Set by freezeDiv() / setFrozenContent(); read by getSrcLine() and getViewLen().
     // Identity-keyed so that reads remain correct even after other divs are inserted or
     // removed (DOM positions shift, but a WeakMap entry stays with its div element).
     this.frozenSrc = /* @__PURE__ */ new WeakMap();
     this.frozenViewLen = /* @__PURE__ */ new WeakMap();
+    // Arrow function so `this` is bound for addEventListener/removeEventListener.
+    this.onMouseDown = () => {
+      this.isDragging = true;
+    };
+    this.onMouseUp = () => {
+      this.isDragging = false;
+    };
   }
-  // Starts the IntersectionObserver, inserts spacer divs, and begins observing all children.
+  // Starts IntersectionObservers, inserts spacer divs, and begins observing all children.
   attach() {
     if (this.observer) return;
     this.observer = new IntersectionObserver(
@@ -1984,8 +2002,20 @@ var ParagraphVirtualizer = class {
         threshold: 0
       }
     );
+    this.windowObserver = new IntersectionObserver(
+      (entries) => this.onWindowBoundaryIntersection(entries),
+      {
+        root: this.scrollArea,
+        // Same margin as the freeze/thaw observer: expand the window before divs
+        // reach the viewport edge so there is no visible gap during fast scrolling.
+        rootMargin: "0px 440px 0px 440px",
+        threshold: 0
+      }
+    );
     this.initSpacers();
     this.observeAll();
+    this.editorEl.addEventListener("mousedown", this.onMouseDown);
+    document.addEventListener("mouseup", this.onMouseUp);
   }
   // Inserts rightSpacer (first child) and leftSpacer (last child) into editorEl.
   // Both start at width 0 (no off-window paragraphs in Phase 2a/2b; Phase 2c sets real widths).
@@ -2004,11 +2034,13 @@ var ParagraphVirtualizer = class {
     this.rightSpacer = right;
     this.leftSpacer = left;
   }
-  // Stops the observer, removes spacers, and cancels all pending freeze timers.
+  // Stops observers, removes spacers, and cancels all pending freeze timers.
   detach() {
-    var _a, _b, _c;
+    var _a, _b, _c, _d;
     (_a = this.observer) == null ? void 0 : _a.disconnect();
     this.observer = null;
+    (_b = this.windowObserver) == null ? void 0 : _b.disconnect();
+    this.windowObserver = null;
     for (const timer of this.freezeTimers.values()) clearTimeout(timer);
     this.freezeTimers.clear();
     this.lastKnownWidths = /* @__PURE__ */ new WeakMap();
@@ -2019,10 +2051,15 @@ var ParagraphVirtualizer = class {
     this.paragraphRecords.length = 0;
     this.domStart = 0;
     this.domEnd = -1;
-    (_b = this.rightSpacer) == null ? void 0 : _b.remove();
-    (_c = this.leftSpacer) == null ? void 0 : _c.remove();
+    this.rightSpacerWidth = 0;
+    this.leftSpacerWidth = 0;
+    (_c = this.rightSpacer) == null ? void 0 : _c.remove();
+    (_d = this.leftSpacer) == null ? void 0 : _d.remove();
     this.rightSpacer = null;
     this.leftSpacer = null;
+    this.isDragging = false;
+    this.editorEl.removeEventListener("mousedown", this.onMouseDown);
+    document.removeEventListener("mouseup", this.onMouseUp);
   }
   // Registers all current paragraph children with the observer (call after setValue).
   // Skips spacer divs (SPACER_CLASS) because they have no content and measuring them is meaningless.
@@ -2086,6 +2123,11 @@ var ParagraphVirtualizer = class {
     }
     this.domStart = 0;
     this.domEnd = this.paragraphRecords.length - 1;
+    this.rightSpacerWidth = 0;
+    this.leftSpacerWidth = 0;
+    if (this.rightSpacer) this.rightSpacer.style.removeProperty("width");
+    if (this.leftSpacer) this.leftSpacer.style.removeProperty("width");
+    this.reobserveBoundaries();
   }
   // Mirrors the DOM splice performed by patchParagraphs, keeping paragraphRecords in sync.
   // lo: first changed index; deleteCount: number of old records to remove;
@@ -2097,6 +2139,9 @@ var ParagraphVirtualizer = class {
       width: 0
     }));
     this.paragraphRecords.splice(lo, deleteCount, ...newRecords);
+    this.domEnd = Math.min(this.domEnd + (newLines.length - deleteCount), this.paragraphRecords.length - 1);
+    this.domEnd = Math.max(this.domEnd, this.domStart);
+    this.reobserveBoundaries();
   }
   // Returns the Aozora source for the paragraph at index i. O(1).
   getSrcByIndex(i) {
@@ -2120,10 +2165,168 @@ var ParagraphVirtualizer = class {
     const spacerOffset = this.rightSpacer ? 1 : 0;
     return (_a = this.editorEl.children[i - this.domStart + spacerOffset]) != null ? _a : null;
   }
-  // Ensures paragraph i is in the DOM window. No-op in Phase 2a (all divs are in-window).
-  // Phase 2c replaces this with the actual window-shift logic.
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  ensureInWindow(_i) {
+  // Ensures paragraph i is in the DOM window.
+  // Expands the window in the required direction until i is included.
+  // Called by setVisibleOffset (cursor restore) and jump-to-heading.
+  ensureInWindow(i) {
+    if (this.isInWindow(i)) return;
+    if (i < this.domStart) {
+      while (this.domStart > i) this.expandRight();
+    } else {
+      while (this.domEnd < i) this.expandLeft();
+    }
+    this.reobserveBoundaries();
+  }
+  // Replaces all paragraph divs with the full document content (one div per record).
+  // Used by Cmd-A (select-all) so the selection can span the entire document.
+  // Performs a single replaceChildren call to minimise layout thrashing.
+  expandWindowToFull() {
+    const frag = document.createDocumentFragment();
+    for (const rec of this.paragraphRecords) {
+      const div = document.createElement("div");
+      div.replaceChildren((0, import_obsidian3.sanitizeHTMLToDom)(parseInlineToHtml(rec.src) || "<br>"));
+      frag.appendChild(div);
+    }
+    const nodes = Array.from(frag.childNodes);
+    if (this.rightSpacer && this.leftSpacer) {
+      this.editorEl.replaceChildren(this.rightSpacer, ...nodes, this.leftSpacer);
+    } else {
+      this.editorEl.replaceChildren(...nodes);
+    }
+    this.domStart = 0;
+    this.domEnd = this.paragraphRecords.length - 1;
+    this.rightSpacerWidth = 0;
+    this.leftSpacerWidth = 0;
+    if (this.rightSpacer) this.rightSpacer.style.removeProperty("width");
+    if (this.leftSpacer) this.leftSpacer.style.removeProperty("width");
+    this.observeAll();
+    this.reobserveBoundaries();
+  }
+  // Ensures cursor paragraph and its neighbors are in the DOM window (replaces ensureThawedAtCursor).
+  ensureWindowAroundCursor() {
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return;
+    let node = sel.getRangeAt(0).startContainer;
+    while (node && node !== this.editorEl) {
+      if (node instanceof HTMLElement && node.parentElement === this.editorEl) {
+        this.ensureThawed(node, 10);
+        return;
+      }
+      node = node.parentElement;
+    }
+  }
+  // ---- Window expand / shrink helpers ----
+  // Adds a div for paragraphRecords[domStart-1] at the right end of the window.
+  expandRight() {
+    var _a;
+    if (this.domStart <= 0) return;
+    const i = this.domStart - 1;
+    const rec = this.paragraphRecords[i];
+    const div = document.createElement("div");
+    div.replaceChildren((0, import_obsidian3.sanitizeHTMLToDom)(parseInlineToHtml(rec.src) || "<br>"));
+    const firstPara = this.rightSpacer ? this.editorEl.children[1] : this.editorEl.firstChild;
+    this.editorEl.insertBefore(div, firstPara != null ? firstPara : null);
+    const w = rec.width > 0 ? rec.width : UNRENDERED_WIDTH_PX;
+    this.rightSpacerWidth = Math.max(0, this.rightSpacerWidth - w);
+    if (this.rightSpacer) this.rightSpacer.style.setProperty("width", `${this.rightSpacerWidth}px`);
+    this.domStart--;
+    (_a = this.observer) == null ? void 0 : _a.observe(div);
+  }
+  // Adds a div for paragraphRecords[domEnd+1] at the left end of the window.
+  expandLeft() {
+    var _a, _b;
+    if (this.domEnd >= this.paragraphRecords.length - 1) return;
+    const i = this.domEnd + 1;
+    const rec = this.paragraphRecords[i];
+    const div = document.createElement("div");
+    div.replaceChildren((0, import_obsidian3.sanitizeHTMLToDom)(parseInlineToHtml(rec.src) || "<br>"));
+    this.editorEl.insertBefore(div, (_a = this.leftSpacer) != null ? _a : null);
+    const w = rec.width > 0 ? rec.width : UNRENDERED_WIDTH_PX;
+    this.leftSpacerWidth = Math.max(0, this.leftSpacerWidth - w);
+    if (this.leftSpacer) this.leftSpacer.style.setProperty("width", `${this.leftSpacerWidth}px`);
+    this.domEnd++;
+    (_b = this.observer) == null ? void 0 : _b.observe(div);
+  }
+  // Removes the rightmost div of the window (paragraphs[domEnd]) and grows leftSpacer.
+  // Guards against removing a div that contains the current selection anchor or focus.
+  shrinkLeft() {
+    var _a;
+    if (this.domEnd < this.domStart) return;
+    const spacerOffset = this.rightSpacer ? 1 : 0;
+    const div = this.editorEl.children[this.domEnd - this.domStart + spacerOffset];
+    if (!div) return;
+    if (this.isDragging && this.selectionOverlaps(div)) return;
+    const w = div.getBoundingClientRect().width || UNRENDERED_WIDTH_PX;
+    this.paragraphRecords[this.domEnd].width = w;
+    (_a = this.observer) == null ? void 0 : _a.unobserve(div);
+    div.remove();
+    this.leftSpacerWidth += w;
+    if (this.leftSpacer) this.leftSpacer.style.setProperty("width", `${this.leftSpacerWidth}px`);
+    this.domEnd--;
+  }
+  // Removes the leftmost div of the window (paragraphs[domStart]) and grows rightSpacer.
+  shrinkRight() {
+    var _a;
+    if (this.domEnd < this.domStart) return;
+    const spacerOffset = this.rightSpacer ? 1 : 0;
+    const div = this.editorEl.children[spacerOffset];
+    if (!div || div.classList.contains(SPACER_CLASS)) return;
+    if (this.isDragging && this.selectionOverlaps(div)) return;
+    const w = div.getBoundingClientRect().width || UNRENDERED_WIDTH_PX;
+    this.paragraphRecords[this.domStart].width = w;
+    (_a = this.observer) == null ? void 0 : _a.unobserve(div);
+    div.remove();
+    this.rightSpacerWidth += w;
+    if (this.rightSpacer) this.rightSpacer.style.setProperty("width", `${this.rightSpacerWidth}px`);
+    this.domStart++;
+  }
+  // Returns true if the current selection anchor or focus node is inside div.
+  selectionOverlaps(div) {
+    const sel = window.getSelection();
+    if (!sel) return false;
+    return div.contains(sel.anchorNode) || div.contains(sel.focusNode);
+  }
+  // Re-registers the current boundary divs (domStart and domEnd) with the window observer.
+  // Must be called after any expand/shrink operation so the observer watches the new boundaries.
+  reobserveBoundaries() {
+    if (!this.windowObserver) return;
+    this.windowObserver.disconnect();
+    const startDiv = this.getWindowDiv(this.domStart);
+    const endDiv = this.getWindowDiv(this.domEnd);
+    if (startDiv) this.windowObserver.observe(startDiv);
+    if (endDiv && endDiv !== startDiv) this.windowObserver.observe(endDiv);
+  }
+  // Called by the window boundary IntersectionObserver.
+  // Boundary div enters extended viewport → expand window in that direction.
+  // Boundary div exits extended viewport → shrink window from the opposite end.
+  onWindowBoundaryIntersection(entries) {
+    if (this.paragraphRecords.length === 0) return;
+    let changed = false;
+    for (const entry of entries) {
+      const div = entry.target;
+      const spacerOffset = this.rightSpacer ? 1 : 0;
+      const divIndex = Array.from(this.editorEl.children).indexOf(div) - spacerOffset + this.domStart;
+      if (entry.isIntersecting) {
+        if (divIndex === this.domStart && this.domStart > 0) {
+          this.expandRight();
+          changed = true;
+        }
+        if (divIndex === this.domEnd && this.domEnd < this.paragraphRecords.length - 1) {
+          this.expandLeft();
+          changed = true;
+        }
+      } else {
+        if (divIndex === this.domStart && this.domEnd > this.domStart + 2) {
+          this.shrinkLeft();
+          changed = true;
+        }
+        if (divIndex === this.domEnd && this.domEnd > this.domStart + 2) {
+          this.shrinkRight();
+          changed = true;
+        }
+      }
+    }
+    if (changed) this.reobserveBoundaries();
   }
   // Returns true if div is currently frozen (has the tate-frozen class).
   isFrozen(div) {
@@ -3784,7 +3987,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
       (_a = this.searchPanel) == null ? void 0 : _a.onContentChanged();
     });
     this.registerDomEvent(document, "selectionchange", () => {
-      if (document.activeElement === editorEl.el) virtualizer.ensureThawedAtCursor();
+      if (document.activeElement === editorEl.el) virtualizer.ensureWindowAroundCursor();
       const contentChanged = editorEl.handleSelectionChange();
       if (contentChanged) this.commitToCm6();
       if (document.activeElement === editorEl.el && !editorEl.isInlineExpanded()) {
@@ -3805,6 +4008,15 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
       if ((e.metaKey || e.ctrlKey) && !e.altKey && e.key === "z") {
         e.preventDefault();
         this.doUndoRedo(editorEl, e.shiftKey);
+        return;
+      }
+      if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.key === "a") {
+        e.preventDefault();
+        virtualizer.expandWindowToFull();
+        requestAnimationFrame(() => {
+          editorEl.el.focus();
+          document.execCommand("selectAll");
+        });
         return;
       }
       if (!e.isComposing && (e.key === "ArrowUp" || e.key === "ArrowDown")) {

@@ -8,6 +8,10 @@ export const FROZEN_CLASS = 'tate-frozen';
 // CSS class applied to both spacer divs so DOM walkers can skip them.
 export const SPACER_CLASS = 'tate-spacer';
 const FREEZE_DELAY_MS = 50;
+// Estimated pixel width for paragraphs that have never entered the viewport.
+// Matches the content-visibility:auto intrinsic fallback used in Phase 1 (44px).
+// Acceptable inaccuracy: corrects on first viewport entry; adjustable later.
+const UNRENDERED_WIDTH_PX = 44;
 
 export interface ParagraphRecord {
     src: string;     // Aozora source line
@@ -69,6 +73,19 @@ export class ParagraphVirtualizer {
     rightSpacer: HTMLElement | null = null;
     leftSpacer:  HTMLElement | null = null;
 
+    // Accumulated pixel widths of paragraphs evicted to the right and left spacers.
+    // Maintained by expandRight/Left and shrinkRight/Left (Phase 2c+).
+    private rightSpacerWidth = 0;
+    private leftSpacerWidth  = 0;
+
+    // Dedicated IntersectionObserver that watches only the two boundary divs of the window.
+    // Separate from the freeze/thaw observer so boundary detection is not conflated with freeze logic.
+    private windowObserver: IntersectionObserver | null = null;
+
+    // True while a drag selection is in progress (mousedown → mouseup).
+    // Prevents shrinking the window when the anchor/focus nodes are in the edge div.
+    private isDragging = false;
+
     // Source of truth for frozen div content, keyed by div identity (not DOM position).
     // Set by freezeDiv() / setFrozenContent(); read by getSrcLine() and getViewLen().
     // Identity-keyed so that reads remain correct even after other divs are inserted or
@@ -81,7 +98,7 @@ export class ParagraphVirtualizer {
         private readonly scrollArea: HTMLElement,
     ) {}
 
-    // Starts the IntersectionObserver, inserts spacer divs, and begins observing all children.
+    // Starts IntersectionObservers, inserts spacer divs, and begins observing all children.
     attach(): void {
         if (this.observer) return;
         this.observer = new IntersectionObserver(
@@ -93,8 +110,21 @@ export class ParagraphVirtualizer {
                 threshold: 0,
             },
         );
+        this.windowObserver = new IntersectionObserver(
+            (entries) => this.onWindowBoundaryIntersection(entries),
+            {
+                root: this.scrollArea,
+                // Same margin as the freeze/thaw observer: expand the window before divs
+                // reach the viewport edge so there is no visible gap during fast scrolling.
+                rootMargin: '0px 440px 0px 440px',
+                threshold: 0,
+            },
+        );
         this.initSpacers();
         this.observeAll();
+        // Register drag-selection guards to prevent evicting divs that contain an active selection.
+        this.editorEl.addEventListener('mousedown', this.onMouseDown);
+        document.addEventListener('mouseup', this.onMouseUp);
     }
 
     // Inserts rightSpacer (first child) and leftSpacer (last child) into editorEl.
@@ -115,10 +145,12 @@ export class ParagraphVirtualizer {
         this.leftSpacer  = left;
     }
 
-    // Stops the observer, removes spacers, and cancels all pending freeze timers.
+    // Stops observers, removes spacers, and cancels all pending freeze timers.
     detach(): void {
         this.observer?.disconnect();
         this.observer = null;
+        this.windowObserver?.disconnect();
+        this.windowObserver = null;
         for (const timer of this.freezeTimers.values()) clearTimeout(timer);
         this.freezeTimers.clear();
         // WeakMap/WeakSet have no .clear() — reassign to drop all references.
@@ -130,11 +162,16 @@ export class ParagraphVirtualizer {
         this.paragraphRecords.length = 0;
         this.domStart = 0;
         this.domEnd   = -1;
+        this.rightSpacerWidth = 0;
+        this.leftSpacerWidth  = 0;
         // Remove spacers from the DOM. A future attach() will recreate them.
         this.rightSpacer?.remove();
         this.leftSpacer?.remove();
         this.rightSpacer = null;
         this.leftSpacer  = null;
+        this.isDragging = false;
+        this.editorEl.removeEventListener('mousedown', this.onMouseDown);
+        document.removeEventListener('mouseup', this.onMouseUp);
     }
 
     // Registers all current paragraph children with the observer (call after setValue).
@@ -205,6 +242,12 @@ export class ParagraphVirtualizer {
         }
         this.domStart = 0;
         this.domEnd   = this.paragraphRecords.length - 1;
+        // Reset spacer widths (window spans all records; spacers are 0-width).
+        this.rightSpacerWidth = 0;
+        this.leftSpacerWidth  = 0;
+        if (this.rightSpacer) this.rightSpacer.style.removeProperty('width');
+        if (this.leftSpacer)  this.leftSpacer.style.removeProperty('width');
+        this.reobserveBoundaries();
     }
 
     // Mirrors the DOM splice performed by patchParagraphs, keeping paragraphRecords in sync.
@@ -217,6 +260,10 @@ export class ParagraphVirtualizer {
             width: 0,
         }));
         this.paragraphRecords.splice(lo, deleteCount, ...newRecords);
+        // Clamp domEnd to the new total count (may have shrunk if lines were deleted).
+        this.domEnd = Math.min(this.domEnd + (newLines.length - deleteCount), this.paragraphRecords.length - 1);
+        this.domEnd = Math.max(this.domEnd, this.domStart);
+        this.reobserveBoundaries();
     }
 
     // Returns the Aozora source for the paragraph at index i. O(1).
@@ -242,12 +289,190 @@ export class ParagraphVirtualizer {
         return (this.editorEl.children[i - this.domStart + spacerOffset] as HTMLElement) ?? null;
     }
 
-    // Ensures paragraph i is in the DOM window. No-op in Phase 2a (all divs are in-window).
-    // Phase 2c replaces this with the actual window-shift logic.
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    ensureInWindow(_i: number): void {
-        // Phase 2a: all paragraphs are always in window; nothing to do.
+    // Ensures paragraph i is in the DOM window.
+    // Expands the window in the required direction until i is included.
+    // Called by setVisibleOffset (cursor restore) and jump-to-heading.
+    ensureInWindow(i: number): void {
+        if (this.isInWindow(i)) return;
+        if (i < this.domStart) {
+            while (this.domStart > i) this.expandRight();
+        } else {
+            while (this.domEnd < i) this.expandLeft();
+        }
+        this.reobserveBoundaries();
     }
+
+    // Replaces all paragraph divs with the full document content (one div per record).
+    // Used by Cmd-A (select-all) so the selection can span the entire document.
+    // Performs a single replaceChildren call to minimise layout thrashing.
+    expandWindowToFull(): void {
+        const frag = document.createDocumentFragment();
+        for (const rec of this.paragraphRecords) {
+            const div = document.createElement('div');
+            div.replaceChildren(sanitizeHTMLToDom(parseInlineToHtml(rec.src) || '<br>'));
+            frag.appendChild(div);
+        }
+        const nodes = Array.from(frag.childNodes);
+        if (this.rightSpacer && this.leftSpacer) {
+            this.editorEl.replaceChildren(this.rightSpacer, ...nodes, this.leftSpacer);
+        } else {
+            this.editorEl.replaceChildren(...nodes);
+        }
+        this.domStart = 0;
+        this.domEnd   = this.paragraphRecords.length - 1;
+        this.rightSpacerWidth = 0;
+        this.leftSpacerWidth  = 0;
+        if (this.rightSpacer) this.rightSpacer.style.removeProperty('width');
+        if (this.leftSpacer)  this.leftSpacer.style.removeProperty('width');
+        this.observeAll();
+        this.reobserveBoundaries();
+    }
+
+    // Ensures cursor paragraph and its neighbors are in the DOM window (replaces ensureThawedAtCursor).
+    ensureWindowAroundCursor(): void {
+        const sel = window.getSelection();
+        if (!sel || sel.rangeCount === 0) return;
+        let node: Node | null = sel.getRangeAt(0).startContainer;
+        while (node && node !== this.editorEl) {
+            if (node instanceof HTMLElement && node.parentElement === this.editorEl) {
+                // The div is already in the DOM (it's a direct child of editorEl), so no
+                // window expansion is needed. The frozen infrastructure below handles thawing.
+                this.ensureThawed(node, 10);
+                return;
+            }
+            node = node.parentElement;
+        }
+    }
+
+    // ---- Window expand / shrink helpers ----
+
+    // Adds a div for paragraphRecords[domStart-1] at the right end of the window.
+    private expandRight(): void {
+        if (this.domStart <= 0) return;
+        const i = this.domStart - 1;
+        const rec = this.paragraphRecords[i];
+        const div = document.createElement('div');
+        div.replaceChildren(sanitizeHTMLToDom(parseInlineToHtml(rec.src) || '<br>'));
+        // Insert after rightSpacer (children[0]) → before the current first paragraph.
+        const firstPara = this.rightSpacer
+            ? this.editorEl.children[1] // first paragraph is after rightSpacer
+            : this.editorEl.firstChild as HTMLElement | null;
+        this.editorEl.insertBefore(div, firstPara ?? null);
+        // Shrink rightSpacer by the paragraph's estimated or measured width.
+        const w = rec.width > 0 ? rec.width : UNRENDERED_WIDTH_PX;
+        this.rightSpacerWidth = Math.max(0, this.rightSpacerWidth - w);
+        if (this.rightSpacer) this.rightSpacer.style.setProperty('width', `${this.rightSpacerWidth}px`);
+        this.domStart--;
+        // Register new div with the freeze/thaw observer.
+        this.observer?.observe(div);
+    }
+
+    // Adds a div for paragraphRecords[domEnd+1] at the left end of the window.
+    private expandLeft(): void {
+        if (this.domEnd >= this.paragraphRecords.length - 1) return;
+        const i = this.domEnd + 1;
+        const rec = this.paragraphRecords[i];
+        const div = document.createElement('div');
+        div.replaceChildren(sanitizeHTMLToDom(parseInlineToHtml(rec.src) || '<br>'));
+        // Insert before leftSpacer (last child) → after the current last paragraph.
+        this.editorEl.insertBefore(div, this.leftSpacer ?? null);
+        const w = rec.width > 0 ? rec.width : UNRENDERED_WIDTH_PX;
+        this.leftSpacerWidth = Math.max(0, this.leftSpacerWidth - w);
+        if (this.leftSpacer) this.leftSpacer.style.setProperty('width', `${this.leftSpacerWidth}px`);
+        this.domEnd++;
+        this.observer?.observe(div);
+    }
+
+    // Removes the rightmost div of the window (paragraphs[domEnd]) and grows leftSpacer.
+    // Guards against removing a div that contains the current selection anchor or focus.
+    private shrinkLeft(): void {
+        if (this.domEnd < this.domStart) return; // empty window guard
+        const spacerOffset = this.rightSpacer ? 1 : 0;
+        const div = this.editorEl.children[this.domEnd - this.domStart + spacerOffset] as HTMLElement;
+        if (!div) return;
+        if (this.isDragging && this.selectionOverlaps(div)) return;
+        const w = div.getBoundingClientRect().width || UNRENDERED_WIDTH_PX;
+        this.paragraphRecords[this.domEnd].width = w;
+        this.observer?.unobserve(div);
+        div.remove();
+        this.leftSpacerWidth += w;
+        if (this.leftSpacer) this.leftSpacer.style.setProperty('width', `${this.leftSpacerWidth}px`);
+        this.domEnd--;
+    }
+
+    // Removes the leftmost div of the window (paragraphs[domStart]) and grows rightSpacer.
+    private shrinkRight(): void {
+        if (this.domEnd < this.domStart) return;
+        const spacerOffset = this.rightSpacer ? 1 : 0;
+        const div = this.editorEl.children[spacerOffset] as HTMLElement; // first paragraph
+        if (!div || div.classList.contains(SPACER_CLASS)) return;
+        if (this.isDragging && this.selectionOverlaps(div)) return;
+        const w = div.getBoundingClientRect().width || UNRENDERED_WIDTH_PX;
+        this.paragraphRecords[this.domStart].width = w;
+        this.observer?.unobserve(div);
+        div.remove();
+        this.rightSpacerWidth += w;
+        if (this.rightSpacer) this.rightSpacer.style.setProperty('width', `${this.rightSpacerWidth}px`);
+        this.domStart++;
+    }
+
+    // Returns true if the current selection anchor or focus node is inside div.
+    private selectionOverlaps(div: HTMLElement): boolean {
+        const sel = window.getSelection();
+        if (!sel) return false;
+        return div.contains(sel.anchorNode) || div.contains(sel.focusNode);
+    }
+
+    // Re-registers the current boundary divs (domStart and domEnd) with the window observer.
+    // Must be called after any expand/shrink operation so the observer watches the new boundaries.
+    private reobserveBoundaries(): void {
+        if (!this.windowObserver) return;
+        this.windowObserver.disconnect();
+        const startDiv = this.getWindowDiv(this.domStart);
+        const endDiv   = this.getWindowDiv(this.domEnd);
+        if (startDiv) this.windowObserver.observe(startDiv);
+        if (endDiv && endDiv !== startDiv) this.windowObserver.observe(endDiv);
+    }
+
+    // Called by the window boundary IntersectionObserver.
+    // Boundary div enters extended viewport → expand window in that direction.
+    // Boundary div exits extended viewport → shrink window from the opposite end.
+    private onWindowBoundaryIntersection(entries: IntersectionObserverEntry[]): void {
+        if (this.paragraphRecords.length === 0) return;
+        let changed = false;
+        for (const entry of entries) {
+            const div = entry.target as HTMLElement;
+            const spacerOffset = this.rightSpacer ? 1 : 0;
+            const divIndex = Array.from(this.editorEl.children).indexOf(div) - spacerOffset + this.domStart;
+            if (entry.isIntersecting) {
+                if (divIndex === this.domStart && this.domStart > 0) {
+                    this.expandRight();
+                    changed = true;
+                }
+                if (divIndex === this.domEnd && this.domEnd < this.paragraphRecords.length - 1) {
+                    this.expandLeft();
+                    changed = true;
+                }
+            } else {
+                // Only shrink from the far end when there are off-screen paragraphs to evict.
+                // Apply a conservative guard: only shrink when the window is wide enough that
+                // at least one paragraph is clearly off-screen on each side.
+                if (divIndex === this.domStart && this.domEnd > this.domStart + 2) {
+                    this.shrinkLeft();
+                    changed = true;
+                }
+                if (divIndex === this.domEnd && this.domEnd > this.domStart + 2) {
+                    this.shrinkRight();
+                    changed = true;
+                }
+            }
+        }
+        if (changed) this.reobserveBoundaries();
+    }
+
+    // Arrow function so `this` is bound for addEventListener/removeEventListener.
+    private readonly onMouseDown = () => { this.isDragging = true; };
+    private readonly onMouseUp   = () => { this.isDragging = false; };
 
     // Returns true if div is currently frozen (has the tate-frozen class).
     isFrozen(div: HTMLElement): boolean {

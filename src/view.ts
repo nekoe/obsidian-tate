@@ -232,8 +232,8 @@ export class VerticalWritingView extends ItemView {
             this.searchPanel?.onContentChanged();
         });
         this.registerDomEvent(document, 'selectionchange', () => {
-            // Ensure the cursor paragraph and its neighbors are thawed before any DOM access.
-            if (document.activeElement === editorEl.el) virtualizer.ensureThawedAtCursor();
+            // Ensure the cursor paragraph and its neighbors are in the DOM window / thawed.
+            if (document.activeElement === editorEl.el) virtualizer.ensureWindowAroundCursor();
             const contentChanged = editorEl.handleSelectionChange();
             if (contentChanged) this.commitToCm6(); // Commit only if collapse changed content
             // Track the cursor offset while the editor has focus so it can be restored after
@@ -260,6 +260,18 @@ export class VerticalWritingView extends ItemView {
             if ((e.metaKey || e.ctrlKey) && !e.altKey && e.key === 'z') {
                 e.preventDefault();
                 this.doUndoRedo(editorEl, e.shiftKey);
+                return;
+            }
+            // Cmd-A / Ctrl-A: expand the DOM window to all paragraphs first, then let the
+            // browser perform the native select-all. Without expansion the selection would be
+            // limited to the ~50 divs currently in the DOM window.
+            if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.key === 'a') {
+                e.preventDefault();
+                virtualizer.expandWindowToFull();
+                requestAnimationFrame(() => {
+                    editorEl.el.focus();
+                    document.execCommand('selectAll');
+                });
                 return;
             }
             // ArrowUp/ArrowDown inside a tcy span: move left/right within the horizontal text
