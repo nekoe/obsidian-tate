@@ -122,7 +122,7 @@ var SyncCoordinator = class {
 };
 
 // src/ui/EditorElement.ts
-var import_obsidian3 = require("obsidian");
+var import_obsidian4 = require("obsidian");
 
 // src/settings.ts
 var import_obsidian = require("obsidian");
@@ -1923,6 +1923,398 @@ var InputTransformer = class {
   }
 };
 
+// src/ui/ParagraphVirtualizer.ts
+var import_obsidian3 = require("obsidian");
+var FROZEN_CLASS = "tate-frozen";
+var SPACER_CLASS = "tate-spacer";
+var FREEZE_DELAY_MS = 50;
+var ParagraphVirtualizer = class {
+  constructor(editorEl, scrollArea) {
+    this.editorEl = editorEl;
+    this.scrollArea = scrollArea;
+    this.observer = null;
+    this.freezeTimers = /* @__PURE__ */ new Map();
+    // Pixel widths captured in onIntersection (no layout flush needed) and applied as
+    // style.width when freezing, so the scroll container does not change width when a
+    // div's real content is removed.
+    // WeakMap: deleted div elements are GC-eligible even if not explicitly removed here
+    // (e.g. after patchParagraphs replaces the DOM without calling unfrostDiv).
+    this.lastKnownWidths = /* @__PURE__ */ new WeakMap();
+    // Divs that have entered the viewport at least once (rendered by the browser).
+    // Only seen divs are eligible for freezing: a never-seen div has no accurate width
+    // measurement (content-visibility:auto returns the 44px fallback for such divs),
+    // so freezing it would produce the wrong style.width and cause a layout shift on thaw.
+    // WeakSet: same GC rationale as lastKnownWidths.
+    this.seenDivs = /* @__PURE__ */ new WeakSet();
+    this.freezeSuppressed = false;
+    // Set to false while the tate view is not the active leaf. Prevents freezing of
+    // viewport-visible divs that receive isIntersecting:false callbacks when the tab
+    // switches away — freezing those divs produces a style.width that may not match
+    // the natural content width, causing a scroll-position shift on re-activation.
+    this.viewActive = true;
+    // Per-paragraph data store. Indexed 1:1 with paragraphs (not DOM children).
+    // Maintained by initRecords() / spliceRecords() / freezeDiv().
+    // Phase 2 read paths use this for off-window paragraphs that have no DOM node.
+    this.paragraphRecords = [];
+    // DOM window state (Phase 2). domStart and domEnd are inclusive indices into paragraphRecords.
+    // In Phase 1 mode (all divs in DOM) domStart = 0, domEnd = paragraphRecords.length - 1.
+    // domEnd = -1 signals "no records loaded yet" (initial state before first setValue).
+    this.domStart = 0;
+    this.domEnd = -1;
+    // Set to non-null in Phase 2b when spacers are inserted into editorEl.
+    // Used by getWindowDiv() to compute the correct child index (offset by +1 for rightSpacer).
+    this.rightSpacer = null;
+    this.leftSpacer = null;
+    // Source of truth for frozen div content, keyed by div identity (not DOM position).
+    // Set by freezeDiv() / setFrozenContent(); read by getSrcLine() and getViewLen().
+    // Identity-keyed so that reads remain correct even after other divs are inserted or
+    // removed (DOM positions shift, but a WeakMap entry stays with its div element).
+    this.frozenSrc = /* @__PURE__ */ new WeakMap();
+    this.frozenViewLen = /* @__PURE__ */ new WeakMap();
+  }
+  // Starts the IntersectionObserver, inserts spacer divs, and begins observing all children.
+  attach() {
+    if (this.observer) return;
+    this.observer = new IntersectionObserver(
+      (entries) => this.onIntersection(entries),
+      {
+        root: this.scrollArea,
+        // 440px margin on each side covers ~10 paragraphs (44px each) outside the viewport.
+        rootMargin: "0px 440px 0px 440px",
+        threshold: 0
+      }
+    );
+    this.initSpacers();
+    this.observeAll();
+  }
+  // Inserts rightSpacer (first child) and leftSpacer (last child) into editorEl.
+  // Both start at width 0 (no off-window paragraphs in Phase 2a/2b; Phase 2c sets real widths).
+  initSpacers() {
+    if (this.rightSpacer) return;
+    const right = document.createElement("div");
+    right.classList.add(SPACER_CLASS);
+    right.style.setProperty("pointer-events", "none");
+    right.style.setProperty("user-select", "none");
+    const left = document.createElement("div");
+    left.classList.add(SPACER_CLASS);
+    left.style.setProperty("pointer-events", "none");
+    left.style.setProperty("user-select", "none");
+    this.editorEl.prepend(right);
+    this.editorEl.append(left);
+    this.rightSpacer = right;
+    this.leftSpacer = left;
+  }
+  // Stops the observer, removes spacers, and cancels all pending freeze timers.
+  detach() {
+    var _a, _b, _c;
+    (_a = this.observer) == null ? void 0 : _a.disconnect();
+    this.observer = null;
+    for (const timer of this.freezeTimers.values()) clearTimeout(timer);
+    this.freezeTimers.clear();
+    this.lastKnownWidths = /* @__PURE__ */ new WeakMap();
+    this.seenDivs = /* @__PURE__ */ new WeakSet();
+    this.frozenSrc = /* @__PURE__ */ new WeakMap();
+    this.frozenViewLen = /* @__PURE__ */ new WeakMap();
+    this.viewActive = true;
+    this.paragraphRecords.length = 0;
+    this.domStart = 0;
+    this.domEnd = -1;
+    (_b = this.rightSpacer) == null ? void 0 : _b.remove();
+    (_c = this.leftSpacer) == null ? void 0 : _c.remove();
+    this.rightSpacer = null;
+    this.leftSpacer = null;
+  }
+  // Registers all current paragraph children with the observer (call after setValue).
+  // Skips spacer divs (SPACER_CLASS) because they have no content and measuring them is meaningless.
+  // If tate-scroll-restoring is active, real widths are available via getBoundingClientRect.
+  // Capturing them here marks every div as seen and stores an accurate width, making all
+  // paragraphs immediately eligible for freezing once the class is removed.
+  observeAll() {
+    if (!this.observer) return;
+    this.observer.disconnect();
+    const captureWidths = this.editorEl.classList.contains("tate-scroll-restoring");
+    for (const child of Array.from(this.editorEl.children)) {
+      if (child instanceof HTMLElement && child.classList.contains(SPACER_CLASS)) continue;
+      this.observer.observe(child);
+      if (captureWidths && child instanceof HTMLElement) {
+        const w = child.getBoundingClientRect().width;
+        if (w > 0) {
+          this.seenDivs.add(child);
+          this.lastKnownWidths.set(child, w);
+        }
+      }
+    }
+  }
+  // Unobserves then re-observes all paragraph children (skips spacers), forcing the
+  // IntersectionObserver to fire fresh callbacks. Call after tate-scroll-restoring is removed
+  // so divs that are now off-screen (but seenDivs-eligible) get their freeze timers scheduled.
+  reobserveAll() {
+    if (!this.observer) return;
+    for (const child of Array.from(this.editorEl.children)) {
+      if (child instanceof HTMLElement && child.classList.contains(SPACER_CLASS)) continue;
+      this.observer.unobserve(child);
+      this.observer.observe(child);
+    }
+  }
+  // Registers a single div with the observer (call after patchParagraphs inserts a new div).
+  observeOne(div) {
+    var _a;
+    (_a = this.observer) == null ? void 0 : _a.observe(div);
+  }
+  // Unobserves then re-observes a single div, forcing the IntersectionObserver to fire a
+  // fresh callback for it. Call after tate-layout-refreshing is removed for a div that was
+  // off-screen throughout the mutation, so off-screen divs get their freeze rescheduled with
+  // an accurate width (from the contain-intrinsic-block-size cache updated by Frame N).
+  // Skips divs that are no longer in the editor (removed between schedule and fire).
+  reobserveOne(div) {
+    if (!this.observer) return;
+    if (!this.editorEl.contains(div)) return;
+    this.observer.unobserve(div);
+    this.observer.observe(div);
+  }
+  // Initializes paragraphRecords from content lines and resets the window to span all records.
+  // Call from EditorElement.setValue() and the patchParagraphs fallback after replaceChildren.
+  // width is 0 for all entries (updated to the measured value when the div is first frozen).
+  initRecords(lines) {
+    this.paragraphRecords.length = 0;
+    for (const line of lines) {
+      this.paragraphRecords.push({
+        src: line,
+        viewLen: this.buildParagraphVisibleText(line).length,
+        width: 0
+      });
+    }
+    this.domStart = 0;
+    this.domEnd = this.paragraphRecords.length - 1;
+  }
+  // Mirrors the DOM splice performed by patchParagraphs, keeping paragraphRecords in sync.
+  // lo: first changed index; deleteCount: number of old records to remove;
+  // newLines: replacement Aozora source lines (may be a different count than deleteCount).
+  spliceRecords(lo, deleteCount, newLines) {
+    const newRecords = newLines.map((src) => ({
+      src,
+      viewLen: this.buildParagraphVisibleText(src).length,
+      width: 0
+    }));
+    this.paragraphRecords.splice(lo, deleteCount, ...newRecords);
+  }
+  // Returns the Aozora source for the paragraph at index i. O(1).
+  getSrcByIndex(i) {
+    var _a, _b;
+    return (_b = (_a = this.paragraphRecords[i]) == null ? void 0 : _a.src) != null ? _b : "";
+  }
+  // Returns the visible character count for the paragraph at index i. O(1).
+  getViewLenByIndex(i) {
+    var _a, _b;
+    return (_b = (_a = this.paragraphRecords[i]) == null ? void 0 : _a.viewLen) != null ? _b : 0;
+  }
+  // Returns true if paragraph i is currently in the DOM window.
+  isInWindow(i) {
+    return i >= this.domStart && i <= this.domEnd;
+  }
+  // Returns the DOM div for paragraph i, or null if i is outside the DOM window.
+  // spacerOffset is 1 when rightSpacer occupies children[0]; 0 otherwise.
+  getWindowDiv(i) {
+    var _a;
+    if (!this.isInWindow(i)) return null;
+    const spacerOffset = this.rightSpacer ? 1 : 0;
+    return (_a = this.editorEl.children[i - this.domStart + spacerOffset]) != null ? _a : null;
+  }
+  // Ensures paragraph i is in the DOM window. No-op in Phase 2a (all divs are in-window).
+  // Phase 2c replaces this with the actual window-shift logic.
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  ensureInWindow(_i) {
+  }
+  // Returns true if div is currently frozen (has the tate-frozen class).
+  isFrozen(div) {
+    return div.classList.contains(FROZEN_CLASS);
+  }
+  // Sets the frozen content for a div in frozenSrc / frozenViewLen.
+  // Called by freezeDiv() internally. Also exposed for test helpers that create frozen
+  // divs directly (outside the normal freeze/thaw lifecycle).
+  setFrozenContent(div, src, viewLen) {
+    this.frozenSrc.set(div, src);
+    this.frozenViewLen.set(div, viewLen);
+  }
+  // Returns the Aozora source line for a div.
+  // Frozen div: reads from frozenSrc (keyed by div identity, O(1), correct after DOM shifts).
+  // Real div: serializes child nodes.
+  getSrcLine(div) {
+    var _a;
+    if (div.classList.contains(FROZEN_CLASS)) {
+      return (_a = this.frozenSrc.get(div)) != null ? _a : "";
+    }
+    return Array.from(div.childNodes).map((n) => serializeNode(n, this.editorEl)).join("");
+  }
+  // Returns the visible character count for a div.
+  // Frozen div: reads from frozenViewLen (keyed by div identity, O(1), correct after DOM shifts).
+  // Real div: walks text nodes.
+  getViewLen(div) {
+    var _a;
+    if (div.classList.contains(FROZEN_CLASS)) {
+      return (_a = this.frozenViewLen.get(div)) != null ? _a : 0;
+    }
+    return computeDivViewLen(div, this.editorEl);
+  }
+  // Thaws a frozen div: restores real DOM content from paragraphRecords and re-registers with observer.
+  thawDiv(div) {
+    if (!div.classList.contains(FROZEN_CLASS)) return;
+    this.cancelFreeze(div);
+    const src = this.getSrcLine(div);
+    div.classList.remove(FROZEN_CLASS);
+    div.style.removeProperty("width");
+    div.style.removeProperty("contain-intrinsic-block-size");
+    div.replaceChildren((0, import_obsidian3.sanitizeHTMLToDom)(parseInlineToHtml(src) || "<br>"));
+    this.observeOne(div);
+  }
+  // Removes frozen state markers without reconstructing DOM (for patchParagraphs, which will
+  // immediately replace children itself — avoids a double replaceChildren).
+  unfrostDiv(div) {
+    if (!div.classList.contains(FROZEN_CLASS)) return;
+    this.cancelFreeze(div);
+    div.classList.remove(FROZEN_CLASS);
+    div.style.removeProperty("width");
+    div.style.removeProperty("contain-intrinsic-block-size");
+  }
+  // Thaws the given div and up to neighborCount divs on each side.
+  ensureThawed(div, neighborCount = 10) {
+    this.thawDiv(div);
+    let prev = div.previousElementSibling;
+    for (let i = 0; i < neighborCount && prev; i++, prev = prev.previousElementSibling) {
+      if (prev instanceof HTMLElement) this.thawDiv(prev);
+    }
+    let next = div.nextElementSibling;
+    for (let i = 0; i < neighborCount && next; i++, next = next.nextElementSibling) {
+      if (next instanceof HTMLElement) this.thawDiv(next);
+    }
+  }
+  // Thaws the paragraph containing the cursor and its neighbors. Called on selectionchange.
+  ensureThawedAtCursor() {
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return;
+    let node = sel.getRangeAt(0).startContainer;
+    while (node && node !== this.editorEl) {
+      if (node instanceof HTMLElement && node.parentElement === this.editorEl) {
+        this.ensureThawed(node, 10);
+        return;
+      }
+      node = node.parentElement;
+    }
+  }
+  // Toggles freeze suppression. When suppressed, no divs will be frozen.
+  // Used by SearchPanel (suppress while open, resume on close).
+  suppressFreeze(value) {
+    this.freezeSuppressed = value;
+  }
+  // Called when the tate view loses focus (another leaf becomes active).
+  // Suppresses freeze and cancels pending timers so that viewport-visible divs
+  // that receive isIntersecting:false during the tab switch are not frozen with
+  // potentially inaccurate widths (inactive-tab layout may differ).
+  onViewDeactivated() {
+    this.viewActive = false;
+    this.cancelAllPendingFreezeTimers();
+  }
+  // Called when the tate view becomes the active leaf again.
+  // Re-enables freeze and cancels any stale timers that were scheduled during
+  // the inactive period so they do not fire and freeze now-visible divs.
+  onViewActivated() {
+    this.viewActive = true;
+    this.cancelAllPendingFreezeTimers();
+  }
+  // Returns true if the given div may be frozen.
+  shouldFreeze(div) {
+    if (this.freezeSuppressed) return false;
+    if (!this.viewActive) return false;
+    if (this.editorEl.classList.contains("tate-scroll-restoring")) return false;
+    if (div.classList.contains("tate-layout-refreshing")) return false;
+    if (!this.editorEl.contains(div)) return false;
+    const sel = window.getSelection();
+    if (sel && sel.rangeCount > 0 && div.contains(sel.getRangeAt(0).startContainer)) return false;
+    if (div.querySelector(".tate-editing")) return false;
+    return true;
+  }
+  // Computes visible text for an Aozora source line (for SearchPanel text extraction on frozen divs).
+  // For every segment: take viewLen visible characters starting at srcStart.
+  // ruby-explicit is the only exception: it has a leading ｜ marker (+1 offset before the base text).
+  buildParagraphVisibleText(src) {
+    const segs = buildSegmentMap(src);
+    const result = [];
+    for (const seg of segs) {
+      if (seg.viewLen === 0) continue;
+      const start = seg.kind === "ruby-explicit" ? seg.srcStart + 1 : seg.srcStart;
+      result.push(src.slice(start, start + seg.viewLen));
+    }
+    return result.join("");
+  }
+  // Returns the index of div in editorEl.children, or -1 if not found.
+  // Used by freezeDiv() to sync paragraphRecords[idx] when a div is frozen (O(N) scan;
+  // acceptable because freezeDiv fires at most once per div after a 50ms timer delay).
+  indexOfDiv(div) {
+    for (let i = 0; i < this.editorEl.children.length; i++) {
+      if (this.editorEl.children[i] === div) return i;
+    }
+    return -1;
+  }
+  // Cancels all pending freeze timers without touching lastKnownWidths, preserving
+  // accurate widths for the next freeze cycle. Used by onViewDeactivated/onViewActivated.
+  cancelAllPendingFreezeTimers() {
+    for (const timer of this.freezeTimers.values()) clearTimeout(timer);
+    this.freezeTimers.clear();
+  }
+  scheduleFreeze(div) {
+    if (div.classList.contains(FROZEN_CLASS)) return;
+    if (this.freezeTimers.has(div)) return;
+    const timer = setTimeout(() => {
+      this.freezeTimers.delete(div);
+      this.freezeDiv(div);
+    }, FREEZE_DELAY_MS);
+    this.freezeTimers.set(div, timer);
+  }
+  cancelFreeze(div) {
+    const timer = this.freezeTimers.get(div);
+    if (timer !== void 0) {
+      clearTimeout(timer);
+      this.freezeTimers.delete(div);
+    }
+    this.lastKnownWidths.delete(div);
+  }
+  freezeDiv(div) {
+    var _a;
+    if (div.classList.contains(FROZEN_CLASS)) return;
+    if (!this.shouldFreeze(div)) return;
+    if (!this.seenDivs.has(div)) return;
+    const src = this.getSrcLine(div);
+    const viewLen = this.buildParagraphVisibleText(src).length;
+    const pixelWidth = (_a = this.lastKnownWidths.get(div)) != null ? _a : 0;
+    this.setFrozenContent(div, src, viewLen);
+    const idx = this.indexOfDiv(div);
+    if (idx >= 0 && this.paragraphRecords[idx] !== void 0) {
+      this.paragraphRecords[idx].src = src;
+      this.paragraphRecords[idx].viewLen = viewLen;
+      this.paragraphRecords[idx].width = pixelWidth;
+    }
+    if (pixelWidth > 0) div.style.setProperty("width", `${pixelWidth}px`);
+    div.replaceChildren();
+    div.classList.add(FROZEN_CLASS);
+  }
+  onIntersection(entries) {
+    for (const entry of entries) {
+      const div = entry.target;
+      if (entry.isIntersecting) {
+        this.seenDivs.add(div);
+        this.cancelFreeze(div);
+        if (div.classList.contains(FROZEN_CLASS)) this.thawDiv(div);
+      } else {
+        if (!div.classList.contains(FROZEN_CLASS)) {
+          const w = entry.boundingClientRect.width;
+          if (w > 0) this.lastKnownWidths.set(div, w);
+          this.scheduleFreeze(div);
+        }
+      }
+    }
+  }
+};
+
 // src/ui/EditorElement.ts
 var EditorElement = class {
   constructor(container) {
@@ -1960,6 +2352,17 @@ var EditorElement = class {
     }
     return parts.join("");
   }
+  // Replaces paragraph content while preserving rightSpacer and leftSpacer.
+  // The fragment's childNodes are moved into editorEl between the two spacers (if present).
+  replaceEditorContent(frag) {
+    const virt = this.virtualizer;
+    if ((virt == null ? void 0 : virt.rightSpacer) && virt.leftSpacer) {
+      const nodes = Array.from(frag.childNodes);
+      this.el.replaceChildren(virt.rightSpacer, ...nodes, virt.leftSpacer);
+    } else {
+      this.el.replaceChildren(frag);
+    }
+  }
   setValue(content, preserveCursor) {
     var _a, _b, _c;
     content = content.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
@@ -1967,11 +2370,11 @@ var EditorElement = class {
     if (this.getValue() === content && this.el.childNodes.length > 0) return;
     if (preserveCursor && document.activeElement === this.el) {
       const pos = this.getVisibleOffset();
-      this.el.replaceChildren((0, import_obsidian3.sanitizeHTMLToDom)(parseToHtml(content)));
+      this.replaceEditorContent((0, import_obsidian4.sanitizeHTMLToDom)(parseToHtml(content)));
       (_a = this.virtualizer) == null ? void 0 : _a.initRecords(content.split("\n"));
       this.setVisibleOffset(pos);
     } else {
-      this.el.replaceChildren((0, import_obsidian3.sanitizeHTMLToDom)(parseToHtml(content)));
+      this.replaceEditorContent((0, import_obsidian4.sanitizeHTMLToDom)(parseToHtml(content)));
       (_b = this.virtualizer) == null ? void 0 : _b.initRecords(content.split("\n"));
     }
     (_c = this.virtualizer) == null ? void 0 : _c.observeAll();
@@ -2127,7 +2530,7 @@ var EditorElement = class {
   insertParsedInline(range, line) {
     const sel = window.getSelection();
     if (line) {
-      const frag = (0, import_obsidian3.sanitizeHTMLToDom)(parseInlineToHtml(line));
+      const frag = (0, import_obsidian4.sanitizeHTMLToDom)(parseInlineToHtml(line));
       for (const node of Array.from(frag.childNodes)) {
         range.insertNode(node);
         range.setStartAfter(node);
@@ -2142,16 +2545,16 @@ var EditorElement = class {
   // each remaining line becomes a new <div>, and after-cursor content moves to the last.
   // Returns newly created <div>s that may be off-screen and need a layout cache refresh.
   insertParsedParagraphs(range, lines) {
-    var _a;
+    var _a, _b, _c;
     const sel = window.getSelection();
     const paragraphDiv = this.findParagraphDiv(range.startContainer);
     if (!this.inlineEditor.isExpanded() && range.startContainer === this.el) {
-      const refNode = (_a = this.el.childNodes[range.startOffset]) != null ? _a : null;
+      const refNode = (_c = (_b = this.el.childNodes[range.startOffset]) != null ? _b : (_a = this.virtualizer) == null ? void 0 : _a.leftSpacer) != null ? _c : null;
       const newDivs2 = [];
       let lastDiv = null;
       for (const line of lines) {
         const div = document.createElement("div");
-        div.replaceChildren((0, import_obsidian3.sanitizeHTMLToDom)(parseInlineToHtml(line) || "<br>"));
+        div.replaceChildren((0, import_obsidian4.sanitizeHTMLToDom)(parseInlineToHtml(line) || "<br>"));
         this.el.insertBefore(div, refNode);
         newDivs2.push(div);
         lastDiv = div;
@@ -2174,7 +2577,7 @@ var EditorElement = class {
           range.collapse(true);
         }
         if (lines[i]) {
-          const frag = (0, import_obsidian3.sanitizeHTMLToDom)(parseInlineToHtml(lines[i]));
+          const frag = (0, import_obsidian4.sanitizeHTMLToDom)(parseInlineToHtml(lines[i]));
           for (const node of Array.from(frag.childNodes)) {
             range.insertNode(node);
             range.setStartAfter(node);
@@ -2196,7 +2599,7 @@ var EditorElement = class {
     for (const n of Array.from(afterFragment.childNodes)) {
       if (n instanceof Text && n.data === "") n.remove();
     }
-    const firstFrag = (0, import_obsidian3.sanitizeHTMLToDom)(parseInlineToHtml(lines[0]));
+    const firstFrag = (0, import_obsidian4.sanitizeHTMLToDom)(parseInlineToHtml(lines[0]));
     paragraphDiv.append(...Array.from(firstFrag.childNodes));
     ensureBrPlaceholder(paragraphDiv);
     let insertAfter = paragraphDiv;
@@ -2204,7 +2607,7 @@ var EditorElement = class {
     const newDivs = [];
     for (let i = 1; i < lines.length; i++) {
       const div = document.createElement("div");
-      const lineFrag = (0, import_obsidian3.sanitizeHTMLToDom)(parseInlineToHtml(lines[i]));
+      const lineFrag = (0, import_obsidian4.sanitizeHTMLToDom)(parseInlineToHtml(lines[i]));
       const lineNodes = Array.from(lineFrag.childNodes);
       div.append(...lineNodes);
       lastPastedNode = lineNodes.length > 0 ? lineNodes[lineNodes.length - 1] : null;
@@ -2240,10 +2643,14 @@ var EditorElement = class {
   }
   // Restores a minimal <div><br></div> if Chrome deleted all paragraph divs (e.g., Backspace on last char).
   normalizeEmptyDom() {
-    if (this.el.childNodes.length > 0) return;
+    var _a, _b;
+    const spacerCount = ((_a = this.virtualizer) == null ? void 0 : _a.rightSpacer) ? 2 : 0;
+    if (this.el.childNodes.length > spacerCount) return;
     const div = document.createElement("div");
     div.appendChild(document.createElement("br"));
-    this.el.appendChild(div);
+    const leftSpacer = (_b = this.virtualizer) == null ? void 0 : _b.leftSpacer;
+    if (leftSpacer) this.el.insertBefore(div, leftSpacer);
+    else this.el.appendChild(div);
     const range = document.createRange();
     range.setStart(div, 0);
     range.collapse(true);
@@ -2254,17 +2661,27 @@ var EditorElement = class {
     }
   }
   // Removes any <div></div> children left by Chrome's native cut-line behavior.
-  // Called from the input handler when inputType === 'deleteByCut'.
+  // Skips spacer divs (SPACER_CLASS) which are permanent fixtures.
   cleanupEmptyParagraphDivs() {
     for (const child of Array.from(this.el.childNodes)) {
-      if (child instanceof HTMLElement && child.tagName === "DIV" && isEffectivelyEmpty(child))
-        child.remove();
+      if (!(child instanceof HTMLElement)) continue;
+      if (child.classList.contains(SPACER_CLASS)) continue;
+      if (child.tagName === "DIV" && isEffectivelyEmpty(child)) child.remove();
     }
   }
   // Clears all content and shows the placeholder (used when no file is active).
+  // Preserves spacer divs that are permanent fixtures of the editorEl.
   clearContent() {
+    var _a;
     this.inlineEditor.reset();
-    this.el.replaceChildren();
+    const virt = this.virtualizer;
+    if ((virt == null ? void 0 : virt.rightSpacer) && virt.leftSpacer) {
+      for (const child of Array.from(this.el.childNodes)) {
+        if (child !== virt.rightSpacer && child !== virt.leftSpacer) (_a = child.parentNode) == null ? void 0 : _a.removeChild(child);
+      }
+    } else {
+      this.el.replaceChildren();
+    }
   }
   applySettings(settings) {
     this.el.style.fontFamily = settings.fontFamily;
@@ -2362,6 +2779,12 @@ var EditorElement = class {
     this.setVisibleOffset(viewOffset);
     return changedDivs;
   }
+  // Returns the el.children index for paragraph at logical index i.
+  // With spacers: rightSpacer is at children[0], so paragraphs start at children[1].
+  paragraphChildIndex(i) {
+    var _a;
+    return i + (((_a = this.virtualizer) == null ? void 0 : _a.rightSpacer) ? 1 : 0);
+  }
   // Updates paragraph divs to match nextContent, replacing only divs whose line changed.
   // Returns the changed/added divs, or null if hasCleanDivStructure failed (full rebuild).
   patchParagraphs(prevContent, nextContent) {
@@ -2370,7 +2793,7 @@ var EditorElement = class {
     const nextLines = nextContent ? nextContent.split("\n") : [""];
     const el = this.el;
     if (!this.hasCleanDivStructure(prevLines.length)) {
-      el.replaceChildren((0, import_obsidian3.sanitizeHTMLToDom)(parseToHtml(nextContent)));
+      this.replaceEditorContent((0, import_obsidian4.sanitizeHTMLToDom)(parseToHtml(nextContent)));
       (_a = this.virtualizer) == null ? void 0 : _a.initRecords(nextLines);
       (_b = this.virtualizer) == null ? void 0 : _b.observeAll();
       return null;
@@ -2383,36 +2806,38 @@ var EditorElement = class {
     while (suf < P - lo && suf < N - lo && prevLines[P - 1 - suf] === nextLines[N - 1 - suf]) suf++;
     const hiPrev = P - suf;
     const hiNext = N - suf;
-    const suffixAnchor = (_c = el.children[hiPrev]) != null ? _c : null;
+    const suffixAnchor = (_c = el.children[this.paragraphChildIndex(hiPrev)]) != null ? _c : null;
     const insertCount = hiNext - hiPrev;
     if (insertCount > 0) {
       for (let i = 0; i < insertCount; i++)
         el.insertBefore(document.createElement("div"), suffixAnchor);
     } else {
       for (let i = 0; i < -insertCount; i++)
-        el.removeChild(el.children[lo]);
+        el.removeChild(el.children[this.paragraphChildIndex(lo)]);
     }
     const changedDivs = [];
     for (let i = lo; i < hiNext; i++) {
-      const div = el.children[i];
+      const div = el.children[this.paragraphChildIndex(i)];
       (_d = this.virtualizer) == null ? void 0 : _d.unfrostDiv(div);
       const html = parseInlineToHtml(nextLines[i]) || "<br>";
-      div.replaceChildren((0, import_obsidian3.sanitizeHTMLToDom)(html));
+      div.replaceChildren((0, import_obsidian4.sanitizeHTMLToDom)(html));
       (_e = this.virtualizer) == null ? void 0 : _e.observeOne(div);
       changedDivs.push(div);
     }
     for (let i = 0; i < lo; i++)
-      if (nextLines[i] === "") ensureBrPlaceholder(el.children[i]);
+      if (nextLines[i] === "") ensureBrPlaceholder(el.children[this.paragraphChildIndex(i)]);
     for (let i = hiNext; i < N; i++)
-      if (nextLines[i] === "") ensureBrPlaceholder(el.children[i]);
+      if (nextLines[i] === "") ensureBrPlaceholder(el.children[this.paragraphChildIndex(i)]);
     (_f = this.virtualizer) == null ? void 0 : _f.spliceRecords(lo, hiPrev - lo, nextLines.slice(lo, hiNext));
     return changedDivs;
   }
-  // Returns true iff el.childNodes consists of exactly expectedCount <div> elements.
-  // Used by patchParagraphs to detect DOM structure corruption (e.g. bare text nodes
-  // or <br>s inserted directly into the editor by the paste fallback path).
+  // Returns true iff el.childNodes consists of exactly expectedCount paragraph <div> elements
+  // (plus the two spacer divs if spacers are present). Used by patchParagraphs to detect DOM
+  // structure corruption (e.g. bare text nodes or <br>s inserted directly into the editor).
   hasCleanDivStructure(expectedCount) {
-    if (this.el.childNodes.length !== expectedCount) return false;
+    var _a;
+    const spacerCount = ((_a = this.virtualizer) == null ? void 0 : _a.rightSpacer) ? 2 : 0;
+    if (this.el.childNodes.length !== expectedCount + spacerCount) return false;
     for (const node of Array.from(this.el.childNodes)) {
       if (!(node instanceof HTMLElement) || node.tagName !== "DIV") return false;
     }
@@ -2613,7 +3038,7 @@ var EditorElement = class {
 };
 
 // src/ui/SearchPanel.ts
-var import_obsidian4 = require("obsidian");
+var import_obsidian5 = require("obsidian");
 function visibleToRawOffset(node, visibleOffset) {
   var _a;
   const text = (_a = node.textContent) != null ? _a : "";
@@ -2739,7 +3164,7 @@ var SearchPanel = class {
     // When true: tate-search-focus is hidden, and close() skips cursor restore.
     this.editorFocused = false;
     this.commitCallback = null;
-    this.searchScope = new import_obsidian4.Scope(app.scope);
+    this.searchScope = new import_obsidian5.Scope(app.scope);
     editorElementRef.el.addEventListener("mousedown", () => {
       if (!this.isOpen) return;
       this.editorFocused = true;
@@ -2831,12 +3256,12 @@ var SearchPanel = class {
   showReplaceRow() {
     var _a;
     (_a = this.replaceRowEl) == null ? void 0 : _a.classList.add("tate-replace-visible");
-    if (this.toggleBtnEl) (0, import_obsidian4.setIcon)(this.toggleBtnEl, "chevron-down");
+    if (this.toggleBtnEl) (0, import_obsidian5.setIcon)(this.toggleBtnEl, "chevron-down");
   }
   hideReplaceRow() {
     var _a;
     (_a = this.replaceRowEl) == null ? void 0 : _a.classList.remove("tate-replace-visible");
-    if (this.toggleBtnEl) (0, import_obsidian4.setIcon)(this.toggleBtnEl, "chevron-right");
+    if (this.toggleBtnEl) (0, import_obsidian5.setIcon)(this.toggleBtnEl, "chevron-right");
   }
   toggleReplaceRow() {
     var _a;
@@ -2872,7 +3297,7 @@ var SearchPanel = class {
     const toggleBtn = document.createElement("button");
     toggleBtn.className = "tate-search-toggle";
     toggleBtn.tabIndex = -1;
-    (0, import_obsidian4.setIcon)(toggleBtn, expandReplace ? "chevron-down" : "chevron-right");
+    (0, import_obsidian5.setIcon)(toggleBtn, expandReplace ? "chevron-down" : "chevron-right");
     toggleBtn.setAttribute("aria-label", "\u7F6E\u63DB\u6B04\u3092\u8868\u793A");
     toggleBtn.addEventListener("click", () => this.toggleReplaceRow());
     this.toggleBtnEl = toggleBtn;
@@ -2903,19 +3328,19 @@ var SearchPanel = class {
     nextBtn.className = "tate-search-btn";
     nextBtn.tabIndex = -1;
     nextBtn.setAttribute("aria-label", "\u6B21\u3078");
-    (0, import_obsidian4.setIcon)(nextBtn, "arrow-down");
+    (0, import_obsidian5.setIcon)(nextBtn, "arrow-down");
     nextBtn.addEventListener("click", () => this.navigate(1));
     const prevBtn = document.createElement("button");
     prevBtn.className = "tate-search-btn";
     prevBtn.tabIndex = -1;
     prevBtn.setAttribute("aria-label", "\u524D\u3078");
-    (0, import_obsidian4.setIcon)(prevBtn, "arrow-up");
+    (0, import_obsidian5.setIcon)(prevBtn, "arrow-up");
     prevBtn.addEventListener("click", () => this.navigate(-1));
     const closeBtn = document.createElement("button");
     closeBtn.className = "tate-search-btn";
     closeBtn.tabIndex = -1;
     closeBtn.setAttribute("aria-label", "\u9589\u3058\u308B");
-    (0, import_obsidian4.setIcon)(closeBtn, "x");
+    (0, import_obsidian5.setIcon)(closeBtn, "x");
     closeBtn.addEventListener("click", () => this.close());
     searchRow.append(toggleBtn, input, count, nextBtn, prevBtn, closeBtn);
     const replaceRow = document.createElement("div");
@@ -2934,13 +3359,13 @@ var SearchPanel = class {
     replaceBtn.className = "tate-search-btn";
     replaceBtn.tabIndex = -1;
     replaceBtn.setAttribute("aria-label", "\u7F6E\u63DB");
-    (0, import_obsidian4.setIcon)(replaceBtn, "replace");
+    (0, import_obsidian5.setIcon)(replaceBtn, "replace");
     replaceBtn.addEventListener("click", () => this.replaceCurrentMatch());
     const replaceAllBtn = document.createElement("button");
     replaceAllBtn.className = "tate-search-btn";
     replaceAllBtn.tabIndex = -1;
     replaceAllBtn.setAttribute("aria-label", "\u5168\u7F6E\u63DB");
-    (0, import_obsidian4.setIcon)(replaceAllBtn, "replace-all");
+    (0, import_obsidian5.setIcon)(replaceAllBtn, "replace-all");
     replaceAllBtn.addEventListener("click", () => this.replaceAllMatches());
     const replaceBtnGroup = document.createElement("div");
     replaceBtnGroup.className = "tate-replace-btn-group";
@@ -2960,7 +3385,7 @@ var SearchPanel = class {
     const segs = buildSegmentMap(srcLine);
     const newSrc = buildReplacedSrc(srcLine, segs, entry.localStart, entry.localEnd, replacement);
     this.virtualizer.unfrostDiv(entry.div);
-    entry.div.replaceChildren((0, import_obsidian4.sanitizeHTMLToDom)(parseInlineToHtml(newSrc) || "<br>"));
+    entry.div.replaceChildren((0, import_obsidian5.sanitizeHTMLToDom)(parseInlineToHtml(newSrc) || "<br>"));
     this.virtualizer.observeOne(entry.div);
     (_c = this.commitCallback) == null ? void 0 : _c.call(this);
     const nextIndex = this.currentIndex;
@@ -2988,7 +3413,7 @@ var SearchPanel = class {
         srcLine = buildReplacedSrc(srcLine, segs, entry.localStart, entry.localEnd, replacement);
       }
       this.virtualizer.unfrostDiv(div);
-      div.replaceChildren((0, import_obsidian4.sanitizeHTMLToDom)(parseInlineToHtml(srcLine) || "<br>"));
+      div.replaceChildren((0, import_obsidian5.sanitizeHTMLToDom)(parseInlineToHtml(srcLine) || "<br>"));
       this.virtualizer.observeOne(div);
     }
     this.virtualizer.initRecords(this.editorElementRef.getValue().split("\n"));
@@ -3184,373 +3609,6 @@ var SearchPanel = class {
     } else {
       this.countEl.textContent = `${this.currentIndex + 1}/${this.matchEntries.length}`;
       this.countEl.classList.remove("tate-search-no-match");
-    }
-  }
-};
-
-// src/ui/ParagraphVirtualizer.ts
-var import_obsidian5 = require("obsidian");
-var FROZEN_CLASS = "tate-frozen";
-var FREEZE_DELAY_MS = 50;
-var ParagraphVirtualizer = class {
-  constructor(editorEl, scrollArea) {
-    this.editorEl = editorEl;
-    this.scrollArea = scrollArea;
-    this.observer = null;
-    this.freezeTimers = /* @__PURE__ */ new Map();
-    // Pixel widths captured in onIntersection (no layout flush needed) and applied as
-    // style.width when freezing, so the scroll container does not change width when a
-    // div's real content is removed.
-    // WeakMap: deleted div elements are GC-eligible even if not explicitly removed here
-    // (e.g. after patchParagraphs replaces the DOM without calling unfrostDiv).
-    this.lastKnownWidths = /* @__PURE__ */ new WeakMap();
-    // Divs that have entered the viewport at least once (rendered by the browser).
-    // Only seen divs are eligible for freezing: a never-seen div has no accurate width
-    // measurement (content-visibility:auto returns the 44px fallback for such divs),
-    // so freezing it would produce the wrong style.width and cause a layout shift on thaw.
-    // WeakSet: same GC rationale as lastKnownWidths.
-    this.seenDivs = /* @__PURE__ */ new WeakSet();
-    this.freezeSuppressed = false;
-    // Set to false while the tate view is not the active leaf. Prevents freezing of
-    // viewport-visible divs that receive isIntersecting:false callbacks when the tab
-    // switches away — freezing those divs produces a style.width that may not match
-    // the natural content width, causing a scroll-position shift on re-activation.
-    this.viewActive = true;
-    // Per-paragraph data store. Indexed 1:1 with paragraphs (not DOM children).
-    // Maintained by initRecords() / spliceRecords() / freezeDiv().
-    // Phase 2 read paths use this for off-window paragraphs that have no DOM node.
-    this.paragraphRecords = [];
-    // DOM window state (Phase 2). domStart and domEnd are inclusive indices into paragraphRecords.
-    // In Phase 1 mode (all divs in DOM) domStart = 0, domEnd = paragraphRecords.length - 1.
-    // domEnd = -1 signals "no records loaded yet" (initial state before first setValue).
-    this.domStart = 0;
-    this.domEnd = -1;
-    // Set to non-null in Phase 2b when spacers are inserted into editorEl.
-    // Used by getWindowDiv() to compute the correct child index (offset by +1 for rightSpacer).
-    this.rightSpacer = null;
-    this.leftSpacer = null;
-    // Source of truth for frozen div content, keyed by div identity (not DOM position).
-    // Set by freezeDiv() / setFrozenContent(); read by getSrcLine() and getViewLen().
-    // Identity-keyed so that reads remain correct even after other divs are inserted or
-    // removed (DOM positions shift, but a WeakMap entry stays with its div element).
-    this.frozenSrc = /* @__PURE__ */ new WeakMap();
-    this.frozenViewLen = /* @__PURE__ */ new WeakMap();
-  }
-  // Starts the IntersectionObserver and begins observing all current children.
-  attach() {
-    if (this.observer) return;
-    this.observer = new IntersectionObserver(
-      (entries) => this.onIntersection(entries),
-      {
-        root: this.scrollArea,
-        // 440px margin on each side covers ~10 paragraphs (44px each) outside the viewport.
-        rootMargin: "0px 440px 0px 440px",
-        threshold: 0
-      }
-    );
-    this.observeAll();
-  }
-  // Stops the observer and cancels all pending freeze timers.
-  detach() {
-    var _a;
-    (_a = this.observer) == null ? void 0 : _a.disconnect();
-    this.observer = null;
-    for (const timer of this.freezeTimers.values()) clearTimeout(timer);
-    this.freezeTimers.clear();
-    this.lastKnownWidths = /* @__PURE__ */ new WeakMap();
-    this.seenDivs = /* @__PURE__ */ new WeakSet();
-    this.frozenSrc = /* @__PURE__ */ new WeakMap();
-    this.frozenViewLen = /* @__PURE__ */ new WeakMap();
-    this.viewActive = true;
-    this.paragraphRecords.length = 0;
-    this.domStart = 0;
-    this.domEnd = -1;
-  }
-  // Registers all current editorEl children with the observer (call after setValue).
-  // If tate-scroll-restoring is active, content-visibility:visible is in effect for all
-  // divs, so their real widths are available via getBoundingClientRect. Capturing them here
-  // marks every div as seen and stores an accurate width, making all paragraphs immediately
-  // eligible for freezing once the class is removed.
-  observeAll() {
-    if (!this.observer) return;
-    this.observer.disconnect();
-    const captureWidths = this.editorEl.classList.contains("tate-scroll-restoring");
-    for (const child of Array.from(this.editorEl.children)) {
-      this.observer.observe(child);
-      if (captureWidths && child instanceof HTMLElement) {
-        const w = child.getBoundingClientRect().width;
-        if (w > 0) {
-          this.seenDivs.add(child);
-          this.lastKnownWidths.set(child, w);
-        }
-      }
-    }
-  }
-  // Unobserves then re-observes all children, forcing the IntersectionObserver to fire
-  // fresh callbacks for every div. Call after tate-scroll-restoring is removed so divs
-  // that are now off-screen (but seenDivs-eligible) get their freeze timers scheduled.
-  reobserveAll() {
-    if (!this.observer) return;
-    for (const child of Array.from(this.editorEl.children)) {
-      this.observer.unobserve(child);
-      this.observer.observe(child);
-    }
-  }
-  // Registers a single div with the observer (call after patchParagraphs inserts a new div).
-  observeOne(div) {
-    var _a;
-    (_a = this.observer) == null ? void 0 : _a.observe(div);
-  }
-  // Unobserves then re-observes a single div, forcing the IntersectionObserver to fire a
-  // fresh callback for it. Call after tate-layout-refreshing is removed for a div that was
-  // off-screen throughout the mutation, so off-screen divs get their freeze rescheduled with
-  // an accurate width (from the contain-intrinsic-block-size cache updated by Frame N).
-  // Skips divs that are no longer in the editor (removed between schedule and fire).
-  reobserveOne(div) {
-    if (!this.observer) return;
-    if (!this.editorEl.contains(div)) return;
-    this.observer.unobserve(div);
-    this.observer.observe(div);
-  }
-  // Initializes paragraphRecords from content lines and resets the window to span all records.
-  // Call from EditorElement.setValue() and the patchParagraphs fallback after replaceChildren.
-  // width is 0 for all entries (updated to the measured value when the div is first frozen).
-  initRecords(lines) {
-    this.paragraphRecords.length = 0;
-    for (const line of lines) {
-      this.paragraphRecords.push({
-        src: line,
-        viewLen: this.buildParagraphVisibleText(line).length,
-        width: 0
-      });
-    }
-    this.domStart = 0;
-    this.domEnd = this.paragraphRecords.length - 1;
-  }
-  // Mirrors the DOM splice performed by patchParagraphs, keeping paragraphRecords in sync.
-  // lo: first changed index; deleteCount: number of old records to remove;
-  // newLines: replacement Aozora source lines (may be a different count than deleteCount).
-  spliceRecords(lo, deleteCount, newLines) {
-    const newRecords = newLines.map((src) => ({
-      src,
-      viewLen: this.buildParagraphVisibleText(src).length,
-      width: 0
-    }));
-    this.paragraphRecords.splice(lo, deleteCount, ...newRecords);
-  }
-  // Returns the Aozora source for the paragraph at index i. O(1).
-  getSrcByIndex(i) {
-    var _a, _b;
-    return (_b = (_a = this.paragraphRecords[i]) == null ? void 0 : _a.src) != null ? _b : "";
-  }
-  // Returns the visible character count for the paragraph at index i. O(1).
-  getViewLenByIndex(i) {
-    var _a, _b;
-    return (_b = (_a = this.paragraphRecords[i]) == null ? void 0 : _a.viewLen) != null ? _b : 0;
-  }
-  // Returns true if paragraph i is currently in the DOM window.
-  isInWindow(i) {
-    return i >= this.domStart && i <= this.domEnd;
-  }
-  // Returns the DOM div for paragraph i, or null if i is outside the DOM window.
-  // spacerOffset is 1 when rightSpacer occupies children[0]; 0 otherwise.
-  getWindowDiv(i) {
-    var _a;
-    if (!this.isInWindow(i)) return null;
-    const spacerOffset = this.rightSpacer ? 1 : 0;
-    return (_a = this.editorEl.children[i - this.domStart + spacerOffset]) != null ? _a : null;
-  }
-  // Ensures paragraph i is in the DOM window. No-op in Phase 2a (all divs are in-window).
-  // Phase 2c replaces this with the actual window-shift logic.
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  ensureInWindow(_i) {
-  }
-  // Returns true if div is currently frozen (has the tate-frozen class).
-  isFrozen(div) {
-    return div.classList.contains(FROZEN_CLASS);
-  }
-  // Sets the frozen content for a div in frozenSrc / frozenViewLen.
-  // Called by freezeDiv() internally. Also exposed for test helpers that create frozen
-  // divs directly (outside the normal freeze/thaw lifecycle).
-  setFrozenContent(div, src, viewLen) {
-    this.frozenSrc.set(div, src);
-    this.frozenViewLen.set(div, viewLen);
-  }
-  // Returns the Aozora source line for a div.
-  // Frozen div: reads from frozenSrc (keyed by div identity, O(1), correct after DOM shifts).
-  // Real div: serializes child nodes.
-  getSrcLine(div) {
-    var _a;
-    if (div.classList.contains(FROZEN_CLASS)) {
-      return (_a = this.frozenSrc.get(div)) != null ? _a : "";
-    }
-    return Array.from(div.childNodes).map((n) => serializeNode(n, this.editorEl)).join("");
-  }
-  // Returns the visible character count for a div.
-  // Frozen div: reads from frozenViewLen (keyed by div identity, O(1), correct after DOM shifts).
-  // Real div: walks text nodes.
-  getViewLen(div) {
-    var _a;
-    if (div.classList.contains(FROZEN_CLASS)) {
-      return (_a = this.frozenViewLen.get(div)) != null ? _a : 0;
-    }
-    return computeDivViewLen(div, this.editorEl);
-  }
-  // Thaws a frozen div: restores real DOM content from paragraphRecords and re-registers with observer.
-  thawDiv(div) {
-    if (!div.classList.contains(FROZEN_CLASS)) return;
-    this.cancelFreeze(div);
-    const src = this.getSrcLine(div);
-    div.classList.remove(FROZEN_CLASS);
-    div.style.removeProperty("width");
-    div.style.removeProperty("contain-intrinsic-block-size");
-    div.replaceChildren((0, import_obsidian5.sanitizeHTMLToDom)(parseInlineToHtml(src) || "<br>"));
-    this.observeOne(div);
-  }
-  // Removes frozen state markers without reconstructing DOM (for patchParagraphs, which will
-  // immediately replace children itself — avoids a double replaceChildren).
-  unfrostDiv(div) {
-    if (!div.classList.contains(FROZEN_CLASS)) return;
-    this.cancelFreeze(div);
-    div.classList.remove(FROZEN_CLASS);
-    div.style.removeProperty("width");
-    div.style.removeProperty("contain-intrinsic-block-size");
-  }
-  // Thaws the given div and up to neighborCount divs on each side.
-  ensureThawed(div, neighborCount = 10) {
-    this.thawDiv(div);
-    let prev = div.previousElementSibling;
-    for (let i = 0; i < neighborCount && prev; i++, prev = prev.previousElementSibling) {
-      if (prev instanceof HTMLElement) this.thawDiv(prev);
-    }
-    let next = div.nextElementSibling;
-    for (let i = 0; i < neighborCount && next; i++, next = next.nextElementSibling) {
-      if (next instanceof HTMLElement) this.thawDiv(next);
-    }
-  }
-  // Thaws the paragraph containing the cursor and its neighbors. Called on selectionchange.
-  ensureThawedAtCursor() {
-    const sel = window.getSelection();
-    if (!sel || sel.rangeCount === 0) return;
-    let node = sel.getRangeAt(0).startContainer;
-    while (node && node !== this.editorEl) {
-      if (node instanceof HTMLElement && node.parentElement === this.editorEl) {
-        this.ensureThawed(node, 10);
-        return;
-      }
-      node = node.parentElement;
-    }
-  }
-  // Toggles freeze suppression. When suppressed, no divs will be frozen.
-  // Used by SearchPanel (suppress while open, resume on close).
-  suppressFreeze(value) {
-    this.freezeSuppressed = value;
-  }
-  // Called when the tate view loses focus (another leaf becomes active).
-  // Suppresses freeze and cancels pending timers so that viewport-visible divs
-  // that receive isIntersecting:false during the tab switch are not frozen with
-  // potentially inaccurate widths (inactive-tab layout may differ).
-  onViewDeactivated() {
-    this.viewActive = false;
-    this.cancelAllPendingFreezeTimers();
-  }
-  // Called when the tate view becomes the active leaf again.
-  // Re-enables freeze and cancels any stale timers that were scheduled during
-  // the inactive period so they do not fire and freeze now-visible divs.
-  onViewActivated() {
-    this.viewActive = true;
-    this.cancelAllPendingFreezeTimers();
-  }
-  // Returns true if the given div may be frozen.
-  shouldFreeze(div) {
-    if (this.freezeSuppressed) return false;
-    if (!this.viewActive) return false;
-    if (this.editorEl.classList.contains("tate-scroll-restoring")) return false;
-    if (div.classList.contains("tate-layout-refreshing")) return false;
-    if (!this.editorEl.contains(div)) return false;
-    const sel = window.getSelection();
-    if (sel && sel.rangeCount > 0 && div.contains(sel.getRangeAt(0).startContainer)) return false;
-    if (div.querySelector(".tate-editing")) return false;
-    return true;
-  }
-  // Computes visible text for an Aozora source line (for SearchPanel text extraction on frozen divs).
-  // For every segment: take viewLen visible characters starting at srcStart.
-  // ruby-explicit is the only exception: it has a leading ｜ marker (+1 offset before the base text).
-  buildParagraphVisibleText(src) {
-    const segs = buildSegmentMap(src);
-    const result = [];
-    for (const seg of segs) {
-      if (seg.viewLen === 0) continue;
-      const start = seg.kind === "ruby-explicit" ? seg.srcStart + 1 : seg.srcStart;
-      result.push(src.slice(start, start + seg.viewLen));
-    }
-    return result.join("");
-  }
-  // Returns the index of div in editorEl.children, or -1 if not found.
-  // Used by freezeDiv() to sync paragraphRecords[idx] when a div is frozen (O(N) scan;
-  // acceptable because freezeDiv fires at most once per div after a 50ms timer delay).
-  indexOfDiv(div) {
-    for (let i = 0; i < this.editorEl.children.length; i++) {
-      if (this.editorEl.children[i] === div) return i;
-    }
-    return -1;
-  }
-  // Cancels all pending freeze timers without touching lastKnownWidths, preserving
-  // accurate widths for the next freeze cycle. Used by onViewDeactivated/onViewActivated.
-  cancelAllPendingFreezeTimers() {
-    for (const timer of this.freezeTimers.values()) clearTimeout(timer);
-    this.freezeTimers.clear();
-  }
-  scheduleFreeze(div) {
-    if (div.classList.contains(FROZEN_CLASS)) return;
-    if (this.freezeTimers.has(div)) return;
-    const timer = setTimeout(() => {
-      this.freezeTimers.delete(div);
-      this.freezeDiv(div);
-    }, FREEZE_DELAY_MS);
-    this.freezeTimers.set(div, timer);
-  }
-  cancelFreeze(div) {
-    const timer = this.freezeTimers.get(div);
-    if (timer !== void 0) {
-      clearTimeout(timer);
-      this.freezeTimers.delete(div);
-    }
-    this.lastKnownWidths.delete(div);
-  }
-  freezeDiv(div) {
-    var _a;
-    if (div.classList.contains(FROZEN_CLASS)) return;
-    if (!this.shouldFreeze(div)) return;
-    if (!this.seenDivs.has(div)) return;
-    const src = this.getSrcLine(div);
-    const viewLen = this.buildParagraphVisibleText(src).length;
-    const pixelWidth = (_a = this.lastKnownWidths.get(div)) != null ? _a : 0;
-    this.setFrozenContent(div, src, viewLen);
-    const idx = this.indexOfDiv(div);
-    if (idx >= 0 && this.paragraphRecords[idx] !== void 0) {
-      this.paragraphRecords[idx].src = src;
-      this.paragraphRecords[idx].viewLen = viewLen;
-      this.paragraphRecords[idx].width = pixelWidth;
-    }
-    if (pixelWidth > 0) div.style.setProperty("width", `${pixelWidth}px`);
-    div.replaceChildren();
-    div.classList.add(FROZEN_CLASS);
-  }
-  onIntersection(entries) {
-    for (const entry of entries) {
-      const div = entry.target;
-      if (entry.isIntersecting) {
-        this.seenDivs.add(div);
-        this.cancelFreeze(div);
-        if (div.classList.contains(FROZEN_CLASS)) this.thawDiv(div);
-      } else {
-        if (!div.classList.contains(FROZEN_CLASS)) {
-          const w = entry.boundingClientRect.width;
-          if (w > 0) this.lastKnownWidths.set(div, w);
-          this.scheduleFreeze(div);
-        }
-      }
     }
   }
 };

@@ -5,6 +5,8 @@ import { computeDivViewLen } from './domHelpers';
 
 // Keep export for test helpers (tests use FROZEN_CLASS to create frozen divs directly).
 export const FROZEN_CLASS = 'tate-frozen';
+// CSS class applied to both spacer divs so DOM walkers can skip them.
+export const SPACER_CLASS = 'tate-spacer';
 const FREEZE_DELAY_MS = 50;
 
 export interface ParagraphRecord {
@@ -79,7 +81,7 @@ export class ParagraphVirtualizer {
         private readonly scrollArea: HTMLElement,
     ) {}
 
-    // Starts the IntersectionObserver and begins observing all current children.
+    // Starts the IntersectionObserver, inserts spacer divs, and begins observing all children.
     attach(): void {
         if (this.observer) return;
         this.observer = new IntersectionObserver(
@@ -91,10 +93,29 @@ export class ParagraphVirtualizer {
                 threshold: 0,
             },
         );
+        this.initSpacers();
         this.observeAll();
     }
 
-    // Stops the observer and cancels all pending freeze timers.
+    // Inserts rightSpacer (first child) and leftSpacer (last child) into editorEl.
+    // Both start at width 0 (no off-window paragraphs in Phase 2a/2b; Phase 2c sets real widths).
+    private initSpacers(): void {
+        if (this.rightSpacer) return; // already initialised
+        const right = document.createElement('div');
+        right.classList.add(SPACER_CLASS);
+        right.style.setProperty('pointer-events', 'none');
+        right.style.setProperty('user-select', 'none');
+        const left = document.createElement('div');
+        left.classList.add(SPACER_CLASS);
+        left.style.setProperty('pointer-events', 'none');
+        left.style.setProperty('user-select', 'none');
+        this.editorEl.prepend(right);
+        this.editorEl.append(left);
+        this.rightSpacer = right;
+        this.leftSpacer  = left;
+    }
+
+    // Stops the observer, removes spacers, and cancels all pending freeze timers.
     detach(): void {
         this.observer?.disconnect();
         this.observer = null;
@@ -109,13 +130,18 @@ export class ParagraphVirtualizer {
         this.paragraphRecords.length = 0;
         this.domStart = 0;
         this.domEnd   = -1;
+        // Remove spacers from the DOM. A future attach() will recreate them.
+        this.rightSpacer?.remove();
+        this.leftSpacer?.remove();
+        this.rightSpacer = null;
+        this.leftSpacer  = null;
     }
 
-    // Registers all current editorEl children with the observer (call after setValue).
-    // If tate-scroll-restoring is active, content-visibility:visible is in effect for all
-    // divs, so their real widths are available via getBoundingClientRect. Capturing them here
-    // marks every div as seen and stores an accurate width, making all paragraphs immediately
-    // eligible for freezing once the class is removed.
+    // Registers all current paragraph children with the observer (call after setValue).
+    // Skips spacer divs (SPACER_CLASS) because they have no content and measuring them is meaningless.
+    // If tate-scroll-restoring is active, real widths are available via getBoundingClientRect.
+    // Capturing them here marks every div as seen and stores an accurate width, making all
+    // paragraphs immediately eligible for freezing once the class is removed.
     observeAll(): void {
         if (!this.observer) return;
         // Disconnect first so the observer releases all references to the previous set of divs
@@ -124,6 +150,7 @@ export class ParagraphVirtualizer {
         this.observer.disconnect();
         const captureWidths = this.editorEl.classList.contains('tate-scroll-restoring');
         for (const child of Array.from(this.editorEl.children)) {
+            if (child instanceof HTMLElement && child.classList.contains(SPACER_CLASS)) continue;
             this.observer.observe(child);
             if (captureWidths && child instanceof HTMLElement) {
                 const w = child.getBoundingClientRect().width;
@@ -135,12 +162,13 @@ export class ParagraphVirtualizer {
         }
     }
 
-    // Unobserves then re-observes all children, forcing the IntersectionObserver to fire
-    // fresh callbacks for every div. Call after tate-scroll-restoring is removed so divs
-    // that are now off-screen (but seenDivs-eligible) get their freeze timers scheduled.
+    // Unobserves then re-observes all paragraph children (skips spacers), forcing the
+    // IntersectionObserver to fire fresh callbacks. Call after tate-scroll-restoring is removed
+    // so divs that are now off-screen (but seenDivs-eligible) get their freeze timers scheduled.
     reobserveAll(): void {
         if (!this.observer) return;
         for (const child of Array.from(this.editorEl.children)) {
+            if (child instanceof HTMLElement && child.classList.contains(SPACER_CLASS)) continue;
             this.observer.unobserve(child);
             this.observer.observe(child);
         }

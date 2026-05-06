@@ -6,6 +6,7 @@ import { InlineEditor } from './InlineEditor';
 import { InputTransformer } from './InputTransformer';
 import { isEffectivelyEmpty, clearChildren, ensureBrPlaceholder, computeDivViewLen, isInsideRtNode, findCursorAnchorAncestor } from './domHelpers';
 import type { ParagraphVirtualizer } from './ParagraphVirtualizer';
+import { SPACER_CLASS } from './ParagraphVirtualizer';
 
 export class EditorElement {
     readonly el: HTMLDivElement;
@@ -55,6 +56,19 @@ export class EditorElement {
         return parts.join('');
     }
 
+    // Replaces paragraph content while preserving rightSpacer and leftSpacer.
+    // The fragment's childNodes are moved into editorEl between the two spacers (if present).
+    private replaceEditorContent(frag: DocumentFragment): void {
+        const virt = this.virtualizer;
+        if (virt?.rightSpacer && virt.leftSpacer) {
+            // Extract nodes from fragment before replaceChildren moves them.
+            const nodes = Array.from(frag.childNodes);
+            this.el.replaceChildren(virt.rightSpacer, ...nodes, virt.leftSpacer);
+        } else {
+            this.el.replaceChildren(frag);
+        }
+    }
+
     setValue(content: string, preserveCursor: boolean): void {
         // Normalize CRLF/CR to LF so that the HTML parser inside sanitizeHTMLToDom does not
         // convert \r to \n and inject spurious empty lines into the DOM.
@@ -68,11 +82,11 @@ export class EditorElement {
 
         if (preserveCursor && document.activeElement === this.el) {
             const pos = this.getVisibleOffset();
-            this.el.replaceChildren(sanitizeHTMLToDom(parseToHtml(content)));
+            this.replaceEditorContent(sanitizeHTMLToDom(parseToHtml(content)));
             this.virtualizer?.initRecords(content.split('\n'));
             this.setVisibleOffset(pos);
         } else {
-            this.el.replaceChildren(sanitizeHTMLToDom(parseToHtml(content)));
+            this.replaceEditorContent(sanitizeHTMLToDom(parseToHtml(content)));
             this.virtualizer?.initRecords(content.split('\n'));
         }
         this.virtualizer?.observeAll();
@@ -308,7 +322,9 @@ export class EditorElement {
         // position instead of falling through to the <br> fallback, which would create
         // bare text nodes and <br>s directly inside the editor and corrupt patchParagraphs.
         if (!this.inlineEditor.isExpanded() && range.startContainer === this.el) {
-            const refNode = this.el.childNodes[range.startOffset] ?? null;
+            // Fall back to leftSpacer when the cursor offset points past all paragraph nodes,
+            // so insertBefore places the new divs before leftSpacer, not after it.
+            const refNode = this.el.childNodes[range.startOffset] ?? this.virtualizer?.leftSpacer ?? null;
             const newDivs: HTMLDivElement[] = [];
             let lastDiv: HTMLDivElement | null = null;
             for (const line of lines) {
@@ -427,10 +443,15 @@ export class EditorElement {
 
     // Restores a minimal <div><br></div> if Chrome deleted all paragraph divs (e.g., Backspace on last char).
     normalizeEmptyDom(): void {
-        if (this.el.childNodes.length > 0) return;
+        // Count paragraph divs (exclude spacers). If any exist, nothing to normalize.
+        const spacerCount = this.virtualizer?.rightSpacer ? 2 : 0;
+        if (this.el.childNodes.length > spacerCount) return;
         const div = document.createElement('div');
         div.appendChild(document.createElement('br'));
-        this.el.appendChild(div);
+        // Insert before leftSpacer so the div ends up in the paragraph area.
+        const leftSpacer = this.virtualizer?.leftSpacer;
+        if (leftSpacer) this.el.insertBefore(div, leftSpacer);
+        else this.el.appendChild(div);
         const range = document.createRange();
         range.setStart(div, 0);
         range.collapse(true);
@@ -439,18 +460,28 @@ export class EditorElement {
     }
 
     // Removes any <div></div> children left by Chrome's native cut-line behavior.
-    // Called from the input handler when inputType === 'deleteByCut'.
+    // Skips spacer divs (SPACER_CLASS) which are permanent fixtures.
     cleanupEmptyParagraphDivs(): void {
         for (const child of Array.from(this.el.childNodes)) {
-            if (child instanceof HTMLElement && child.tagName === 'DIV' && isEffectivelyEmpty(child))
-                child.remove();
+            if (!(child instanceof HTMLElement)) continue;
+            if (child.classList.contains(SPACER_CLASS)) continue;
+            if (child.tagName === 'DIV' && isEffectivelyEmpty(child)) child.remove();
         }
     }
 
     // Clears all content and shows the placeholder (used when no file is active).
+    // Preserves spacer divs that are permanent fixtures of the editorEl.
     clearContent(): void {
         this.inlineEditor.reset();
-        this.el.replaceChildren();
+        const virt = this.virtualizer;
+        if (virt?.rightSpacer && virt.leftSpacer) {
+            // Remove only paragraph divs; leave spacers in place.
+            for (const child of Array.from(this.el.childNodes)) {
+                if (child !== virt.rightSpacer && child !== virt.leftSpacer) child.parentNode?.removeChild(child);
+            }
+        } else {
+            this.el.replaceChildren();
+        }
     }
 
     applySettings(settings: TatePluginSettings): void {
@@ -574,6 +605,12 @@ export class EditorElement {
         return changedDivs;
     }
 
+    // Returns the el.children index for paragraph at logical index i.
+    // With spacers: rightSpacer is at children[0], so paragraphs start at children[1].
+    private paragraphChildIndex(i: number): number {
+        return i + (this.virtualizer?.rightSpacer ? 1 : 0);
+    }
+
     // Updates paragraph divs to match nextContent, replacing only divs whose line changed.
     // Returns the changed/added divs, or null if hasCleanDivStructure failed (full rebuild).
     private patchParagraphs(prevContent: string, nextContent: string): HTMLDivElement[] | null {
@@ -582,13 +619,12 @@ export class EditorElement {
         const el = this.el;
 
         // The invariant for differential patching: every direct child of el is a <div>
-        // element and el.childNodes.length equals prevLines.length. This breaks when the
-        // paste fallback path (cursor on the editor element itself rather than inside a
-        // child div) inserts bare text nodes and <br>s directly into the editor. Using
-        // el.children would count <br> as an element child and produce a false positive,
-        // so we walk el.childNodes and verify that every node is a <div>.
+        // element and el.childNodes.length equals prevLines.length (plus two spacers if present).
+        // This breaks when the paste fallback path inserts bare text nodes and <br>s directly
+        // into the editor. Using el.children would count <br> as an element child and produce
+        // a false positive, so we walk el.childNodes and verify that every node is a <div>.
         if (!this.hasCleanDivStructure(prevLines.length)) {
-            el.replaceChildren(sanitizeHTMLToDom(parseToHtml(nextContent)));
+            this.replaceEditorContent(sanitizeHTMLToDom(parseToHtml(nextContent)));
             this.virtualizer?.initRecords(nextLines);
             this.virtualizer?.observeAll();
             return null;
@@ -610,20 +646,23 @@ export class EditorElement {
 
         // Insert or remove divs in the middle so the total count matches N.
         // Suffix divs (hiPrev..P-1) are correct and must not be touched.
-        const suffixAnchor = (el.children[hiPrev] as HTMLElement) ?? null;
+        // suffixAnchor uses paragraphChildIndex so the rightSpacer offset is accounted for;
+        // when hiPrev === P, paragraphChildIndex(P) points to the leftSpacer, so insertBefore
+        // places new divs correctly before leftSpacer (not after it).
+        const suffixAnchor = (el.children[this.paragraphChildIndex(hiPrev)] as HTMLElement) ?? null;
         const insertCount = hiNext - hiPrev;
         if (insertCount > 0) {
             for (let i = 0; i < insertCount; i++)
                 el.insertBefore(document.createElement('div'), suffixAnchor);
         } else {
             for (let i = 0; i < -insertCount; i++)
-                el.removeChild(el.children[lo]);
+                el.removeChild(el.children[this.paragraphChildIndex(lo)]);
         }
 
         // Update changed middle divs.
         const changedDivs: HTMLDivElement[] = [];
         for (let i = lo; i < hiNext; i++) {
-            const div = el.children[i] as HTMLDivElement;
+            const div = el.children[this.paragraphChildIndex(i)] as HTMLDivElement;
             // Strip frozen markers before replacing children (avoids a stale data-src after update).
             this.virtualizer?.unfrostDiv(div);
             const html = parseInlineToHtml(nextLines[i]) || '<br>';
@@ -634,19 +673,20 @@ export class EditorElement {
 
         // Defensive: unchanged empty lines may lack a <br> placeholder due to prior paste.
         for (let i = 0; i < lo; i++)
-            if (nextLines[i] === '') ensureBrPlaceholder(el.children[i] as HTMLElement);
+            if (nextLines[i] === '') ensureBrPlaceholder(el.children[this.paragraphChildIndex(i)] as HTMLElement);
         for (let i = hiNext; i < N; i++)
-            if (nextLines[i] === '') ensureBrPlaceholder(el.children[i] as HTMLElement);
+            if (nextLines[i] === '') ensureBrPlaceholder(el.children[this.paragraphChildIndex(i)] as HTMLElement);
 
         this.virtualizer?.spliceRecords(lo, hiPrev - lo, nextLines.slice(lo, hiNext));
         return changedDivs;
     }
 
-    // Returns true iff el.childNodes consists of exactly expectedCount <div> elements.
-    // Used by patchParagraphs to detect DOM structure corruption (e.g. bare text nodes
-    // or <br>s inserted directly into the editor by the paste fallback path).
+    // Returns true iff el.childNodes consists of exactly expectedCount paragraph <div> elements
+    // (plus the two spacer divs if spacers are present). Used by patchParagraphs to detect DOM
+    // structure corruption (e.g. bare text nodes or <br>s inserted directly into the editor).
     private hasCleanDivStructure(expectedCount: number): boolean {
-        if (this.el.childNodes.length !== expectedCount) return false;
+        const spacerCount = this.virtualizer?.rightSpacer ? 2 : 0;
+        if (this.el.childNodes.length !== expectedCount + spacerCount) return false;
         for (const node of Array.from(this.el.childNodes)) {
             if (!(node instanceof HTMLElement) || node.tagName !== 'DIV') return false;
         }

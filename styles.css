@@ -40,32 +40,18 @@
     pointer-events: none;
 }
 
-/* Skip layout/paint for off-screen paragraphs. The auto keyword caches the rendered
-   block-size so scroll dimensions stay accurate after each paragraph is rendered once.
-   contain-intrinsic-block-size estimates one column width (line-height * font-size). */
-.tate-editor > div {
-    content-visibility: auto;
-    contain-intrinsic-block-size: auto 44px;
-}
-
-/* Frozen paragraph placeholder: no children, stores Aozora source in data-src.
+/* Frozen paragraph placeholder: no children, stores content in ParagraphVirtualizer.frozenSrc.
    pointer-events:none avoids inadvertent click/selection on the empty element. */
 .tate-editor > div.tate-frozen {
     pointer-events: none;
 }
 
-/* During cursor/scroll restore, force full layout so scrollIntoView gets accurate
-   paragraph positions rather than the 44px fallback estimates. The class is added
-   synchronously before the scroll call and removed one rAF later (see view.ts). */
-.tate-editor.tate-scroll-restoring > div {
-    content-visibility: visible;
-}
-
-/* Temporarily forces content-visibility:visible on specific paragraphs to update
-   their contain-intrinsic-block-size:auto cached size after a DOM mutation (paste,
-   Undo/Redo). Added synchronously after mutation; removed in the second rAF. */
-.tate-editor > div.tate-layout-refreshing {
-    content-visibility: visible;
+/* Spacer divs that represent the total width of off-window paragraphs (Phase 2+).
+   pointer-events:none prevents clicks/selection; user-select:none prevents accidental
+   text selection from extending into the spacer area. */
+.tate-editor > div.tate-spacer {
+    pointer-events: none;
+    user-select: none;
 }
 
 /* Loading spinner shown while tate-scroll-restoring is active. Removed in rAF 1
