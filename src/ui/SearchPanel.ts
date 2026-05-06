@@ -438,18 +438,24 @@ export class SearchPanel {
         this.replaceInputEl = replaceInput;
 
         const replaceBtn = document.createElement('button');
-        replaceBtn.className = 'tate-replace-btn';
+        replaceBtn.className = 'tate-search-btn';
         replaceBtn.tabIndex = -1;
-        replaceBtn.textContent = '置換';
+        replaceBtn.setAttribute('aria-label', '置換');
+        setIcon(replaceBtn, 'replace');
         replaceBtn.addEventListener('click', () => this.replaceCurrentMatch());
 
         const replaceAllBtn = document.createElement('button');
-        replaceAllBtn.className = 'tate-replace-btn';
+        replaceAllBtn.className = 'tate-search-btn';
         replaceAllBtn.tabIndex = -1;
-        replaceAllBtn.textContent = '全置換';
+        replaceAllBtn.setAttribute('aria-label', '全置換');
+        setIcon(replaceAllBtn, 'replace-all');
         replaceAllBtn.addEventListener('click', () => this.replaceAllMatches());
 
-        replaceRow.append(replaceInput, replaceBtn, replaceAllBtn);
+        const replaceBtnGroup = document.createElement('div');
+        replaceBtnGroup.className = 'tate-replace-btn-group';
+        replaceBtnGroup.append(replaceBtn, replaceAllBtn);
+
+        replaceRow.append(replaceInput, replaceBtnGroup);
 
         panel.append(searchRow, replaceRow);
         // Append to the tate-container so Obsidian's cleanup manages this DOM.
