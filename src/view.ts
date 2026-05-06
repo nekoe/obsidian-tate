@@ -824,6 +824,8 @@ export class VerticalWritingView extends ItemView {
             cm6.setCursor(cm6.offsetToPos(viewToSrc(segs, viewOffset)));
         }
         el.afterCommit();
+        // paragraphRecords are not updated during normal typing; sync them now so
+        // refreshOutline() sees current src/viewLen values for accurate jump offsets.
         this.virtualizer?.initRecords(content.split('\n'));
         this.plugin.refreshOutline();
     }
