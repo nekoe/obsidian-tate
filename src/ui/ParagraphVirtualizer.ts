@@ -4,13 +4,18 @@ import { parseInlineToHtml } from './AozoraParser';
 
 // CSS class applied to both spacer divs so DOM walkers can skip them.
 export const SPACER_CLASS = 'tate-spacer';
-// Estimated pixel width for paragraphs that have never entered the viewport.
+// Fallback width for paragraphs that have never entered the viewport and whose
+// estimated width cannot be computed (e.g. editorEl.clientHeight is 0).
+// Equals one column width at the default font size (22px × lineHeight 2 = 44px).
 const UNRENDERED_WIDTH_PX = 44;
+// CSS line-height value from .tate-editor. In vertical writing mode the column width
+// equals fontSize × lineHeight, so this ratio converts fontSizePx to column width.
+const VERTICAL_LINE_HEIGHT = 2;
 
 export interface ParagraphRecord {
     src: string;     // Aozora source line
     viewLen: number; // visible character count (excluding annotation markers and rt text)
-    width: number;   // measured pixel width; 0 = not yet measured
+    width: number;   // measured or estimated pixel width; 0 = unknown (never in window)
 }
 
 // Manages DOM virtualization.
@@ -45,10 +50,31 @@ export class ParagraphVirtualizer {
     // True while a drag selection is in progress (mousedown → mouseup).
     private isDragging = false;
 
+    // Font size in px; used to estimate paragraph widths for off-window records.
+    // Updated by setFontSize() when plugin settings change.
+    private fontSizePx = 22; // matches DEFAULT_SETTINGS.fontSize
+
     constructor(
         private readonly editorEl: HTMLElement,
         private readonly scrollArea: HTMLElement,
     ) {}
+
+    // Updates the font size used for width estimation. Call from EditorElement.applySettings().
+    setFontSize(px: number): void {
+        this.fontSizePx = px;
+    }
+
+    // Estimates the rendered pixel width of a paragraph from its visible character count.
+    // Uses the editor's current height and font size without touching the DOM.
+    // Formula: numColumns × columnWidth, where columnWidth = fontSizePx × lineHeight.
+    private estimateWidth(viewLen: number): number {
+        const colWidthPx = this.fontSizePx * VERTICAL_LINE_HEIGHT;
+        const editorH = (this.editorEl as HTMLElement).clientHeight;
+        if (editorH <= 0 || this.fontSizePx <= 0) return colWidthPx;
+        const charsPerCol = Math.max(1, Math.floor(editorH / this.fontSizePx));
+        const cols = Math.max(1, Math.ceil(Math.max(1, viewLen) / charsPerCol));
+        return cols * colWidthPx;
+    }
 
     // Starts the window boundary observer and inserts spacer divs.
     attach(): void {
@@ -102,25 +128,32 @@ export class ParagraphVirtualizer {
         document.removeEventListener('mouseup', this.onMouseUp);
     }
 
-    // Initializes paragraphRecords from content lines and resets the window to span all records.
-    // Call from EditorElement.setValue() and the patchParagraphs fallback after replaceChildren.
-    // width is 0 for all entries (updated to the measured value when the div is first frozen).
-    initRecords(lines: string[]): void {
+    // Initializes paragraphRecords from content lines.
+    // domStart/domEnd define the initial DOM window; omitting them spans all records (full window).
+    // All records receive estimated widths so spacer sizes are immediately accurate without
+    // requiring every paragraph to be rendered first.
+    // Call from EditorElement.loadContent() (initial file load) and the patchParagraphs fallback.
+    initRecords(lines: string[], domStart = 0, domEnd = lines.length - 1): void {
         this.paragraphRecords.length = 0;
         for (const line of lines) {
-            this.paragraphRecords.push({
-                src: line,
-                viewLen: this.buildParagraphVisibleText(line).length,
-                width: 0,
-            });
+            const viewLen = this.buildParagraphVisibleText(line).length;
+            this.paragraphRecords.push({ src: line, viewLen, width: this.estimateWidth(viewLen) });
         }
-        this.domStart = 0;
-        this.domEnd   = this.paragraphRecords.length - 1;
-        // Reset spacer widths (window spans all records; spacers are 0-width).
-        this.rightSpacerWidth = 0;
-        this.leftSpacerWidth  = 0;
-        if (this.rightSpacer) this.rightSpacer.style.removeProperty('width');
-        if (this.leftSpacer)  this.leftSpacer.style.removeProperty('width');
+        this.domStart = domStart;
+        this.domEnd   = Math.min(domEnd, this.paragraphRecords.length - 1);
+        // Set spacer widths from estimated record widths.
+        this.rightSpacerWidth = this.paragraphRecords
+            .slice(0, this.domStart).reduce((sum, r) => sum + r.width, 0);
+        this.leftSpacerWidth = this.paragraphRecords
+            .slice(this.domEnd + 1).reduce((sum, r) => sum + r.width, 0);
+        if (this.rightSpacer) {
+            if (this.rightSpacerWidth > 0) this.rightSpacer.style.setProperty('width', `${this.rightSpacerWidth}px`);
+            else this.rightSpacer.style.removeProperty('width');
+        }
+        if (this.leftSpacer) {
+            if (this.leftSpacerWidth > 0) this.leftSpacer.style.setProperty('width', `${this.leftSpacerWidth}px`);
+            else this.leftSpacer.style.removeProperty('width');
+        }
         this.reobserveBoundaries();
     }
 
@@ -146,11 +179,10 @@ export class ParagraphVirtualizer {
     // lo: first changed index; deleteCount: number of old records to remove;
     // newLines: replacement Aozora source lines (may be a different count than deleteCount).
     spliceRecords(lo: number, deleteCount: number, newLines: string[]): void {
-        const newRecords = newLines.map(src => ({
-            src,
-            viewLen: this.buildParagraphVisibleText(src).length,
-            width: 0,
-        }));
+        const newRecords = newLines.map(src => {
+            const viewLen = this.buildParagraphVisibleText(src).length;
+            return { src, viewLen, width: this.estimateWidth(viewLen) };
+        });
         this.paragraphRecords.splice(lo, deleteCount, ...newRecords);
         // Clamp domEnd to the new total count (may have shrunk if lines were deleted).
         this.domEnd = Math.min(this.domEnd + (newLines.length - deleteCount), this.paragraphRecords.length - 1);

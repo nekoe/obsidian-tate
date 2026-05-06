@@ -1931,7 +1931,9 @@ var InputTransformer = class {
 var import_obsidian3 = require("obsidian");
 var SPACER_CLASS = "tate-spacer";
 var UNRENDERED_WIDTH_PX = 44;
+var VERTICAL_LINE_HEIGHT = 2;
 var ParagraphVirtualizer = class {
+  // matches DEFAULT_SETTINGS.fontSize
   constructor(editorEl, scrollArea) {
     this.editorEl = editorEl;
     this.scrollArea = scrollArea;
@@ -1952,6 +1954,9 @@ var ParagraphVirtualizer = class {
     this.windowObserver = null;
     // True while a drag selection is in progress (mousedown → mouseup).
     this.isDragging = false;
+    // Font size in px; used to estimate paragraph widths for off-window records.
+    // Updated by setFontSize() when plugin settings change.
+    this.fontSizePx = 22;
     // Arrow function so `this` is bound for addEventListener/removeEventListener.
     this.onMouseDown = () => {
       this.isDragging = true;
@@ -1959,6 +1964,21 @@ var ParagraphVirtualizer = class {
     this.onMouseUp = () => {
       this.isDragging = false;
     };
+  }
+  // Updates the font size used for width estimation. Call from EditorElement.applySettings().
+  setFontSize(px) {
+    this.fontSizePx = px;
+  }
+  // Estimates the rendered pixel width of a paragraph from its visible character count.
+  // Uses the editor's current height and font size without touching the DOM.
+  // Formula: numColumns × columnWidth, where columnWidth = fontSizePx × lineHeight.
+  estimateWidth(viewLen) {
+    const colWidthPx = this.fontSizePx * VERTICAL_LINE_HEIGHT;
+    const editorH = this.editorEl.clientHeight;
+    if (editorH <= 0 || this.fontSizePx <= 0) return colWidthPx;
+    const charsPerCol = Math.max(1, Math.floor(editorH / this.fontSizePx));
+    const cols = Math.max(1, Math.ceil(Math.max(1, viewLen) / charsPerCol));
+    return cols * colWidthPx;
   }
   // Starts the window boundary observer and inserts spacer divs.
   attach() {
@@ -2010,24 +2030,29 @@ var ParagraphVirtualizer = class {
     this.editorEl.removeEventListener("mousedown", this.onMouseDown);
     document.removeEventListener("mouseup", this.onMouseUp);
   }
-  // Initializes paragraphRecords from content lines and resets the window to span all records.
-  // Call from EditorElement.setValue() and the patchParagraphs fallback after replaceChildren.
-  // width is 0 for all entries (updated to the measured value when the div is first frozen).
-  initRecords(lines) {
+  // Initializes paragraphRecords from content lines.
+  // domStart/domEnd define the initial DOM window; omitting them spans all records (full window).
+  // All records receive estimated widths so spacer sizes are immediately accurate without
+  // requiring every paragraph to be rendered first.
+  // Call from EditorElement.loadContent() (initial file load) and the patchParagraphs fallback.
+  initRecords(lines, domStart = 0, domEnd = lines.length - 1) {
     this.paragraphRecords.length = 0;
     for (const line of lines) {
-      this.paragraphRecords.push({
-        src: line,
-        viewLen: this.buildParagraphVisibleText(line).length,
-        width: 0
-      });
+      const viewLen = this.buildParagraphVisibleText(line).length;
+      this.paragraphRecords.push({ src: line, viewLen, width: this.estimateWidth(viewLen) });
     }
-    this.domStart = 0;
-    this.domEnd = this.paragraphRecords.length - 1;
-    this.rightSpacerWidth = 0;
-    this.leftSpacerWidth = 0;
-    if (this.rightSpacer) this.rightSpacer.style.removeProperty("width");
-    if (this.leftSpacer) this.leftSpacer.style.removeProperty("width");
+    this.domStart = domStart;
+    this.domEnd = Math.min(domEnd, this.paragraphRecords.length - 1);
+    this.rightSpacerWidth = this.paragraphRecords.slice(0, this.domStart).reduce((sum, r) => sum + r.width, 0);
+    this.leftSpacerWidth = this.paragraphRecords.slice(this.domEnd + 1).reduce((sum, r) => sum + r.width, 0);
+    if (this.rightSpacer) {
+      if (this.rightSpacerWidth > 0) this.rightSpacer.style.setProperty("width", `${this.rightSpacerWidth}px`);
+      else this.rightSpacer.style.removeProperty("width");
+    }
+    if (this.leftSpacer) {
+      if (this.leftSpacerWidth > 0) this.leftSpacer.style.setProperty("width", `${this.leftSpacerWidth}px`);
+      else this.leftSpacer.style.removeProperty("width");
+    }
     this.reobserveBoundaries();
   }
   // Updates src/viewLen for all records in-place WITHOUT touching domStart, domEnd, or spacer
@@ -2049,11 +2074,10 @@ var ParagraphVirtualizer = class {
   // lo: first changed index; deleteCount: number of old records to remove;
   // newLines: replacement Aozora source lines (may be a different count than deleteCount).
   spliceRecords(lo, deleteCount, newLines) {
-    const newRecords = newLines.map((src) => ({
-      src,
-      viewLen: this.buildParagraphVisibleText(src).length,
-      width: 0
-    }));
+    const newRecords = newLines.map((src) => {
+      const viewLen = this.buildParagraphVisibleText(src).length;
+      return { src, viewLen, width: this.estimateWidth(viewLen) };
+    });
     this.paragraphRecords.splice(lo, deleteCount, ...newRecords);
     this.domEnd = Math.min(this.domEnd + (newLines.length - deleteCount), this.paragraphRecords.length - 1);
     this.domEnd = Math.max(this.domEnd, this.domStart);
@@ -2243,6 +2267,7 @@ var ParagraphVirtualizer = class {
 };
 
 // src/ui/EditorElement.ts
+var INITIAL_WINDOW_HALF = 50;
 var EditorElement = class {
   constructor(container) {
     this.virtualizer = null;
@@ -2287,6 +2312,42 @@ var EditorElement = class {
     } else {
       this.el.replaceChildren(frag);
     }
+  }
+  // Loads file content for an initial file-open event. Creates only an initial DOM window
+  // of INITIAL_WINDOW_HALF paragraphs on each side of initialSrcOffset's paragraph; all other
+  // paragraphs are represented by spacers sized from estimated widths (no DOM nodes needed).
+  // Use instead of setValue() for file loads. setValue() is kept for undo/redo paths.
+  loadContent(content, initialSrcOffset) {
+    content = content.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+    this.inlineEditor.reset();
+    if (this.getValue() === content && this.el.childNodes.length > 0) return;
+    const lines = content ? content.split("\n") : [""];
+    const N = lines.length;
+    let center = 0;
+    let charCount = 0;
+    for (let i = 0; i < N; i++) {
+      if (initialSrcOffset <= charCount + lines[i].length) {
+        center = i;
+        break;
+      }
+      charCount += lines[i].length + 1;
+      if (i === N - 1) center = N - 1;
+    }
+    const lo = Math.max(0, center - INITIAL_WINDOW_HALF);
+    const hi = Math.min(N - 1, center + INITIAL_WINDOW_HALF);
+    const windowNodes = [];
+    for (let i = lo; i <= hi; i++) {
+      const div = document.createElement("div");
+      div.replaceChildren((0, import_obsidian4.sanitizeHTMLToDom)(parseInlineToHtml(lines[i]) || "<br>"));
+      windowNodes.push(div);
+    }
+    const virt = this.virtualizer;
+    if ((virt == null ? void 0 : virt.rightSpacer) && virt.leftSpacer) {
+      this.el.replaceChildren(virt.rightSpacer, ...windowNodes, virt.leftSpacer);
+    } else {
+      this.el.replaceChildren(...windowNodes);
+    }
+    virt == null ? void 0 : virt.initRecords(lines, lo, hi);
   }
   setValue(content, preserveCursor) {
     var _a, _b;
@@ -2600,9 +2661,11 @@ var EditorElement = class {
     }
   }
   applySettings(settings) {
+    var _a;
     this.el.style.fontFamily = settings.fontFamily;
     this.el.style.fontSize = `${settings.fontSize}px`;
     this.el.style.lineBreak = settings.lineBreak;
+    (_a = this.virtualizer) == null ? void 0 : _a.setFontSize(settings.fontSize);
     this.inputTransformer.updateSettings(settings);
     this.inlineEditor.setExpandSettings(
       !settings.suppressRubyInline,
@@ -3502,6 +3565,9 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
     // Deferred cursor offset: set when a file is loaded while the view is not active.
     // Applied (with scroll) on the next active-leaf-change for this view.
     this.pendingCursorOffset = null;
+    // Source offset passed to editorEl.loadContent() to center the initial DOM window.
+    // Set before loadFile() so the SyncCoordinator callback can read it synchronously.
+    this.pendingLoadSrcOffset = 0;
     // Monotonic counter managed by beginScrollRestoring/cancelScrollRestoring.
     // Guards cleanup rAFs: a stale rAF from a superseded load will not remove
     // the class that belongs to a newer load (prevents fast-switching race condition).
@@ -3563,7 +3629,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
           this.plugin.refreshOutline();
           this.restoreViewOffset(savedOffset);
         } else {
-          editorEl.setValue(content, false);
+          editorEl.loadContent(content, this.pendingLoadSrcOffset);
           this.plugin.updateCharCount(countChars(content));
           this.plugin.refreshOutline();
         }
@@ -3754,6 +3820,8 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
           void this.plugin.saveCursorPosition(prevFile.path, this.lastKnownViewOffset);
         }
         void (async () => {
+          const savedOffset = this.plugin.getCursorPosition(file.path);
+          this.pendingLoadSrcOffset = savedOffset != null ? savedOffset : 0;
           const gen = this.beginScrollRestoring();
           await syncCoordinator.loadFile(file);
           if (syncCoordinator.currentFile !== file) {
@@ -3761,7 +3829,6 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
             return;
           }
           this.lastKnownViewOffset = null;
-          const savedOffset = this.plugin.getCursorPosition(file.path);
           if (savedOffset !== void 0) {
             this.restoreViewOffset(savedOffset);
           } else {
@@ -3817,6 +3884,8 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
   async loadInitialFile(syncCoordinator) {
     const activeFile = this.app.workspace.getActiveFile();
     if (activeFile) {
+      const savedOffset = this.plugin.getCursorPosition(activeFile.path);
+      this.pendingLoadSrcOffset = savedOffset != null ? savedOffset : 0;
       const gen = this.beginScrollRestoring();
       await syncCoordinator.loadFile(activeFile);
       if (syncCoordinator.currentFile !== activeFile) {
@@ -3824,7 +3893,6 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
         return;
       }
       this.lastKnownViewOffset = null;
-      const savedOffset = this.plugin.getCursorPosition(activeFile.path);
       if (savedOffset !== void 0) {
         this.restoreViewOffset(savedOffset);
       } else {
@@ -3835,6 +3903,8 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
     for (const leaf of this.app.workspace.getLeavesOfType("markdown")) {
       if (leaf.view instanceof import_obsidian6.MarkdownView && leaf.view.file) {
         const file = leaf.view.file;
+        const savedOffset = this.plugin.getCursorPosition(file.path);
+        this.pendingLoadSrcOffset = savedOffset != null ? savedOffset : 0;
         const gen = this.beginScrollRestoring();
         await syncCoordinator.loadFile(file);
         if (syncCoordinator.currentFile !== file) {
@@ -3842,7 +3912,6 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
           return;
         }
         this.lastKnownViewOffset = null;
-        const savedOffset = this.plugin.getCursorPosition(file.path);
         if (savedOffset !== void 0) {
           this.restoreViewOffset(savedOffset);
         } else {

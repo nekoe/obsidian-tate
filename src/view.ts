@@ -24,6 +24,9 @@ export class VerticalWritingView extends ItemView {
     // Deferred cursor offset: set when a file is loaded while the view is not active.
     // Applied (with scroll) on the next active-leaf-change for this view.
     private pendingCursorOffset: number | null = null;
+    // Source offset passed to editorEl.loadContent() to center the initial DOM window.
+    // Set before loadFile() so the SyncCoordinator callback can read it synchronously.
+    private pendingLoadSrcOffset = 0;
     // Monotonic counter managed by beginScrollRestoring/cancelScrollRestoring.
     // Guards cleanup rAFs: a stale rAF from a superseded load will not remove
     // the class that belongs to a newer load (prevents fast-switching race condition).
@@ -112,8 +115,9 @@ export class VerticalWritingView extends ItemView {
                     //   inactive view → pendingCursorOffset set; active-leaf-change scrolls
                     this.restoreViewOffset(savedOffset);
                 } else {
-                    // File load or file delete: caller manages the tate-scroll-restoring lifecycle.
-                    editorEl.setValue(content, false);
+                    // File load or file delete: create only the initial window around the
+                    // saved cursor position to avoid loading all N paragraph divs at once.
+                    editorEl.loadContent(content, this.pendingLoadSrcOffset);
                     this.plugin.updateCharCount(countChars(content));
                     this.plugin.refreshOutline();
                 }
@@ -345,6 +349,8 @@ export class VerticalWritingView extends ItemView {
                     void this.plugin.saveCursorPosition(prevFile.path, this.lastKnownViewOffset);
                 }
                 void (async () => {
+                    const savedOffset = this.plugin.getCursorPosition(file.path);
+                    this.pendingLoadSrcOffset = savedOffset ?? 0;
                     const gen = this.beginScrollRestoring();
                     await syncCoordinator.loadFile(file);
                     if (syncCoordinator.currentFile !== file) {
@@ -352,7 +358,6 @@ export class VerticalWritingView extends ItemView {
                         return;
                     }
                     this.lastKnownViewOffset = null;
-                    const savedOffset = this.plugin.getCursorPosition(file.path);
                     if (savedOffset !== undefined) {
                         this.restoreViewOffset(savedOffset); // rAF 1 hides spinner; rAF 2 removes class
                     } else {
@@ -420,6 +425,8 @@ export class VerticalWritingView extends ItemView {
         // Use the file that was active just before the vertical writing view was opened
         const activeFile = this.app.workspace.getActiveFile();
         if (activeFile) {
+            const savedOffset = this.plugin.getCursorPosition(activeFile.path);
+            this.pendingLoadSrcOffset = savedOffset ?? 0;
             const gen = this.beginScrollRestoring();
             await syncCoordinator.loadFile(activeFile);
             if (syncCoordinator.currentFile !== activeFile) {
@@ -427,7 +434,6 @@ export class VerticalWritingView extends ItemView {
                 return;
             }
             this.lastKnownViewOffset = null;
-            const savedOffset = this.plugin.getCursorPosition(activeFile.path);
             if (savedOffset !== undefined) {
                 this.restoreViewOffset(savedOffset); // rAF 1 hides spinner; rAF 2 removes class
             } else {
@@ -439,6 +445,8 @@ export class VerticalWritingView extends ItemView {
         for (const leaf of this.app.workspace.getLeavesOfType('markdown')) {
             if (leaf.view instanceof MarkdownView && leaf.view.file) {
                 const file = leaf.view.file;
+                const savedOffset = this.plugin.getCursorPosition(file.path);
+                this.pendingLoadSrcOffset = savedOffset ?? 0;
                 const gen = this.beginScrollRestoring();
                 await syncCoordinator.loadFile(file);
                 if (syncCoordinator.currentFile !== file) {
@@ -446,7 +454,6 @@ export class VerticalWritingView extends ItemView {
                     return;
                 }
                 this.lastKnownViewOffset = null;
-                const savedOffset = this.plugin.getCursorPosition(file.path);
                 if (savedOffset !== undefined) {
                     this.restoreViewOffset(savedOffset); // rAF 1 hides spinner; rAF 2 removes class
                 } else {

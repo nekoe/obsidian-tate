@@ -8,6 +8,11 @@ import { isEffectivelyEmpty, clearChildren, ensureBrPlaceholder, computeDivViewL
 import type { ParagraphVirtualizer } from './ParagraphVirtualizer';
 import { SPACER_CLASS } from './ParagraphVirtualizer';
 
+// Half the number of paragraph divs to create on each side of the cursor on file load.
+// 100 total paragraphs covers typical viewports (≤ 45 columns) plus the IntersectionObserver
+// rootMargin buffer (440px ≈ 10 columns) with room to spare.
+const INITIAL_WINDOW_HALF = 50;
+
 export class EditorElement {
     readonly el: HTMLDivElement;
     private readonly inlineEditor: InlineEditor;
@@ -64,6 +69,45 @@ export class EditorElement {
         } else {
             this.el.replaceChildren(frag);
         }
+    }
+
+    // Loads file content for an initial file-open event. Creates only an initial DOM window
+    // of INITIAL_WINDOW_HALF paragraphs on each side of initialSrcOffset's paragraph; all other
+    // paragraphs are represented by spacers sized from estimated widths (no DOM nodes needed).
+    // Use instead of setValue() for file loads. setValue() is kept for undo/redo paths.
+    loadContent(content: string, initialSrcOffset: number): void {
+        content = content.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+        this.inlineEditor.reset();
+        if (this.getValue() === content && this.el.childNodes.length > 0) return;
+
+        const lines = content ? content.split('\n') : [''];
+        const N = lines.length;
+
+        // Convert src offset to paragraph index.
+        let center = 0;
+        let charCount = 0;
+        for (let i = 0; i < N; i++) {
+            if (initialSrcOffset <= charCount + lines[i].length) { center = i; break; }
+            charCount += lines[i].length + 1; // +1 for '\n'
+            if (i === N - 1) center = N - 1;
+        }
+        const lo = Math.max(0, center - INITIAL_WINDOW_HALF);
+        const hi = Math.min(N - 1, center + INITIAL_WINDOW_HALF);
+
+        // Build only the window paragraph divs.
+        const windowNodes: Node[] = [];
+        for (let i = lo; i <= hi; i++) {
+            const div = document.createElement('div');
+            div.replaceChildren(sanitizeHTMLToDom(parseInlineToHtml(lines[i]) || '<br>'));
+            windowNodes.push(div);
+        }
+        const virt = this.virtualizer;
+        if (virt?.rightSpacer && virt.leftSpacer) {
+            this.el.replaceChildren(virt.rightSpacer, ...windowNodes, virt.leftSpacer);
+        } else {
+            this.el.replaceChildren(...windowNodes);
+        }
+        virt?.initRecords(lines, lo, hi);
     }
 
     setValue(content: string, preserveCursor: boolean): void {
@@ -469,6 +513,7 @@ export class EditorElement {
         this.el.style.fontFamily = settings.fontFamily;
         this.el.style.fontSize = `${settings.fontSize}px`;
         this.el.style.lineBreak = settings.lineBreak;
+        this.virtualizer?.setFontSize(settings.fontSize);
         this.inputTransformer.updateSettings(settings);
         this.inlineEditor.setExpandSettings(
             !settings.suppressRubyInline,

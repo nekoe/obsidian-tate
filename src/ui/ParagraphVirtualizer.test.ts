@@ -58,10 +58,11 @@ describe('ParagraphVirtualizer', () => {
             expect(virt.paragraphRecords[0].viewLen).toBe(3); // 東京市 (rt excluded)
         });
 
-        it('sets width to 0 for all entries', () => {
+        it('sets estimated width for all entries', () => {
             virt.initRecords(['abc', 'def']);
-            expect(virt.paragraphRecords[0].width).toBe(0);
-            expect(virt.paragraphRecords[1].width).toBe(0);
+            // In happy-dom clientHeight=0, so estimateWidth falls back to fontSizePx(22)×lineHeight(2)=44.
+            expect(virt.paragraphRecords[0].width).toBe(44);
+            expect(virt.paragraphRecords[1].width).toBe(44);
         });
 
         it('replaces existing records on repeated calls', () => {
