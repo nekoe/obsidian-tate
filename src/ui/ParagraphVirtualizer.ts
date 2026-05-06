@@ -179,6 +179,25 @@ export class ParagraphVirtualizer {
         // Clamp both window bounds to the new record count.
         this.domEnd   = Math.min(this.domEnd, n - 1);
         this.domStart = Math.min(this.domStart, Math.max(0, n - 1));
+        // Sync domEnd with the actual number of paragraph divs in the editor. Enter/Delete
+        // can add/remove divs within the window without going through spliceRecords, so
+        // we detect the discrepancy here and keep the virtualizer consistent with the DOM.
+        // Guard: only when spacers are present (attach() has been called); without spacers
+        // the editorEl.children count is unreliable for virtualization purposes.
+        if (this.domEnd >= 0 && this.rightSpacer) {
+            const actualDivCount = (this.editorEl as HTMLElement).children.length - 2; // -2 for spacers
+            const windowDivCount = this.domEnd - this.domStart + 1;
+            if (actualDivCount !== windowDivCount) {
+                this.domEnd = Math.min(this.domStart + actualDivCount - 1, n - 1);
+                this.leftSpacerWidth = this.paragraphRecords
+                    .slice(this.domEnd + 1).reduce((sum, r) => sum + r.width, 0);
+                if (this.leftSpacer) {
+                    if (this.leftSpacerWidth > 0) this.leftSpacer.style.setProperty('width', `${this.leftSpacerWidth}px`);
+                    else this.leftSpacer.style.removeProperty('width');
+                }
+                this.reobserveBoundaries();
+            }
+        }
     }
 
     // Mirrors the DOM splice performed by patchParagraphs, keeping paragraphRecords in sync.

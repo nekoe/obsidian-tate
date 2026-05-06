@@ -669,15 +669,33 @@ export class EditorElement {
         const prevLines = prevContent.split('\n');
         const nextLines = nextContent ? nextContent.split('\n') : [''];
         const el = this.el;
+        const virt = this.virtualizer;
 
-        // The invariant for differential patching: every direct child of el is a <div>
-        // element and el.childNodes.length equals prevLines.length (plus two spacers if present).
-        // This breaks when the paste fallback path inserts bare text nodes and <br>s directly
-        // into the editor. Using el.children would count <br> as an element child and produce
-        // a false positive, so we walk el.childNodes and verify that every node is a <div>.
+        // The invariant for differential patching: every direct child of el is a <div>.
+        // With virtualizer: DOM has only window_size divs (syncWindowSrcs keeps domEnd accurate),
+        // so hasCleanDivStructure checks against the window size, not the full paragraph count.
+        // Without virtualizer: checks against prevLines.length (original behavior).
         if (!this.hasCleanDivStructure(prevLines.length)) {
-            this.replaceEditorContent(sanitizeHTMLToDom(parseToHtml(nextContent)));
-            this.virtualizer?.initRecords(nextLines);
+            if (virt && virt.domEnd >= 0) {
+                // Windowed rebuild: rebuild only the current window, not all N paragraphs.
+                const lo = Math.max(0, Math.min(virt.domStart, nextLines.length - 1));
+                const hi = Math.min(virt.domEnd, nextLines.length - 1);
+                const windowNodes: Node[] = [];
+                for (let i = lo; i <= hi; i++) {
+                    const div = document.createElement('div');
+                    div.replaceChildren(sanitizeHTMLToDom(parseInlineToHtml(nextLines[i]) || '<br>'));
+                    windowNodes.push(div);
+                }
+                if (virt.rightSpacer && virt.leftSpacer) {
+                    el.replaceChildren(virt.rightSpacer, ...windowNodes, virt.leftSpacer);
+                } else {
+                    el.replaceChildren(...windowNodes);
+                }
+                virt.initRecords(nextLines, lo, hi);
+            } else {
+                this.replaceEditorContent(sanitizeHTMLToDom(parseToHtml(nextContent)));
+                virt?.initRecords(nextLines);
+            }
             return null;
         }
 
@@ -694,6 +712,13 @@ export class EditorElement {
         // [lo, hiPrev) in prevLines and [lo, hiNext) in nextLines are the changed middle.
         const hiPrev = P - suf;
         const hiNext = N - suf;
+
+        // When the DOM window is partial, skip DOM manipulation for changes outside the window.
+        // Off-window diff: update records only (spliceRecords adjusts domStart/domEnd as needed).
+        if (virt && virt.domEnd >= 0 && (lo < virt.domStart || hiPrev > virt.domEnd + 1)) {
+            virt.spliceRecords(lo, hiPrev - lo, nextLines.slice(lo, hiNext));
+            return null;
+        }
 
         // Insert or remove divs in the middle so the total count matches N.
         // Suffix divs (hiPrev..P-1) are correct and must not be touched.
@@ -720,21 +745,28 @@ export class EditorElement {
         }
 
         // Defensive: unchanged empty lines may lack a <br> placeholder due to prior paste.
-        for (let i = 0; i < lo; i++)
+        // Only walk paragraphs that have a DOM div (in-window range with partial virtualizer).
+        const checkFrom = virt && virt.domEnd >= 0 ? virt.domStart : 0;
+        const checkTo   = virt && virt.domEnd >= 0 ? virt.domEnd   : N - 1;
+        for (let i = checkFrom; i < lo; i++)
             if (nextLines[i] === '') ensureBrPlaceholder(el.children[this.paragraphChildIndex(i)] as HTMLElement);
-        for (let i = hiNext; i < N; i++)
+        for (let i = hiNext; i <= checkTo && i < N; i++)
             if (nextLines[i] === '') ensureBrPlaceholder(el.children[this.paragraphChildIndex(i)] as HTMLElement);
 
-        this.virtualizer?.spliceRecords(lo, hiPrev - lo, nextLines.slice(lo, hiNext));
+        virt?.spliceRecords(lo, hiPrev - lo, nextLines.slice(lo, hiNext));
         return changedDivs;
     }
 
-    // Returns true iff el.childNodes consists of exactly expectedCount paragraph <div> elements
-    // (plus the two spacer divs if spacers are present). Used by patchParagraphs to detect DOM
-    // structure corruption (e.g. bare text nodes or <br>s inserted directly into the editor).
+    // Returns true iff el.childNodes consists of the expected number of paragraph <div> elements
+    // (plus spacers). With virtualizer: checks against the window size (domEnd-domStart+1), since
+    // syncWindowSrcs keeps domEnd accurate. Without virtualizer: checks against expectedCount.
     private hasCleanDivStructure(expectedCount: number): boolean {
-        const spacerCount = this.virtualizer?.rightSpacer ? 2 : 0;
-        if (this.el.childNodes.length !== expectedCount + spacerCount) return false;
+        const virt = this.virtualizer;
+        const spacerCount = virt?.rightSpacer ? 2 : 0;
+        const expected = virt && virt.domEnd >= 0
+            ? (virt.domEnd - virt.domStart + 1)
+            : expectedCount;
+        if (this.el.childNodes.length !== expected + spacerCount) return false;
         for (const node of Array.from(this.el.childNodes)) {
             if (!(node instanceof HTMLElement) || node.tagName !== 'DIV') return false;
         }

@@ -2075,6 +2075,19 @@ var ParagraphVirtualizer = class {
     }
     this.domEnd = Math.min(this.domEnd, n - 1);
     this.domStart = Math.min(this.domStart, Math.max(0, n - 1));
+    if (this.domEnd >= 0 && this.rightSpacer) {
+      const actualDivCount = this.editorEl.children.length - 2;
+      const windowDivCount = this.domEnd - this.domStart + 1;
+      if (actualDivCount !== windowDivCount) {
+        this.domEnd = Math.min(this.domStart + actualDivCount - 1, n - 1);
+        this.leftSpacerWidth = this.paragraphRecords.slice(this.domEnd + 1).reduce((sum, r) => sum + r.width, 0);
+        if (this.leftSpacer) {
+          if (this.leftSpacerWidth > 0) this.leftSpacer.style.setProperty("width", `${this.leftSpacerWidth}px`);
+          else this.leftSpacer.style.removeProperty("width");
+        }
+        this.reobserveBoundaries();
+      }
+    }
   }
   // Mirrors the DOM splice performed by patchParagraphs, keeping paragraphRecords in sync.
   // lo: first changed index; deleteCount: number of old records to remove;
@@ -2795,13 +2808,31 @@ var EditorElement = class {
   // Updates paragraph divs to match nextContent, replacing only divs whose line changed.
   // Returns the changed/added divs, or null if hasCleanDivStructure failed (full rebuild).
   patchParagraphs(prevContent, nextContent) {
-    var _a, _b, _c;
+    var _a;
     const prevLines = prevContent.split("\n");
     const nextLines = nextContent ? nextContent.split("\n") : [""];
     const el = this.el;
+    const virt = this.virtualizer;
     if (!this.hasCleanDivStructure(prevLines.length)) {
-      this.replaceEditorContent((0, import_obsidian4.sanitizeHTMLToDom)(parseToHtml(nextContent)));
-      (_a = this.virtualizer) == null ? void 0 : _a.initRecords(nextLines);
+      if (virt && virt.domEnd >= 0) {
+        const lo2 = Math.max(0, Math.min(virt.domStart, nextLines.length - 1));
+        const hi = Math.min(virt.domEnd, nextLines.length - 1);
+        const windowNodes = [];
+        for (let i = lo2; i <= hi; i++) {
+          const div = document.createElement("div");
+          div.replaceChildren((0, import_obsidian4.sanitizeHTMLToDom)(parseInlineToHtml(nextLines[i]) || "<br>"));
+          windowNodes.push(div);
+        }
+        if (virt.rightSpacer && virt.leftSpacer) {
+          el.replaceChildren(virt.rightSpacer, ...windowNodes, virt.leftSpacer);
+        } else {
+          el.replaceChildren(...windowNodes);
+        }
+        virt.initRecords(nextLines, lo2, hi);
+      } else {
+        this.replaceEditorContent((0, import_obsidian4.sanitizeHTMLToDom)(parseToHtml(nextContent)));
+        virt == null ? void 0 : virt.initRecords(nextLines);
+      }
       return null;
     }
     const P = prevLines.length;
@@ -2812,7 +2843,11 @@ var EditorElement = class {
     while (suf < P - lo && suf < N - lo && prevLines[P - 1 - suf] === nextLines[N - 1 - suf]) suf++;
     const hiPrev = P - suf;
     const hiNext = N - suf;
-    const suffixAnchor = (_b = el.children[this.paragraphChildIndex(hiPrev)]) != null ? _b : null;
+    if (virt && virt.domEnd >= 0 && (lo < virt.domStart || hiPrev > virt.domEnd + 1)) {
+      virt.spliceRecords(lo, hiPrev - lo, nextLines.slice(lo, hiNext));
+      return null;
+    }
+    const suffixAnchor = (_a = el.children[this.paragraphChildIndex(hiPrev)]) != null ? _a : null;
     const insertCount = hiNext - hiPrev;
     if (insertCount > 0) {
       for (let i = 0; i < insertCount; i++)
@@ -2828,20 +2863,23 @@ var EditorElement = class {
       div.replaceChildren((0, import_obsidian4.sanitizeHTMLToDom)(html));
       changedDivs.push(div);
     }
-    for (let i = 0; i < lo; i++)
+    const checkFrom = virt && virt.domEnd >= 0 ? virt.domStart : 0;
+    const checkTo = virt && virt.domEnd >= 0 ? virt.domEnd : N - 1;
+    for (let i = checkFrom; i < lo; i++)
       if (nextLines[i] === "") ensureBrPlaceholder(el.children[this.paragraphChildIndex(i)]);
-    for (let i = hiNext; i < N; i++)
+    for (let i = hiNext; i <= checkTo && i < N; i++)
       if (nextLines[i] === "") ensureBrPlaceholder(el.children[this.paragraphChildIndex(i)]);
-    (_c = this.virtualizer) == null ? void 0 : _c.spliceRecords(lo, hiPrev - lo, nextLines.slice(lo, hiNext));
+    virt == null ? void 0 : virt.spliceRecords(lo, hiPrev - lo, nextLines.slice(lo, hiNext));
     return changedDivs;
   }
-  // Returns true iff el.childNodes consists of exactly expectedCount paragraph <div> elements
-  // (plus the two spacer divs if spacers are present). Used by patchParagraphs to detect DOM
-  // structure corruption (e.g. bare text nodes or <br>s inserted directly into the editor).
+  // Returns true iff el.childNodes consists of the expected number of paragraph <div> elements
+  // (plus spacers). With virtualizer: checks against the window size (domEnd-domStart+1), since
+  // syncWindowSrcs keeps domEnd accurate. Without virtualizer: checks against expectedCount.
   hasCleanDivStructure(expectedCount) {
-    var _a;
-    const spacerCount = ((_a = this.virtualizer) == null ? void 0 : _a.rightSpacer) ? 2 : 0;
-    if (this.el.childNodes.length !== expectedCount + spacerCount) return false;
+    const virt = this.virtualizer;
+    const spacerCount = (virt == null ? void 0 : virt.rightSpacer) ? 2 : 0;
+    const expected = virt && virt.domEnd >= 0 ? virt.domEnd - virt.domStart + 1 : expectedCount;
+    if (this.el.childNodes.length !== expected + spacerCount) return false;
     for (const node of Array.from(this.el.childNodes)) {
       if (!(node instanceof HTMLElement) || node.tagName !== "DIV") return false;
     }
