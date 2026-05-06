@@ -2150,7 +2150,7 @@ var ParagraphVirtualizer = class {
     if (this.leftSpacer) this.leftSpacer.style.setProperty("width", `${this.leftSpacerWidth}px`);
     this.domEnd++;
   }
-  // Removes the rightmost div of the window (paragraphs[domEnd]) and grows leftSpacer.
+  // Removes the leftmost div of the window (paragraphs[domEnd]) and grows leftSpacer.
   // Guards against removing a div that contains the current selection anchor or focus.
   shrinkLeft() {
     if (this.domEnd < this.domStart) return;
@@ -2165,7 +2165,7 @@ var ParagraphVirtualizer = class {
     if (this.leftSpacer) this.leftSpacer.style.setProperty("width", `${this.leftSpacerWidth}px`);
     this.domEnd--;
   }
-  // Removes the leftmost div of the window (paragraphs[domStart]) and grows rightSpacer.
+  // Removes the rightmost div of the window (paragraphs[domStart]) and grows rightSpacer.
   shrinkRight() {
     if (this.domEnd < this.domStart) return;
     const spacerOffset = this.rightSpacer ? 1 : 0;
@@ -2197,7 +2197,7 @@ var ParagraphVirtualizer = class {
   }
   // Called by the window boundary IntersectionObserver.
   // Boundary div enters extended viewport → expand window in that direction.
-  // Boundary div exits extended viewport → shrink window from the opposite end.
+  // Boundary div exits extended viewport → shrink window from that same end.
   onWindowBoundaryIntersection(entries) {
     if (this.paragraphRecords.length === 0) return;
     let changed = false;
@@ -2216,11 +2216,11 @@ var ParagraphVirtualizer = class {
         }
       } else {
         if (divIndex === this.domStart && this.domEnd > this.domStart + 2) {
-          this.shrinkLeft();
+          this.shrinkRight();
           changed = true;
         }
         if (divIndex === this.domEnd && this.domEnd > this.domStart + 2) {
-          this.shrinkRight();
+          this.shrinkLeft();
           changed = true;
         }
       }

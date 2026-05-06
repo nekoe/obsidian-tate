@@ -261,7 +261,7 @@ export class ParagraphVirtualizer {
         this.domEnd++;
     }
 
-    // Removes the rightmost div of the window (paragraphs[domEnd]) and grows leftSpacer.
+    // Removes the leftmost div of the window (paragraphs[domEnd]) and grows leftSpacer.
     // Guards against removing a div that contains the current selection anchor or focus.
     private shrinkLeft(): void {
         if (this.domEnd < this.domStart) return; // empty window guard
@@ -277,7 +277,7 @@ export class ParagraphVirtualizer {
         this.domEnd--;
     }
 
-    // Removes the leftmost div of the window (paragraphs[domStart]) and grows rightSpacer.
+    // Removes the rightmost div of the window (paragraphs[domStart]) and grows rightSpacer.
     private shrinkRight(): void {
         if (this.domEnd < this.domStart) return;
         const spacerOffset = this.rightSpacer ? 1 : 0;
@@ -312,7 +312,7 @@ export class ParagraphVirtualizer {
 
     // Called by the window boundary IntersectionObserver.
     // Boundary div enters extended viewport → expand window in that direction.
-    // Boundary div exits extended viewport → shrink window from the opposite end.
+    // Boundary div exits extended viewport → shrink window from that same end.
     private onWindowBoundaryIntersection(entries: IntersectionObserverEntry[]): void {
         if (this.paragraphRecords.length === 0) return;
         let changed = false;
@@ -330,15 +330,14 @@ export class ParagraphVirtualizer {
                     changed = true;
                 }
             } else {
-                // Only shrink from the far end when there are off-screen paragraphs to evict.
-                // Apply a conservative guard: only shrink when the window is wide enough that
-                // at least one paragraph is clearly off-screen on each side.
+                // Only shrink when the window is wide enough that the exiting boundary is
+                // clearly off-screen. Guard of +2 ensures at least one paragraph buffer remains.
                 if (divIndex === this.domStart && this.domEnd > this.domStart + 2) {
-                    this.shrinkLeft();
+                    this.shrinkRight(); // domStart (right boundary) exits → shrink from right
                     changed = true;
                 }
                 if (divIndex === this.domEnd && this.domEnd > this.domStart + 2) {
-                    this.shrinkRight();
+                    this.shrinkLeft();  // domEnd (left boundary) exits → shrink from left
                     changed = true;
                 }
             }
