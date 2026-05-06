@@ -72,10 +72,10 @@ export class EditorElement {
     }
 
     // Loads file content for an initial file-open event. Creates only an initial DOM window
-    // of INITIAL_WINDOW_HALF paragraphs on each side of initialSrcOffset's paragraph; all other
+    // of INITIAL_WINDOW_HALF paragraphs on each side of initialViewOffset's paragraph; all other
     // paragraphs are represented by spacers sized from estimated widths (no DOM nodes needed).
     // Use instead of setValue() for file loads. setValue() is kept for undo/redo paths.
-    loadContent(content: string, initialSrcOffset: number): void {
+    loadContent(content: string, initialViewOffset: number): void {
         content = content.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
         this.inlineEditor.reset();
         if (this.getValue() === content && this.el.childNodes.length > 0) return;
@@ -83,13 +83,16 @@ export class EditorElement {
         const lines = content ? content.split('\n') : [''];
         const N = lines.length;
 
-        // Convert src offset to paragraph index.
-        let center = 0;
+        // Convert VIEW offset to paragraph index. View offset counts visible chars only
+        // (ruby annotations excluded), so accumulate viewLens, not source lengths.
+        // View offsets also do not count newline characters between paragraphs.
+        const virt = this.virtualizer;
+        let center = N - 1;
         let charCount = 0;
         for (let i = 0; i < N; i++) {
-            if (initialSrcOffset <= charCount + lines[i].length) { center = i; break; }
-            charCount += lines[i].length + 1; // +1 for '\n'
-            if (i === N - 1) center = N - 1;
+            const viewLen = virt ? virt.buildParagraphVisibleText(lines[i]).length : lines[i].length;
+            if (initialViewOffset <= charCount + viewLen) { center = i; break; }
+            charCount += viewLen;
         }
         const lo = Math.max(0, center - INITIAL_WINDOW_HALF);
         const hi = Math.min(N - 1, center + INITIAL_WINDOW_HALF);
@@ -101,13 +104,36 @@ export class EditorElement {
             div.replaceChildren(sanitizeHTMLToDom(parseInlineToHtml(lines[i]) || '<br>'));
             windowNodes.push(div);
         }
-        const virt = this.virtualizer;
         if (virt?.rightSpacer && virt.leftSpacer) {
             this.el.replaceChildren(virt.rightSpacer, ...windowNodes, virt.leftSpacer);
         } else {
             this.el.replaceChildren(...windowNodes);
         }
+        // initRecords builds all records (estimated widths) then calls resetWindow to set [lo, hi].
         virt?.initRecords(lines, lo, hi);
+    }
+
+    // Teleports the DOM window to be centered on paragraphRecords[center] without re-parsing the
+    // full file. Used by setVisibleOffset() when the cursor lands in an off-window paragraph
+    // (e.g. outline panel jump). Builds divs from records' .src and calls virt.resetWindow().
+    private jumpWindowTo(center: number): void {
+        const virt = this.virtualizer;
+        if (!virt || virt.paragraphRecords.length === 0) return;
+        const N = virt.paragraphRecords.length;
+        const lo = Math.max(0, center - INITIAL_WINDOW_HALF);
+        const hi = Math.min(N - 1, center + INITIAL_WINDOW_HALF);
+        const windowNodes: Node[] = [];
+        for (let i = lo; i <= hi; i++) {
+            const div = document.createElement('div');
+            div.replaceChildren(sanitizeHTMLToDom(parseInlineToHtml(virt.paragraphRecords[i].src) || '<br>'));
+            windowNodes.push(div);
+        }
+        if (virt.rightSpacer && virt.leftSpacer) {
+            this.el.replaceChildren(virt.rightSpacer, ...windowNodes, virt.leftSpacer);
+        } else {
+            this.el.replaceChildren(...windowNodes);
+        }
+        virt.resetWindow(lo, hi);
     }
 
     setValue(content: string, preserveCursor: boolean): void {
@@ -882,11 +908,15 @@ export class EditorElement {
                 : (this.el.children[idx] as HTMLElement);
 
             if (!child) {
-                // Off-window paragraph (Phase 2c+): shift the window to include it, then retry.
-                virt!.ensureInWindow(idx);
-                const retryChild = virt!.getWindowDiv(idx);
-                if (retryChild) { idx--; continue; } // retry with the now-in-window div
-                remaining -= virt!.paragraphRecords[idx].viewLen;
+                const viewLen = virt!.paragraphRecords[idx].viewLen;
+                if (remaining > viewLen) {
+                    // Cursor is past this paragraph; skip without touching the DOM window.
+                    remaining -= viewLen;
+                    continue;
+                }
+                // Cursor is inside this off-window paragraph. Teleport the window to include it.
+                this.jumpWindowTo(idx);
+                idx--; // retry: paragraph is now in-window
                 continue;
             }
 

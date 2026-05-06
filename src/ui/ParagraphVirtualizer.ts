@@ -139,9 +139,15 @@ export class ParagraphVirtualizer {
             const viewLen = this.buildParagraphVisibleText(line).length;
             this.paragraphRecords.push({ src: line, viewLen, width: this.estimateWidth(viewLen) });
         }
-        this.domStart = domStart;
-        this.domEnd   = Math.min(domEnd, this.paragraphRecords.length - 1);
-        // Set spacer widths from estimated record widths.
+        this.resetWindow(domStart, domEnd);
+    }
+
+    // Repositions the DOM window to [lo, hi] and updates spacer widths from estimated record
+    // widths. Does NOT rebuild paragraph div nodes — the caller is responsible for that.
+    // Used by EditorElement.loadContent() (initial load) and jumpWindowTo() (cursor jumps).
+    resetWindow(lo: number, hi: number): void {
+        this.domStart = Math.max(0, lo);
+        this.domEnd   = Math.min(hi, this.paragraphRecords.length - 1);
         this.rightSpacerWidth = this.paragraphRecords
             .slice(0, this.domStart).reduce((sum, r) => sum + r.width, 0);
         this.leftSpacerWidth = this.paragraphRecords

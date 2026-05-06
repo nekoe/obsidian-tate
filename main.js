@@ -2041,8 +2041,14 @@ var ParagraphVirtualizer = class {
       const viewLen = this.buildParagraphVisibleText(line).length;
       this.paragraphRecords.push({ src: line, viewLen, width: this.estimateWidth(viewLen) });
     }
-    this.domStart = domStart;
-    this.domEnd = Math.min(domEnd, this.paragraphRecords.length - 1);
+    this.resetWindow(domStart, domEnd);
+  }
+  // Repositions the DOM window to [lo, hi] and updates spacer widths from estimated record
+  // widths. Does NOT rebuild paragraph div nodes — the caller is responsible for that.
+  // Used by EditorElement.loadContent() (initial load) and jumpWindowTo() (cursor jumps).
+  resetWindow(lo, hi) {
+    this.domStart = Math.max(0, lo);
+    this.domEnd = Math.min(hi, this.paragraphRecords.length - 1);
     this.rightSpacerWidth = this.paragraphRecords.slice(0, this.domStart).reduce((sum, r) => sum + r.width, 0);
     this.leftSpacerWidth = this.paragraphRecords.slice(this.domEnd + 1).reduce((sum, r) => sum + r.width, 0);
     if (this.rightSpacer) {
@@ -2314,24 +2320,25 @@ var EditorElement = class {
     }
   }
   // Loads file content for an initial file-open event. Creates only an initial DOM window
-  // of INITIAL_WINDOW_HALF paragraphs on each side of initialSrcOffset's paragraph; all other
+  // of INITIAL_WINDOW_HALF paragraphs on each side of initialViewOffset's paragraph; all other
   // paragraphs are represented by spacers sized from estimated widths (no DOM nodes needed).
   // Use instead of setValue() for file loads. setValue() is kept for undo/redo paths.
-  loadContent(content, initialSrcOffset) {
+  loadContent(content, initialViewOffset) {
     content = content.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
     this.inlineEditor.reset();
     if (this.getValue() === content && this.el.childNodes.length > 0) return;
     const lines = content ? content.split("\n") : [""];
     const N = lines.length;
-    let center = 0;
+    const virt = this.virtualizer;
+    let center = N - 1;
     let charCount = 0;
     for (let i = 0; i < N; i++) {
-      if (initialSrcOffset <= charCount + lines[i].length) {
+      const viewLen = virt ? virt.buildParagraphVisibleText(lines[i]).length : lines[i].length;
+      if (initialViewOffset <= charCount + viewLen) {
         center = i;
         break;
       }
-      charCount += lines[i].length + 1;
-      if (i === N - 1) center = N - 1;
+      charCount += viewLen;
     }
     const lo = Math.max(0, center - INITIAL_WINDOW_HALF);
     const hi = Math.min(N - 1, center + INITIAL_WINDOW_HALF);
@@ -2341,13 +2348,34 @@ var EditorElement = class {
       div.replaceChildren((0, import_obsidian4.sanitizeHTMLToDom)(parseInlineToHtml(lines[i]) || "<br>"));
       windowNodes.push(div);
     }
-    const virt = this.virtualizer;
     if ((virt == null ? void 0 : virt.rightSpacer) && virt.leftSpacer) {
       this.el.replaceChildren(virt.rightSpacer, ...windowNodes, virt.leftSpacer);
     } else {
       this.el.replaceChildren(...windowNodes);
     }
     virt == null ? void 0 : virt.initRecords(lines, lo, hi);
+  }
+  // Teleports the DOM window to be centered on paragraphRecords[center] without re-parsing the
+  // full file. Used by setVisibleOffset() when the cursor lands in an off-window paragraph
+  // (e.g. outline panel jump). Builds divs from records' .src and calls virt.resetWindow().
+  jumpWindowTo(center) {
+    const virt = this.virtualizer;
+    if (!virt || virt.paragraphRecords.length === 0) return;
+    const N = virt.paragraphRecords.length;
+    const lo = Math.max(0, center - INITIAL_WINDOW_HALF);
+    const hi = Math.min(N - 1, center + INITIAL_WINDOW_HALF);
+    const windowNodes = [];
+    for (let i = lo; i <= hi; i++) {
+      const div = document.createElement("div");
+      div.replaceChildren((0, import_obsidian4.sanitizeHTMLToDom)(parseInlineToHtml(virt.paragraphRecords[i].src) || "<br>"));
+      windowNodes.push(div);
+    }
+    if (virt.rightSpacer && virt.leftSpacer) {
+      this.el.replaceChildren(virt.rightSpacer, ...windowNodes, virt.leftSpacer);
+    } else {
+      this.el.replaceChildren(...windowNodes);
+    }
+    virt.resetWindow(lo, hi);
   }
   setValue(content, preserveCursor) {
     var _a, _b;
@@ -2949,13 +2977,13 @@ var EditorElement = class {
     for (let idx = 0; idx < N; idx++) {
       const child = virt && virt.domEnd >= 0 ? virt.getWindowDiv(idx) : this.el.children[idx];
       if (!child) {
-        virt.ensureInWindow(idx);
-        const retryChild = virt.getWindowDiv(idx);
-        if (retryChild) {
-          idx--;
+        const viewLen = virt.paragraphRecords[idx].viewLen;
+        if (remaining > viewLen) {
+          remaining -= viewLen;
           continue;
         }
-        remaining -= virt.paragraphRecords[idx].viewLen;
+        this.jumpWindowTo(idx);
+        idx--;
         continue;
       }
       const walker = document.createTreeWalker(child, NodeFilter.SHOW_TEXT);
@@ -3565,9 +3593,9 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
     // Deferred cursor offset: set when a file is loaded while the view is not active.
     // Applied (with scroll) on the next active-leaf-change for this view.
     this.pendingCursorOffset = null;
-    // Source offset passed to editorEl.loadContent() to center the initial DOM window.
+    // View offset passed to editorEl.loadContent() to center the initial DOM window.
     // Set before loadFile() so the SyncCoordinator callback can read it synchronously.
-    this.pendingLoadSrcOffset = 0;
+    this.pendingLoadViewOffset = 0;
     // Monotonic counter managed by beginScrollRestoring/cancelScrollRestoring.
     // Guards cleanup rAFs: a stale rAF from a superseded load will not remove
     // the class that belongs to a newer load (prevents fast-switching race condition).
@@ -3629,7 +3657,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
           this.plugin.refreshOutline();
           this.restoreViewOffset(savedOffset);
         } else {
-          editorEl.loadContent(content, this.pendingLoadSrcOffset);
+          editorEl.loadContent(content, this.pendingLoadViewOffset);
           this.plugin.updateCharCount(countChars(content));
           this.plugin.refreshOutline();
         }
@@ -3821,7 +3849,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
         }
         void (async () => {
           const savedOffset = this.plugin.getCursorPosition(file.path);
-          this.pendingLoadSrcOffset = savedOffset != null ? savedOffset : 0;
+          this.pendingLoadViewOffset = savedOffset != null ? savedOffset : 0;
           const gen = this.beginScrollRestoring();
           await syncCoordinator.loadFile(file);
           if (syncCoordinator.currentFile !== file) {
@@ -3885,7 +3913,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
     const activeFile = this.app.workspace.getActiveFile();
     if (activeFile) {
       const savedOffset = this.plugin.getCursorPosition(activeFile.path);
-      this.pendingLoadSrcOffset = savedOffset != null ? savedOffset : 0;
+      this.pendingLoadViewOffset = savedOffset != null ? savedOffset : 0;
       const gen = this.beginScrollRestoring();
       await syncCoordinator.loadFile(activeFile);
       if (syncCoordinator.currentFile !== activeFile) {
@@ -3904,7 +3932,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
       if (leaf.view instanceof import_obsidian6.MarkdownView && leaf.view.file) {
         const file = leaf.view.file;
         const savedOffset = this.plugin.getCursorPosition(file.path);
-        this.pendingLoadSrcOffset = savedOffset != null ? savedOffset : 0;
+        this.pendingLoadViewOffset = savedOffset != null ? savedOffset : 0;
         const gen = this.beginScrollRestoring();
         await syncCoordinator.loadFile(file);
         if (syncCoordinator.currentFile !== file) {
