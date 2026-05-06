@@ -2833,6 +2833,24 @@ var SearchPanel = class {
   buildPanel(expandReplace) {
     const panel = document.createElement("div");
     panel.className = "tate-search-panel";
+    panel.addEventListener("keydown", (e) => {
+      if (e.target === this.inputEl || e.target === this.replaceInputEl) return;
+      if ((e.metaKey || e.ctrlKey) && !e.altKey && e.key === "z") {
+        e.preventDefault();
+        e.stopPropagation();
+        this.editorElementRef.el.dispatchEvent(
+          new KeyboardEvent("keydown", {
+            key: "z",
+            code: "KeyZ",
+            metaKey: e.metaKey,
+            ctrlKey: e.ctrlKey,
+            shiftKey: e.shiftKey,
+            bubbles: true,
+            cancelable: true
+          })
+        );
+      }
+    });
     const searchRow = document.createElement("div");
     searchRow.className = "tate-search-row";
     const toggleBtn = document.createElement("button");
@@ -2932,7 +2950,7 @@ var SearchPanel = class {
     (_d = this.replaceInputEl) == null ? void 0 : _d.focus();
   }
   replaceAllMatches() {
-    var _a, _b, _c, _d;
+    var _a, _b, _c, _d, _e;
     if (this.matchEntries.length === 0) return;
     const replacement = (_b = (_a = this.replaceInputEl) == null ? void 0 : _a.value) != null ? _b : "";
     const byDiv = /* @__PURE__ */ new Map();
@@ -2955,6 +2973,10 @@ var SearchPanel = class {
     this.virtualizer.initRecords(this.editorElementRef.getValue().split("\n"));
     (_d = this.commitCallback) == null ? void 0 : _d.call(this);
     this.runSearch(false);
+    if (this.matchEntries.length > 0) {
+      this.setFocus(0, true);
+      (_e = this.replaceInputEl) == null ? void 0 : _e.focus();
+    }
   }
   runSearch(scroll = true) {
     var _a, _b, _c;
