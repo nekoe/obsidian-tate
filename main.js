@@ -1519,6 +1519,10 @@ var InlineEditor = class {
   wrapSelectionWithBouten() {
     return this.wrapSelectionWith(createBoutenEl);
   }
+  // Wraps the selected text in a heading element
+  wrapSelectionWithHeading(level) {
+    return this.wrapSelectionWith((content) => createHeadingEl(content, level));
+  }
   // Handles ArrowUp (→ move left) and ArrowDown (→ move right) when cursor is inside a tcy span.
   // In vertical writing mode the tcy element is laid out horizontally, so the vertical arrow keys
   // should navigate within the tcy text rather than jumping to the adjacent line.
@@ -1992,36 +1996,10 @@ var EditorElement = class {
   wrapSelectionWithBouten() {
     return this.inlineEditor.wrapSelectionWithBouten();
   }
-  // Applies a heading annotation to the paragraph containing the cursor.
-  // If the paragraph already has a heading at the same level, the annotation is removed (toggle).
-  // If it has a different heading level, the level is changed.
-  // Returns false if there is no cursor or the paragraph is empty.
+  // Wraps the selected text in a heading annotation span (same as tcy/bouten).
+  // Returns false if no text is selected.
   applyHeading(level) {
-    var _a, _b;
-    const sel = window.getSelection();
-    if (!sel || sel.rangeCount === 0) return false;
-    const div = this.findParagraphDiv(sel.getRangeAt(0).startContainer);
-    if (!div) return false;
-    const currentSrc = this.virtualizer ? this.virtualizer.getSrcLine(div) : Array.from(div.childNodes).map((n) => serializeNode(n, this.el)).join("");
-    if (!currentSrc) return false;
-    const suffix = level === "large" ? "\u5927\u898B\u51FA\u3057" : level === "mid" ? "\u4E2D\u898B\u51FA\u3057" : "\u5C0F\u898B\u51FA\u3057";
-    const m = /^([\s\S]+)［＃「([^「」\n]+)」は(大|中|小)見出し］$/.exec(currentSrc);
-    let newSrc;
-    if (m && m[1].endsWith(m[2])) {
-      const content = m[2];
-      const existingLevel = m[3] === "\u5927" ? "large" : m[3] === "\u4E2D" ? "mid" : "small";
-      if (existingLevel === level) {
-        newSrc = m[1];
-      } else {
-        newSrc = `${m[1]}\uFF3B\uFF03\u300C${content}\u300D\u306F${suffix}\uFF3D`;
-      }
-    } else {
-      newSrc = `${currentSrc}\uFF3B\uFF03\u300C${currentSrc}\u300D\u306F${suffix}\uFF3D`;
-    }
-    (_a = this.virtualizer) == null ? void 0 : _a.unfrostDiv(div);
-    div.replaceChildren((0, import_obsidian3.sanitizeHTMLToDom)(parseInlineToHtml(newSrc) || "<br>"));
-    (_b = this.virtualizer) == null ? void 0 : _b.observeOne(div);
-    return true;
+    return this.inlineEditor.wrapSelectionWithHeading(level);
   }
   // Copy handler: serializes the selected DOM to Aozora notation and writes it to text/plain.
   // This ensures ruby/tcy/bouten are preserved when copying within the editor.

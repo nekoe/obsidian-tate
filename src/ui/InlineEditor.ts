@@ -1,5 +1,5 @@
 import {
-    createTcyEl, createBoutenEl,
+    createTcyEl, createBoutenEl, createHeadingEl,
     insertAnnotationElement,
     findTcyAncestor,
 } from './domHelpers';
@@ -302,6 +302,11 @@ export class InlineEditor {
     // Wraps the selected text in a bouten element
     wrapSelectionWithBouten(): boolean {
         return this.wrapSelectionWith(createBoutenEl);
+    }
+
+    // Wraps the selected text in a heading element
+    wrapSelectionWithHeading(level: 'large' | 'mid' | 'small'): boolean {
+        return this.wrapSelectionWith(content => createHeadingEl(content, level));
     }
 
     // Handles ArrowUp (→ move left) and ArrowDown (→ move right) when cursor is inside a tcy span.
