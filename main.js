@@ -2036,18 +2036,14 @@ var ParagraphVirtualizer = class {
   syncWindowSrcs(lines) {
     const n = lines.length;
     const cur = this.paragraphRecords;
-    if (n > cur.length) {
-      for (let i = cur.length; i < n; i++) {
-        cur.push({ src: lines[i], viewLen: this.buildParagraphVisibleText(lines[i]).length, width: 0 });
-      }
-    } else if (n < cur.length) {
-      cur.splice(n);
-      this.domEnd = Math.min(this.domEnd, n - 1);
-    }
+    while (cur.length < n) cur.push({ src: "", viewLen: 0, width: 0 });
+    while (cur.length > n) cur.pop();
     for (let i = 0; i < n; i++) {
       cur[i].src = lines[i];
       cur[i].viewLen = this.buildParagraphVisibleText(lines[i]).length;
     }
+    this.domEnd = Math.min(this.domEnd, n - 1);
+    this.domStart = Math.min(this.domStart, Math.max(0, n - 1));
   }
   // Mirrors the DOM splice performed by patchParagraphs, keeping paragraphRecords in sync.
   // lo: first changed index; deleteCount: number of old records to remove;
@@ -2962,7 +2958,7 @@ function extractSegmentsFromDiv(div, editorEl) {
   let node = walker.nextNode();
   while (node) {
     if (!isInsideRtNode(node, editorEl)) {
-      const visible = ((_a = node.textContent) != null ? _a : "").replace(/​/g, "");
+      const visible = ((_a = node.textContent) != null ? _a : "").replace(/\u200B/g, "");
       if (visible.length > 0) {
         segments.push({ node, start: localOffset, length: visible.length });
         localOffset += visible.length;
@@ -2986,7 +2982,7 @@ function extractHybridText(editorEl, virtualizer) {
       const segments = extractSegmentsFromDiv(div, editorEl);
       const text = segments.map((s) => {
         var _a;
-        return ((_a = s.node.textContent) != null ? _a : "").replace(/​/g, "");
+        return ((_a = s.node.textContent) != null ? _a : "").replace(/\u200B/g, "");
       }).join("");
       paragraphs.push({ paragraphIndex: i, div, globalStart: globalOffset, text, segments });
       globalOffset += text.length;

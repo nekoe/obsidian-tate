@@ -41,7 +41,7 @@ function visibleToRawOffset(node: Text, visibleOffset: number): number {
     let visible = 0;
     for (let i = 0; i < text.length; i++) {
         if (visible === visibleOffset) return i;
-        if (text[i] !== '​') visible++;
+        if (text[i] !== '\u200B') visible++;
     }
     return text.length;
 }
@@ -53,7 +53,7 @@ function extractSegmentsFromDiv(div: HTMLElement, editorEl: HTMLElement): LocalS
     let node = walker.nextNode() as Text | null;
     while (node) {
         if (!isInsideRtNode(node, editorEl)) {
-            const visible = (node.textContent ?? '').replace(/​/g, '');
+            const visible = (node.textContent ?? '').replace(/\u200B/g, '');
             if (visible.length > 0) {
                 segments.push({ node, start: localOffset, length: visible.length });
                 localOffset += visible.length;
@@ -82,7 +82,7 @@ function extractHybridText(
             globalOffset += text.length;
         } else {
             const segments = extractSegmentsFromDiv(div, editorEl);
-            const text = segments.map(s => (s.node.textContent ?? '').replace(/​/g, '')).join('');
+            const text = segments.map(s => (s.node.textContent ?? '').replace(/\u200B/g, '')).join('');
             paragraphs.push({ paragraphIndex: i, div, globalStart: globalOffset, text, segments });
             globalOffset += text.length;
         }
@@ -328,7 +328,7 @@ export class SearchPanel {
         const panel = document.createElement('div');
         panel.className = 'tate-search-panel';
 
-        // When focus is on a panel element other than the text inputs (e.g., the 全置換 button),
+        // When focus is on a panel element other than the text inputs (e.g., the replace-all button),
         // forward Cmd-z / Shift+Cmd-z to the editor so Undo/Redo still works.
         panel.addEventListener('keydown', (e) => {
             if (e.target === this.inputEl || e.target === this.replaceInputEl) return;

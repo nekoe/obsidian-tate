@@ -130,19 +130,16 @@ export class ParagraphVirtualizer {
     syncWindowSrcs(lines: string[]): void {
         const n = lines.length;
         const cur = this.paragraphRecords;
-        // Grow or shrink the record array to match the new line count while preserving widths.
-        if (n > cur.length) {
-            for (let i = cur.length; i < n; i++) {
-                cur.push({ src: lines[i], viewLen: this.buildParagraphVisibleText(lines[i]).length, width: 0 });
-            }
-        } else if (n < cur.length) {
-            cur.splice(n);
-            this.domEnd = Math.min(this.domEnd, n - 1);
-        }
+        // Resize in-place, preserving existing widths. New entries get width=0.
+        while (cur.length < n) cur.push({ src: '', viewLen: 0, width: 0 });
+        while (cur.length > n) cur.pop();
         for (let i = 0; i < n; i++) {
             cur[i].src     = lines[i];
             cur[i].viewLen = this.buildParagraphVisibleText(lines[i]).length;
         }
+        // Clamp both window bounds to the new record count.
+        this.domEnd   = Math.min(this.domEnd, n - 1);
+        this.domStart = Math.min(this.domStart, Math.max(0, n - 1));
     }
 
     // Mirrors the DOM splice performed by patchParagraphs, keeping paragraphRecords in sync.
