@@ -28,14 +28,11 @@ Select text, open the command palette (`Ctrl+P` / `Cmd+P`), and run one of:
 - `Add ruby to selection (ruby)`
 - `Make selection tate-chu-yoko (tate-chu-yoko: tcy)`
 - `Add emphasis marks to selection (bouten)`
+- `選択テキストを大見出しに設定`
+- `選択テキストを中見出しに設定`
+- `選択テキストを小見出しに設定`
 
-For headings, place the cursor in the paragraph you want to style and run one of:
-
-- `Set current paragraph as large heading (大見出し)`
-- `Set current paragraph as mid heading (中見出し)`
-- `Set current paragraph as small heading (小見出し)`
-
-Running the same command again on a heading paragraph removes the annotation (toggle). Running a different heading command changes the level.
+All annotations are applied to the selected text range.
 
 **Inline Editing**
 
@@ -91,6 +88,7 @@ As you type in the search field, all matches are highlighted instantly and the n
 | Action | Key / Button |
 |--------|-------------|
 | Replace current hit and move to next | **Enter** or 置換 button |
+| Replace all hits at once | 全置換 button |
 | Close panel | **Esc** |
 
 **Tab** moves focus from the search field to the replace field (and back).
