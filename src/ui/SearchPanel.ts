@@ -455,7 +455,7 @@ export class SearchPanel {
         replaceBtnGroup.className = 'tate-replace-btn-group';
         replaceBtnGroup.append(replaceBtn, replaceAllBtn);
 
-        replaceRow.append(replaceInput, replaceBtnGroup);
+        replaceRow.append(replaceBtnGroup, replaceInput);
 
         panel.append(searchRow, replaceRow);
         // Append to the tate-container so Obsidian's cleanup manages this DOM.

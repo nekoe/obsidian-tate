@@ -236,7 +236,6 @@
 .tate-replace-btn-group {
     display: flex;
     gap: 4px;
-    margin-left: auto;
     flex-shrink: 0;
 }
 
