@@ -66,11 +66,14 @@ export class OutlineView extends ItemView {
     }
 
     private jumpTo(entry: HeadingEntry): void {
-        const leaves = this.app.workspace.getLeavesOfType(TATE_VIEW_TYPE);
-        if (leaves.length === 0) return;
-        const tateView = leaves[0].view;
-        if (!(tateView instanceof VerticalWritingView)) return;
+        const active = this.app.workspace.getActiveViewOfType(VerticalWritingView);
+        const tateView = active ?? (() => {
+            const leaves = this.app.workspace.getLeavesOfType(TATE_VIEW_TYPE);
+            return leaves.length > 0 && leaves[0].view instanceof VerticalWritingView
+                ? leaves[0].view : null;
+        })();
+        if (!tateView) return;
         tateView.jumpToViewOffset(entry.viewOffset);
-        void this.app.workspace.revealLeaf(leaves[0]);
+        void this.app.workspace.revealLeaf(tateView.leaf);
     }
 }

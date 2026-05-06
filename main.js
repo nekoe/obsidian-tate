@@ -4291,12 +4291,14 @@ var OutlineView = class extends import_obsidian7.ItemView {
     }
   }
   jumpTo(entry) {
-    const leaves = this.app.workspace.getLeavesOfType(TATE_VIEW_TYPE);
-    if (leaves.length === 0) return;
-    const tateView = leaves[0].view;
-    if (!(tateView instanceof VerticalWritingView)) return;
+    const active = this.app.workspace.getActiveViewOfType(VerticalWritingView);
+    const tateView = active != null ? active : (() => {
+      const leaves = this.app.workspace.getLeavesOfType(TATE_VIEW_TYPE);
+      return leaves.length > 0 && leaves[0].view instanceof VerticalWritingView ? leaves[0].view : null;
+    })();
+    if (!tateView) return;
     tateView.jumpToViewOffset(entry.viewOffset);
-    void this.app.workspace.revealLeaf(leaves[0]);
+    void this.app.workspace.revealLeaf(tateView.leaf);
   }
 };
 
@@ -4497,12 +4499,11 @@ var TatePlugin = class extends import_obsidian8.Plugin {
   }
   /** Scans the active tate view's paragraphRecords and pushes headings to all open outline panels. */
   refreshOutline() {
-    var _a;
     const outlineLeaves = this.app.workspace.getLeavesOfType(TATE_OUTLINE_VIEW_TYPE);
     if (outlineLeaves.length === 0) return;
     const tateView = this.app.workspace.getActiveViewOfType(VerticalWritingView);
-    const records = (_a = tateView == null ? void 0 : tateView.getParagraphRecords()) != null ? _a : [];
-    const headings = extractHeadings(records);
+    if (!tateView) return;
+    const headings = extractHeadings(tateView.getParagraphRecords());
     for (const leaf of outlineLeaves) {
       if (leaf.view instanceof OutlineView) leaf.view.updateHeadings(headings);
     }

@@ -4,6 +4,7 @@ import { SyncCoordinator } from './sync/SyncCoordinator';
 import { EditorElement } from './ui/EditorElement';
 import { SearchPanel } from './ui/SearchPanel';
 import { ParagraphVirtualizer } from './ui/ParagraphVirtualizer';
+import type { ParagraphRecord } from './ui/ParagraphVirtualizer';
 import { buildSegmentMap, viewToSrc } from './ui/SegmentMap';
 import { TatePluginSettings } from './settings';
 
@@ -720,7 +721,7 @@ export class VerticalWritingView extends ItemView {
     }
 
     /** Returns the current paragraphRecords for outline extraction. */
-    getParagraphRecords(): readonly import('./ui/ParagraphVirtualizer').ParagraphRecord[] {
+    getParagraphRecords(): readonly ParagraphRecord[] {
         return this.virtualizer?.paragraphRecords ?? [];
     }
 

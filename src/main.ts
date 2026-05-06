@@ -213,8 +213,8 @@ export default class TatePlugin extends Plugin {
         const outlineLeaves = this.app.workspace.getLeavesOfType(TATE_OUTLINE_VIEW_TYPE);
         if (outlineLeaves.length === 0) return;
         const tateView = this.app.workspace.getActiveViewOfType(VerticalWritingView);
-        const records = tateView?.getParagraphRecords() ?? [];
-        const headings = extractHeadings(records);
+        if (!tateView) return;
+        const headings = extractHeadings(tateView.getParagraphRecords());
         for (const leaf of outlineLeaves) {
             if (leaf.view instanceof OutlineView) leaf.view.updateHeadings(headings);
         }
