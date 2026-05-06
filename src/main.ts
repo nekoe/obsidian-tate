@@ -132,7 +132,11 @@ export default class TatePlugin extends Plugin {
         this.addCommand({
             id: 'open-outline',
             name: 'アウトラインパネルを開く',
-            callback: () => void this.activateOutlineView(),
+            checkCallback: (checking) => {
+                if (this.app.workspace.getLeavesOfType(TATE_VIEW_TYPE).length === 0) return false;
+                if (!checking) void this.activateOutlineView();
+                return true;
+            },
         });
 
         this.addSettingTab(new TateSettingTab(this.app, this));
@@ -206,6 +210,13 @@ export default class TatePlugin extends Plugin {
                 leaf.view.applySettings(this.settings);
             }
         });
+    }
+
+    /** Clears all open outline panels (called when the last tate view is closed). */
+    clearOutline(): void {
+        for (const leaf of this.app.workspace.getLeavesOfType(TATE_OUTLINE_VIEW_TYPE)) {
+            if (leaf.view instanceof OutlineView) leaf.view.updateHeadings([]);
+        }
     }
 
     /** Scans the active tate view's paragraphRecords and pushes headings to all open outline panels. */

@@ -3914,6 +3914,10 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
     if (!this.app.workspace.getActiveViewOfType(_VerticalWritingView)) {
       this.plugin.updateCharCount(null);
     }
+    const remainingTateViews = this.app.workspace.getLeavesOfType(TATE_VIEW_TYPE).filter((leaf) => leaf.view !== this);
+    if (remainingTateViews.length === 0) {
+      this.plugin.clearOutline();
+    }
   }
   showLoadingSpinner() {
     var _a;
@@ -4132,7 +4136,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
    *  Cursor sync is skipped while tate-editing is expanded (synced via selectionchange on collapse).
    *  Also cancels any pending debounce timer so immediate commit points preempt the timer. */
   commitToCm6() {
-    var _a;
+    var _a, _b;
     if (this.commitTimer !== null) {
       clearTimeout(this.commitTimer);
       this.commitTimer = null;
@@ -4168,6 +4172,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
       cm6.setCursor(cm6.offsetToPos(viewToSrc(segs, viewOffset)));
     }
     el.afterCommit();
+    (_b = this.virtualizer) == null ? void 0 : _b.initRecords(content.split("\n"));
     this.plugin.refreshOutline();
   }
   /** Delegates Undo (isRedo=false) or Redo (isRedo=true) to CM6 and restores
@@ -4437,7 +4442,11 @@ var TatePlugin = class extends import_obsidian8.Plugin {
     this.addCommand({
       id: "open-outline",
       name: "\u30A2\u30A6\u30C8\u30E9\u30A4\u30F3\u30D1\u30CD\u30EB\u3092\u958B\u304F",
-      callback: () => void this.activateOutlineView()
+      checkCallback: (checking) => {
+        if (this.app.workspace.getLeavesOfType(TATE_VIEW_TYPE).length === 0) return false;
+        if (!checking) void this.activateOutlineView();
+        return true;
+      }
     });
     this.addSettingTab(new TateSettingTab(this.app, this));
     this.registerEvent(
@@ -4496,6 +4505,12 @@ var TatePlugin = class extends import_obsidian8.Plugin {
         leaf.view.applySettings(this.settings);
       }
     });
+  }
+  /** Clears all open outline panels (called when the last tate view is closed). */
+  clearOutline() {
+    for (const leaf of this.app.workspace.getLeavesOfType(TATE_OUTLINE_VIEW_TYPE)) {
+      if (leaf.view instanceof OutlineView) leaf.view.updateHeadings([]);
+    }
   }
   /** Scans the active tate view's paragraphRecords and pushes headings to all open outline panels. */
   refreshOutline() {

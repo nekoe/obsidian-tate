@@ -523,6 +523,12 @@ export class VerticalWritingView extends ItemView {
         if (!this.app.workspace.getActiveViewOfType(VerticalWritingView)) {
             this.plugin.updateCharCount(null);
         }
+        // Clear the outline if this was the last open tate view.
+        const remainingTateViews = this.app.workspace.getLeavesOfType(TATE_VIEW_TYPE)
+            .filter(leaf => leaf.view !== this);
+        if (remainingTateViews.length === 0) {
+            this.plugin.clearOutline();
+        }
     }
 
     private showLoadingSpinner(): void {
@@ -818,6 +824,7 @@ export class VerticalWritingView extends ItemView {
             cm6.setCursor(cm6.offsetToPos(viewToSrc(segs, viewOffset)));
         }
         el.afterCommit();
+        this.virtualizer?.initRecords(content.split('\n'));
         this.plugin.refreshOutline();
     }
 
