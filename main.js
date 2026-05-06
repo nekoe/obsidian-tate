@@ -2929,7 +2929,7 @@ var SearchPanel = class {
     const replaceBtnGroup = document.createElement("div");
     replaceBtnGroup.className = "tate-replace-btn-group";
     replaceBtnGroup.append(replaceBtn, replaceAllBtn);
-    replaceRow.append(replaceBtnGroup, replaceInput);
+    replaceRow.append(replaceInput, replaceBtnGroup);
     panel.append(searchRow, replaceRow);
     this.container.appendChild(panel);
     this.panelEl = panel;
