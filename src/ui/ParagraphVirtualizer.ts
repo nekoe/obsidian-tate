@@ -209,9 +209,27 @@ export class ParagraphVirtualizer {
             return { src, viewLen, width: this.estimateWidth(viewLen) };
         });
         this.paragraphRecords.splice(lo, deleteCount, ...newRecords);
-        // Clamp domEnd to the new total count (may have shrunk if lines were deleted).
-        this.domEnd = Math.min(this.domEnd + (newLines.length - deleteCount), this.paragraphRecords.length - 1);
+        const delta = newLines.length - deleteCount;
+        // If the splice is entirely before the window, shift the window indices.
+        if (lo < this.domStart) {
+            this.domStart = Math.max(0, this.domStart + delta);
+        }
+        // Adjust domEnd by the count delta and clamp to the new total.
+        this.domEnd = Math.min(this.domEnd + delta, this.paragraphRecords.length - 1);
         this.domEnd = Math.max(this.domEnd, this.domStart);
+        // Recompute spacer widths so scrollWidth stays correct.
+        this.rightSpacerWidth = this.paragraphRecords
+            .slice(0, this.domStart).reduce((sum, r) => sum + r.width, 0);
+        this.leftSpacerWidth = this.paragraphRecords
+            .slice(this.domEnd + 1).reduce((sum, r) => sum + r.width, 0);
+        if (this.rightSpacer) {
+            if (this.rightSpacerWidth > 0) this.rightSpacer.style.setProperty('width', `${this.rightSpacerWidth}px`);
+            else this.rightSpacer.style.removeProperty('width');
+        }
+        if (this.leftSpacer) {
+            if (this.leftSpacerWidth > 0) this.leftSpacer.style.setProperty('width', `${this.leftSpacerWidth}px`);
+            else this.leftSpacer.style.removeProperty('width');
+        }
         this.reobserveBoundaries();
     }
 
