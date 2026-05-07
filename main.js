@@ -2801,9 +2801,12 @@ var EditorElement = class {
   }
   // Returns the el.children index for paragraph at logical index i.
   // With spacers: rightSpacer is at children[0], so paragraphs start at children[1].
+  // With a partial window [domStart, domEnd]: DOM children are paragraphs domStart..domEnd,
+  // so index i maps to children[i - domStart + spacerOffset].
   paragraphChildIndex(i) {
-    var _a;
-    return i + (((_a = this.virtualizer) == null ? void 0 : _a.rightSpacer) ? 1 : 0);
+    const virt = this.virtualizer;
+    const windowOffset = virt && virt.domEnd >= 0 ? virt.domStart : 0;
+    return i - windowOffset + ((virt == null ? void 0 : virt.rightSpacer) ? 1 : 0);
   }
   // Updates paragraph divs to match nextContent, replacing only divs whose line changed.
   // Returns the changed/added divs, or null if hasCleanDivStructure failed (full rebuild).
