@@ -41,17 +41,31 @@ export class EditorElement {
         if (!virt || virt.domEnd < 0) {
             return Array.from(this.el.childNodes).map(n => serializeNode(n, this.el)).join('');
         }
-        // Iterate by paragraphRecords index so that off-window paragraphs (Phase 2c+) are read
-        // from records rather than the DOM (their divs have been removed from the tree).
+        // Use the actual DOM child count for the window region rather than domEnd-domStart+1.
+        // After Enter/Backspace the browser adds/removes a div inside the window before
+        // syncWindowSrcs runs, creating a transient mismatch between domEnd and the DOM.
+        // Reading paragraphRecords.length times would miss the extra div (Enter) or read a
+        // spacer as a paragraph (Backspace), producing wrong CM6-committed content.
+        const spacerOffset  = virt.rightSpacer ? 1 : 0;
+        const spacerCount   = virt.rightSpacer ? 2 : 0;
+        const actualDivCount = this.el.children.length - spacerCount;
+        const nBefore = virt.domStart;
+        // Off-window records after the window start at domEnd+1; their indices are stable
+        // even when the DOM window has gained/lost a div (before syncWindowSrcs).
+        const nAfter  = Math.max(0, virt.paragraphRecords.length - (virt.domEnd + 1));
+        const total   = nBefore + actualDivCount + nAfter;
+
         const parts: string[] = [];
-        for (let i = 0; i < virt.paragraphRecords.length; i++) {
-            const div = virt.getWindowDiv(i);
+        for (let i = 0; i < total; i++) {
             let src: string;
-            if (!div) {
-                // Off-window: read from records.
+            if (i < nBefore) {
                 src = virt.paragraphRecords[i].src;
+            } else if (i < nBefore + actualDivCount) {
+                const domChild = this.el.children[(i - nBefore) + spacerOffset] as HTMLElement;
+                src = Array.from(domChild.childNodes).map(n => serializeNode(n, this.el)).join('');
             } else {
-                src = Array.from(div.childNodes).map(n => serializeNode(n, this.el)).join('');
+                const recIdx = (virt.domEnd + 1) + (i - nBefore - actualDivCount);
+                src = virt.paragraphRecords[recIdx]?.src ?? '';
             }
             parts.push(i === 0 ? src : '\n' + src);
         }
@@ -650,7 +664,7 @@ export class EditorElement {
         // O(N) replaceChildren cost and prevents the scroll-width collapse that causes
         // scroll position to jump after Undo/Redo on large files.
         const changedDivs = this.patchParagraphs(prevContent, content);
-        // Convert CM6 source offset to visible offset and restore cursor
+        // Convert CM6 source offset to visible offset and restore cursor.
         const segs = buildSegmentMap(content);
         const viewOffset = srcToView(segs, srcOffset);
         this.setVisibleOffset(viewOffset);
