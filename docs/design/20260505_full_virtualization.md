@@ -1,14 +1,14 @@
-# Full DOM Virtualization: Design Notes and Future Feature Roadmap
+# Full DOM Virtualization: Design Notes and Implementation History
 
-Created: 2026-05-05
+Created: 2026-05-05  
+Last updated: 2026-05-07
 
 ## Background
 
 The existing pseudo-virtualization (`ParagraphVirtualizer`, introduced in
-`20260504_dom_virtualization.md`) empties off-screen paragraph divs. Their content is stored in
-`frozenSrc` / `frozenViewLen` WeakMaps and a `paragraphRecords[]` array (Phase 1 completed;
-the original `data-src` / `data-view-len` DOM attributes were removed). Every frozen div shell
-still remains in the DOM tree. On a 936 k-character file the editor holds ~21,000 div shells.
+`20260504_dom_virtualization.md`) emptied off-screen paragraph divs. Their content was stored in
+`frozenSrc` / `frozenViewLen` WeakMaps and a `paragraphRecords[]` array. Every frozen div shell
+still remained in the DOM tree. On a 936 k-character file the editor held ~21,000 div shells.
 
 ### Remaining performance problem after pseudo-virtualization
 
@@ -27,11 +27,11 @@ After this fix, deletion time is ~25 ms for any selection size (dominated by `ra
 removing N DOM nodes) instead of growing linearly with the number of deleted paragraphs. The fix
 is in `EditorElement.handleSelectionDelete()` and `deleteRangeContents()`.
 
-### Why pseudo-virtualization cannot fully solve the problem
+### Why pseudo-virtualization could not fully solve the problem
 
-`range.deleteContents()` still traverses all DOM nodes inside the range, including frozen shells.
-Full virtualization — keeping only the visible window in the DOM — would reduce the node count
-that `deleteContents()` must traverse, cutting deletion cost proportionally.
+`range.deleteContents()` still traversed all DOM nodes inside the range, including frozen shells.
+Full virtualization — keeping only the visible window in the DOM — reduces the node count that
+`deleteContents()` must traverse, cutting deletion cost proportionally.
 
 ---
 
@@ -66,17 +66,15 @@ garbage-collected when their key element is removed, so a plain indexed array is
 ```typescript
 interface ParagraphRecord {
     src: string;       // Aozora source line
-    viewLen: number;   // visible character count
-    width: number;     // measured pixel width (0 = not yet measured)
+    viewLen: number;   // visible character count (excluding annotation markers and rt text)
+    width: number;     // measured or estimated pixel width; 0 = unknown (never in window)
 }
 paragraphRecords: ParagraphRecord[];
 ```
 
-`width: 0` (or a placeholder estimate such as the `content-visibility: auto` intrinsic fallback
-of 44 px) is used for paragraphs that have never entered the viewport. These paragraphs have not
-been rendered by the browser, so their real width is unknown. The actual value is written when the
-paragraph first becomes visible (same measurement point as the current `lastKnownWidths` capture
-in `onIntersection`).
+`width: 0` (or a placeholder estimate of 44 px = one column at the default font size) is used for
+paragraphs that have never entered the viewport. The actual value is written when the paragraph
+first leaves the window and its measured width is captured.
 
 ### DOM window management
 
@@ -84,11 +82,11 @@ The window is defined by `[domStart, domEnd]` (inclusive, paragraph indices). Wi
 and contraction are triggered by an `IntersectionObserver` on the boundary divs (first and last
 of the window):
 
-- **Boundary div enters viewport** → expand the window by one paragraph in that direction:
+- **Boundary div enters extended viewport** → expand the window by one paragraph in that direction:
   create a new div from `paragraphRecords[domStart-1]` (or `domEnd+1`), insert it at the
-  appropriate end, and shrink the corresponding spacer by the new div's width.
-- **Boundary div leaves viewport (beyond a buffer threshold)** → contract the window from the
-  far end: read the div's current width, add it to the appropriate spacer, then remove the div.
+  appropriate end, and shrink the corresponding spacer by the new div's estimated/measured width.
+- **Boundary div leaves extended viewport (beyond a buffer threshold)** → contract the window from
+  the far end: read the div's current width, add it to the appropriate spacer, then remove the div.
 
 Because the spacer's width change and the div's width change cancel each other, `scrollWidth`
 remains constant and `scrollLeft` does not shift.
@@ -116,14 +114,13 @@ If the user starts a drag selection and scrolls so that the anchor end of the se
 leave the DOM window, the selection breaks (the browser cannot represent a range whose anchor is
 outside the DOM).
 
-**Solution**: track the selection anchor and focus nodes. Do not remove a div from the window if
-it contains `selection.anchorNode` or `selection.focusNode`. During an active drag (between
-`mousedown` and `mouseup`), hold the entire selection range in the DOM.
+**Solution**: track whether a drag is in progress (between `mousedown` and `mouseup`). Do not
+remove a div from the window if it contains `selection.anchorNode` or `selection.focusNode`.
 
 ### 2. Width of never-rendered paragraphs
 
-A paragraph that has never been in the viewport has no measured width. Using 44 px (the
-`content-visibility: auto` intrinsic fallback) as a placeholder causes the spacer to be
+A paragraph that has never been in the viewport has no measured width. Using 44 px (one column
+width at the default font size 22px × lineHeight 2) as a placeholder causes the spacer to be
 inaccurate by `(realWidth - 44) × count` pixels for all unrendered paragraphs.
 
 **Acceptable trade-off**: the inaccuracy only affects paragraphs in the right spacer (not yet
@@ -132,10 +129,15 @@ paragraph enters the viewport. For a document read front-to-back this causes no 
 For random-access navigation (e.g., the outline panel jumping to an unrendered heading), a
 one-time correction is acceptable.
 
+**Width estimation**: `estimateWidth(viewLen)` computes the initial width from the visible
+character count, font size, and line height, without touching the DOM. This produces a much better
+initial estimate than the flat 44 px fallback for multi-column paragraphs.
+
 ### 3. Contenteditable + mouse click on spacer (non-issue)
 
 Spacers are in the off-screen area. The user can only click on positions that are visible in
 the viewport, which are always within the DOM window. Clicks never land on a spacer.
+Spacers have `pointer-events: none` and `user-select: none` to prevent accidental selection.
 
 ### 4. IME composition (non-issue)
 
@@ -146,206 +148,133 @@ therefore inside the DOM window.
 
 ## Impact on Existing Features
 
-### getValue() / getSrcLine()
+### getValue()
 
-`getValue()` currently serializes every div either via `frozenSrc` WeakMap (frozen) or
-`serializeNode` (real). With full virtualization, off-window divs are not in the DOM at all and
-have no WeakMap entry (GC'd on removal). `getValue()` must read from `paragraphRecords[i].src`
-for off-window paragraphs instead. This is faster (no DOM traversal) and is already the
-structure maintained by Phase 1.
+`getValue()` iterates by `paragraphRecords` index. For in-window paragraphs it calls
+`serializeNode()` on the DOM div; for off-window paragraphs it reads `paragraphRecords[i].src`
+directly. Off-window reads are faster (no DOM traversal) and are always accurate because
+`syncWindowSrcs()` keeps records in sync after every commit.
 
 ### patchParagraphs (Undo/Redo)
 
 `patchParagraphs` diffs previous and next content and updates only changed divs. With full
-virtualization, it must also update `paragraphRecords` for changed lines, regardless of whether
-those lines are currently in the DOM window. Off-window changed lines update only the record;
-in-window changed lines update both the record and the DOM.
+virtualization it also calls `spliceRecords(lo, deleteCount, newLines)` to keep `paragraphRecords`
+in sync with the DOM changes. For changes entirely outside the current DOM window,
+`patchParagraphs` updates only the records (no DOM manipulation). `paragraphChildIndex(i)`
+accounts for the `rightSpacer` offset so `el.children[...]` references the correct div.
 
-### selectionchange / ensureThawedAtCursor
+### syncWindowSrcs (typing / commitToCm6)
 
-`ensureThawedAtCursor` currently thaws the cursor div and its neighbors. With full virtualization,
-the cursor is always inside the DOM window by construction (the window is expanded to include the
-cursor paragraph on `selectionchange`). The thaw concept is replaced by "ensure cursor paragraph
-is within `[domStart, domEnd]`; if not, shift the window."
+`syncWindowSrcs(lines)` is called from `commitToCm6()` after every commit. It updates `src` and
+`viewLen` in-place for all records without resetting `domStart`, `domEnd`, or spacer widths.
+This keeps outline data and off-window reads current after plain typing. It also reconciles
+`domEnd` with the actual number of paragraph divs present in the DOM (Enter/Delete can shift the
+count inside the window without going through `patchParagraphs`).
+
+### loadContent (file open)
+
+`loadContent(content, initialViewOffset)` creates only an initial DOM window of
+`INITIAL_WINDOW_HALF = 50` paragraphs on each side of the initial cursor position (100 total).
+All other paragraphs are represented by estimated-width spacers with no DOM nodes. This avoids
+loading all N paragraph divs on file open, which was the main O(N) cost for large files.
+
+`initRecords(lines, lo, hi)` accepts optional `domStart`/`domEnd` arguments to set the initial
+window directly; `resetWindow(lo, hi)` updates spacer widths from estimated record widths.
+
+### setVisibleOffset (cursor restore)
+
+`setVisibleOffset(offset)` iterates by `paragraphRecords` index. For in-window paragraphs it
+walks the DOM text nodes; for off-window paragraphs it checks `remaining > viewLen` to skip
+without touching the DOM. If the cursor lands in an off-window paragraph, `jumpWindowTo(center)`
+teleports the window to be centered on that paragraph, rebuilding only the new window's divs from
+records' `.src` and calling `resetWindow(lo, hi)`.
+
+### selectionchange / ensureWindowAroundCursor
+
+`ensureWindowAroundCursor()` is a no-op safety hook. The `IntersectionObserver` keeps the cursor
+paragraph in the window proactively (the IO fires before the cursor div would leave the extended
+viewport), so cursor-in-window is an invariant maintained automatically.
 
 ### SearchPanel (CSS Custom Highlight API)
 
-The search panel highlights matches using `CSS.highlights`. Highlights can only reference DOM
-`Range` objects; off-window paragraphs have no DOM nodes to create ranges from.
-
-**Required extension**: when a search match falls in an off-window paragraph, either:
-(a) expand the DOM window to include that paragraph before creating the highlight range, or
-(b) defer highlighting to scroll-time (highlight as paragraphs enter the window).
-
-Option (b) matches how virtual list renderers handle off-screen rendering and is preferred for
-performance. The current approach of scanning `data-src` for matches (already implemented for
-frozen divs) extends naturally to `paragraphRecords`.
+The search panel highlights matches using `CSS.highlights`. Off-window paragraphs are handled via
+`paragraphRecords[i].src` for text extraction. When navigating to an off-window match,
+`ensureInWindow(i)` expands the DOM window to include the target paragraph before creating the
+highlight range.
 
 ### Find & Replace
 
-See "Future Features" below. Replace in off-window paragraphs operates on `paragraphRecords[i].src`
-directly without touching the DOM, then notifies CM6 of the change.
+One-by-one and bulk replace operate on `paragraphRecords[i].src` for off-window paragraphs and
+on the DOM for in-window paragraphs. After any replace, `commitToCm6()` propagates the change.
+
+---
+
+## Implementation History
+
+### Phase 1 — `paragraphRecords[]` data store (superseded by Phase 2)
+
+Introduced the per-paragraph data store alongside the existing frozen-div infrastructure.
+`data-src` / `data-view-len` DOM attributes were removed; `paragraphRecords` was populated in
+parallel with the WeakMap-based frozen system. `getSrcByIndex(i)` / `getViewLenByIndex(i)` were
+added for O(1) index-based access.
+
+**Why WeakMaps in Phase 1:**
+
+`paragraphRecords` was indexed by DOM position. Any DOM insertion or deletion between a freeze
+and the next `patchParagraphs` call (e.g., Enter key, paste) shifted frozen div positions without
+updating the array, causing `getValue()` to read the wrong paragraph content. WeakMaps keyed by
+div element identity were unaffected by positional shifts.
+
+Phase 2 eliminated the WeakMap approach entirely by removing frozen divs from the DOM, making
+`paragraphRecords` the sole source of truth.
+
+### Phase 2 — DOM window management + spacers (**DONE**)
+
+Replaced frozen-div shells with true DOM removal. Only a sliding window of `~100` paragraph divs
+stays in the DOM; two spacer divs (`rightSpacer`, `leftSpacer`) represent the collapsed width of
+off-screen paragraphs. The frozen infrastructure (`FROZEN_CLASS`, `frozenSrc`/`frozenViewLen`
+WeakMaps, `freezeDiv()`/`thawDiv()`, `seenDivs`, `lastKnownWidths`, etc.) was removed entirely.
+
+**What was built:**
+
+- `rightSpacer` and `leftSpacer` divs (permanent fixtures, `pointer-events: none`,
+  `user-select: none`).
+- `IntersectionObserver` watching the two boundary divs (`domStart` div and `domEnd` div) with
+  `rootMargin: '0px 440px 0px 440px'` (~10 paragraphs of prefetch buffer on each side).
+- `expandRight()` / `shrinkRight()` / `expandLeft()` / `shrinkLeft()` window management methods.
+- `reobserveBoundaries()` to re-register the IO on new boundary divs after each expand/shrink.
+- `ensureInWindow(i)` for cursor restore (`setVisibleOffset`) and outline jump navigation.
+- `expandWindowToFull()` for Cmd-A select-all (rebuilds all paragraph divs in one
+  `replaceChildren` call, then defers native select-all to one `requestAnimationFrame`).
+- `resetWindow(lo, hi)` for repositioning the window with updated spacer widths.
+- `jumpWindowTo(center)` in `EditorElement` for teleporting the window to an off-window cursor.
+- `loadContent(content, initialViewOffset)` for file open: creates only the initial window of
+  `INITIAL_WINDOW_HALF = 50` paragraphs on each side of the saved cursor position.
+- `syncWindowSrcs(lines)` for keeping records in sync during typing without disturbing the window.
+- `paragraphChildIndex(i)` accounting for `rightSpacer` offset in `patchParagraphs`.
+- Drag-selection guard: `isDragging` flag set by `mousedown`/`mouseup`; `shrinkLeft()`/
+  `shrinkRight()` are no-ops when the target div contains `selection.anchorNode` or `.focusNode`.
+- `hasCleanDivStructure()` updated to subtract 2 (spacerCount) from `el.childNodes.length`.
+- `content-visibility: auto` and all related CSS removed from `.tate-editor > div` since the
+  small DOM window makes it unnecessary.
+
+**Decision log:**
+
+| Question | Decision |
+|---|---|
+| Remove `content-visibility: auto`? | Yes. DOM window (~100 divs) makes C-V:auto unnecessary. |
+| Width for never-rendered paragraphs | `UNRENDERED_WIDTH_PX = 44` (one column at default font). Also `estimateWidth(viewLen)` for better initial estimates. |
+| Cmd-A behavior | `expandWindowToFull()` (single `replaceChildren`) then deferred native select-all via rAF. |
+| IO trigger target | Boundary divs only (domStart div and domEnd div), rootMargin 440px. |
+| Initial window size | `INITIAL_WINDOW_HALF = 50` (100 total). Covers typical viewports plus IO prefetch buffer. |
 
 ---
 
 ## Future Features
 
-### Find & Replace
-
-**One-by-one replace**
-
-Extend `SearchPanel` with a replace input field. On "Replace":
-
-1. Locate the current match's paragraph index and character range within the Aozora source.
-2. Update `paragraphRecords[i].src` with the substituted string.
-3. If the paragraph is in the DOM window, also update its div content.
-4. Call `commitToCm6()` to propagate the change.
-
-Replacing within Aozora notation requires care: the match may span only the base text of a ruby
-annotation (e.g., replacing "東京" in `東京《とうきょう》`). The replace operation should update
-only the base text and leave the annotation intact. Using `SegmentMap` (source ↔ view offset
-mapping) to locate the correct source range handles this correctly.
-
-**Bulk replace**
+### Find & Replace — bulk replace
 
 Iterate over all matches in `paragraphRecords` (no DOM access needed for off-window paragraphs),
 apply substitutions to `.src` and `.viewLen`, then rebuild the DOM window from updated records and
 call `commitToCm6()` once. Because `paragraphRecords` is the source of truth, bulk replace is
 a pure data operation followed by a single DOM patch for the visible window.
-
-### Aozora Heading Notation
-
-Aozora defines heading annotations:
-
-```
-見出し文字列［＃「見出し文字列」は大見出し］
-見出し文字列［＃「見出し文字列」は中見出し］
-見出し文字列［＃「見出し文字列」は小見出し］
-```
-
-**Rendering**
-
-`AozoraParser.parseInlineToHtml()` already handles ruby, tcy, and bouten via the same annotation
-pattern. Heading support follows the same structure: detect the `は大見出し` / `は中見出し` /
-`は小見出し` suffix in `SegmentMap` and emit a wrapper element:
-
-```html
-<span class="tate-heading tate-heading-large">見出し文字列</span>
-```
-
-CSS applies font-weight and optional decorative marks appropriate for vertical typography.
-The annotation text itself (`［＃…］`) is hidden via `display: none` on a child span, matching
-the current tcy / bouten rendering approach.
-
-**Command palette input**
-
-Add Obsidian commands (`addCommand`) such as "縦書き：大見出しとして設定". The command wraps the
-current paragraph's content in the heading annotation, updates the div's DOM and `commitToCm6()`.
-If the current paragraph already has a heading annotation, the command toggles it off.
-
-**Serialization**
-
-`serializeNode()` already round-trips ruby/tcy/bouten; heading spans serialize back to the
-`［＃…］` form by reading the `tate-heading` class and reconstructing the annotation suffix.
-
-### Outline Panel
-
-The outline panel is an Obsidian `ItemView` (sidebar panel) that lists all headings in the current
-file and allows click-to-jump navigation.
-
-**Heading extraction**
-
-Scan `paragraphRecords[i].src` for heading annotations using the same regex used by `AozoraParser`.
-This scan is O(N) but only needs to run on file load and after any edit that changes a heading line.
-`patchParagraphs` already knows which lines changed, so incremental rescanning is straightforward.
-
-**Jump navigation**
-
-On heading click:
-
-1. Compute the target paragraph's `viewLen` prefix sum to derive the visible offset.
-2. Call `setViewCursorOffset(offset)` to place the cursor.
-3. If the paragraph is outside the DOM window, shift the window to include it first, then scroll.
-4. Call `scrollCursorIntoView()`.
-
-With pseudo-virtualization (current state), step 3 is handled by `ensureThawed()`. With full
-virtualization, step 3 shifts `domStart` / `domEnd` and updates spacer widths.
-
----
-
-## Implementation Sequence
-
-Full virtualization splits naturally into two phases with very different risk profiles. Three
-future features (heading notation, one-by-one replace, bulk replace / outline panel) have
-different dependencies on these phases. The recommended order balances delivery speed against
-architectural cleanliness.
-
-### Phase 1 — `paragraphRecords[]` data store (**DONE** — branch `feature/paragraph-records`)
-
-Introduced the per-paragraph data store alongside the existing `ParagraphVirtualizer`.
-`data-src` / `data-view-len` DOM attributes were removed; frozen divs are now true empty shells.
-
-**What was built:**
-
-- `ParagraphRecord` interface: `{ src: string; viewLen: number; width: number }`.
-- `paragraphRecords: ParagraphRecord[]` on `ParagraphVirtualizer` (indexed 1:1 with
-  `editorEl.children`). Populated by `initRecords()`, updated by `spliceRecords()` and `freezeDiv()`.
-- `frozenSrc` / `frozenViewLen` **WeakMaps** (keyed by div element identity) as the primary
-  read path for `getSrcLine()`, `getViewLen()`, `getValue()`, `getVisibleOffset()`,
-  `setVisibleOffset()`, and `extractHybridText()`. These are set by `setFrozenContent()` inside
-  `freezeDiv()`.
-- `initRecords(lines)` called from `setValue()` and the `patchParagraphs` fallback path after
-  `replaceChildren`.
-- `spliceRecords(lo, deleteCount, newLines)` called at the end of the `patchParagraphs` success
-  path, mirroring the DOM splice that already happened.
-- `getSrcByIndex(i)` / `getViewLenByIndex(i)` for O(1) index-based access (reserved for Phase 2;
-  not currently used by any read path in production code).
-
-**Why WeakMaps instead of `paragraphRecords` for reads:**
-
-`paragraphRecords` is indexed by DOM position. Any DOM insertion or deletion between a freeze
-and the next `patchParagraphs` call (e.g., Enter key, paste) shifts frozen div positions without
-updating the array, causing `getValue()` to read the wrong paragraph content. WeakMaps keyed by
-div element identity are unaffected by positional shifts.
-
-`paragraphRecords` is maintained in parallel for Phase 2, where off-window paragraphs are
-removed from the DOM entirely (WeakMap entries would be GC'd) and width data must persist in a
-plain array.
-
-### Phase 2 — DOM window management + spacers (high risk)
-
-Replace frozen-div shells with true DOM removal and two spacer divs. This is the major
-refactoring step and carries the most risk.
-
-4. Add `rightSpacer` and `leftSpacer` divs. Implement window expand / contract driven by
-   `IntersectionObserver` on the boundary divs.
-5. Add drag-selection protection: do not evict a div whose subtree contains
-   `selection.anchorNode` or `selection.focusNode`.
-6. Validate scroll-position stability (spacer width accuracy) across file sizes and
-   navigation patterns before merging.
-
-### Future features — dependency map
-
-| Feature | Depends on Phase 1 | Depends on Phase 2 | Can land independently |
-|---|---|---|---|
-| Heading notation (parse + render + command) | No | No | **Yes** |
-| Replace — one-by-one | No | No | **Yes** |
-| Replace — bulk | Preferred (`.src` update without DOM) | No | Possible with frozen `data-src` fallback |
-| Outline panel — heading extraction | Preferred (scan `.src` directly) | No | Possible with frozen `data-src` fallback |
-| Outline panel — jump to off-screen heading | No | Preferred (window shift) | Possible with `ensureThawed` fallback |
-
-**Recommended delivery order:**
-
-```
-1. Heading notation          (no virtualization dependency)        ✅ done
-2. Replace — one-by-one     (no virtualization dependency)        ✅ done
-3. Phase 1: paragraphRecords[]                                     ✅ done (feature/paragraph-records)
-4. Replace — bulk           (cleaner with paragraphRecords)
-5. Outline panel            (cleaner with paragraphRecords)
-6. Phase 2: DOM window + spacers   (when performance warrants it)
-```
-
-Heading notation and one-by-one replace shipped without touching the virtualization layer.
-Phase 1 is complete: `paragraphRecords` is now populated and `data-src`/`data-view-len`
-attributes are removed. Phase 2 should be deferred until the remaining
-`range.deleteContents()` cost (~25 ms for large selections) becomes a user-visible problem.
