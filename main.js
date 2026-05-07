@@ -2318,18 +2318,28 @@ var EditorElement = class {
     this.inlineEditor.setVirtualizer(v);
   }
   getValue() {
+    var _a, _b;
     const virt = this.virtualizer;
     if (!virt || virt.domEnd < 0) {
       return Array.from(this.el.childNodes).map((n) => serializeNode(n, this.el)).join("");
     }
+    const spacerOffset = virt.rightSpacer ? 1 : 0;
+    const spacerCount = virt.rightSpacer ? 2 : 0;
+    const actualDivCount = this.el.children.length - spacerCount;
+    const nBefore = virt.domStart;
+    const nAfter = Math.max(0, virt.paragraphRecords.length - (virt.domEnd + 1));
+    const total = nBefore + actualDivCount + nAfter;
     const parts = [];
-    for (let i = 0; i < virt.paragraphRecords.length; i++) {
-      const div = virt.getWindowDiv(i);
+    for (let i = 0; i < total; i++) {
       let src;
-      if (!div) {
+      if (i < nBefore) {
         src = virt.paragraphRecords[i].src;
+      } else if (i < nBefore + actualDivCount) {
+        const domChild = this.el.children[i - nBefore + spacerOffset];
+        src = Array.from(domChild.childNodes).map((n) => serializeNode(n, this.el)).join("");
       } else {
-        src = Array.from(div.childNodes).map((n) => serializeNode(n, this.el)).join("");
+        const recIdx = virt.domEnd + 1 + (i - nBefore - actualDivCount);
+        src = (_b = (_a = virt.paragraphRecords[recIdx]) == null ? void 0 : _a.src) != null ? _b : "";
       }
       parts.push(i === 0 ? src : "\n" + src);
     }
