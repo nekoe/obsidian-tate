@@ -1955,8 +1955,17 @@ var ParagraphVirtualizer = class {
     // True while a drag selection is in progress (mousedown → mouseup).
     this.isDragging = false;
     // True while IO callbacks should be suppressed (set after Enter/Backspace to prevent
-    // the IO from cascading expand/shrink before layout settles).
+    // the IO from firing while the browser is still settling layout after DOM mutation).
     this.ioSuppressed = false;
+    // Hysteresis flags: prevent the oscillation that occurs when reobserveBoundaries()
+    // delivers an initial IO state for the newly-registered boundary div that is just
+    // outside the rootMargin (causing shrink immediately after expand, or vice versa).
+    // Each flag is set when an expand/shrink happens and cleared when the initial
+    // IO delivery for the new boundary div is handled (blocking the spurious action).
+    this.justExpandedLeft = false;
+    this.justExpandedRight = false;
+    this.justShrankLeft = false;
+    this.justShrankRight = false;
     // Font size in px; used to estimate paragraph widths for off-window records.
     // Updated by setFontSize() when plugin settings change.
     this.fontSizePx = 22;
@@ -2031,6 +2040,10 @@ var ParagraphVirtualizer = class {
     this.leftSpacer = null;
     this.isDragging = false;
     this.ioSuppressed = false;
+    this.justExpandedLeft = false;
+    this.justExpandedRight = false;
+    this.justShrankLeft = false;
+    this.justShrankRight = false;
     this.editorEl.removeEventListener("mousedown", this.onMouseDown);
     document.removeEventListener("mouseup", this.onMouseUp);
   }
@@ -2088,7 +2101,6 @@ var ParagraphVirtualizer = class {
           this.ioSuppressed = true;
           requestAnimationFrame(() => requestAnimationFrame(() => {
             this.ioSuppressed = false;
-            this.reobserveBoundaries();
           }));
         }
       }
@@ -2270,21 +2282,41 @@ var ParagraphVirtualizer = class {
       const divIndex = Array.from(this.editorEl.children).indexOf(div) - spacerOffset + this.domStart;
       if (entry.isIntersecting) {
         if (divIndex === this.domStart && this.domStart > 0) {
-          this.expandRight();
-          changed = true;
+          if (this.justShrankRight) {
+            this.justShrankRight = false;
+          } else {
+            this.expandRight();
+            this.justExpandedRight = true;
+            changed = true;
+          }
         }
         if (divIndex === this.domEnd && this.domEnd < this.paragraphRecords.length - 1) {
-          this.expandLeft();
-          changed = true;
+          if (this.justShrankLeft) {
+            this.justShrankLeft = false;
+          } else {
+            this.expandLeft();
+            this.justExpandedLeft = true;
+            changed = true;
+          }
         }
       } else {
         if (divIndex === this.domStart && this.domEnd > this.domStart + 2) {
-          this.shrinkRight();
-          changed = true;
+          if (this.justExpandedRight) {
+            this.justExpandedRight = false;
+          } else {
+            this.shrinkRight();
+            this.justShrankRight = true;
+            changed = true;
+          }
         }
         if (divIndex === this.domEnd && this.domEnd > this.domStart + 2) {
-          this.shrinkLeft();
-          changed = true;
+          if (this.justExpandedLeft) {
+            this.justExpandedLeft = false;
+          } else {
+            this.shrinkLeft();
+            this.justShrankLeft = true;
+            changed = true;
+          }
         }
       }
     }

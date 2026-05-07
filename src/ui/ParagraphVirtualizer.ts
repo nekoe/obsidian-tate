@@ -51,8 +51,18 @@ export class ParagraphVirtualizer {
     private isDragging = false;
 
     // True while IO callbacks should be suppressed (set after Enter/Backspace to prevent
-    // the IO from cascading expand/shrink before layout settles).
+    // the IO from firing while the browser is still settling layout after DOM mutation).
     private ioSuppressed = false;
+
+    // Hysteresis flags: prevent the oscillation that occurs when reobserveBoundaries()
+    // delivers an initial IO state for the newly-registered boundary div that is just
+    // outside the rootMargin (causing shrink immediately after expand, or vice versa).
+    // Each flag is set when an expand/shrink happens and cleared when the initial
+    // IO delivery for the new boundary div is handled (blocking the spurious action).
+    private justExpandedLeft  = false;
+    private justExpandedRight = false;
+    private justShrankLeft    = false;
+    private justShrankRight   = false;
 
     // Font size in px; used to estimate paragraph widths for off-window records.
     // Updated by setFontSize() when plugin settings change.
@@ -128,7 +138,11 @@ export class ParagraphVirtualizer {
         this.rightSpacer = null;
         this.leftSpacer  = null;
         this.isDragging = false;
-        this.ioSuppressed = false;
+        this.ioSuppressed    = false;
+        this.justExpandedLeft  = false;
+        this.justExpandedRight = false;
+        this.justShrankLeft    = false;
+        this.justShrankRight   = false;
         this.editorEl.removeEventListener('mousedown', this.onMouseDown);
         document.removeEventListener('mouseup', this.onMouseUp);
     }
@@ -201,18 +215,18 @@ export class ParagraphVirtualizer {
                 // a visible scroll jump. The spacer covers the same off-screen paragraphs; only
                 // the boundary index (domEnd) changed.
                 //
-                // Suppress IO for two animation frames so the IO does not fire while the
-                // browser is still settling the layout after the Enter/Backspace DOM change.
-                // Without suppression the boundary div can shift outside the 440px buffer,
-                // triggering a shrinkLeft → reobserveBoundaries cascade that depletes the
-                // spacer and causes scroll jumps (issues: cursor slides, spacer disappears).
-                // After two rAFs the layout is stable; reobserveBoundaries re-registers the
-                // observer on the correct boundary elements.
+                // Suppress IO for two animation frames while the browser settles layout
+                // after the Enter/Backspace DOM mutation. The observer continues watching
+                // the same element references (the domEnd div has shifted in DOM position
+                // but not changed identity), so divIndex recomputes correctly without
+                // needing reobserveBoundaries. Calling reobserveBoundaries here would
+                // trigger an initial IO delivery that can start a shrink/expand cascade.
                 if (!this.ioSuppressed) {
                     this.ioSuppressed = true;
                     requestAnimationFrame(() => requestAnimationFrame(() => {
                         this.ioSuppressed = false;
-                        this.reobserveBoundaries();
+                        // Do NOT call reobserveBoundaries: the observer already watches the
+                        // correct element references shifted by the DOM mutation.
                     }));
                 }
             }
@@ -417,23 +431,49 @@ export class ParagraphVirtualizer {
             const divIndex = Array.from(this.editorEl.children).indexOf(div) - spacerOffset + this.domStart;
             if (entry.isIntersecting) {
                 if (divIndex === this.domStart && this.domStart > 0) {
-                    this.expandRight();
-                    changed = true;
+                    // After shrinkRight, reobserveBoundaries delivers the new domStart's
+                    // initial state as "intersecting" (it was already inside the rootMargin).
+                    // Suppress this one delivery to prevent shrink→expand oscillation.
+                    if (this.justShrankRight) {
+                        this.justShrankRight = false;
+                    } else {
+                        this.expandRight();
+                        this.justExpandedRight = true;
+                        changed = true;
+                    }
                 }
                 if (divIndex === this.domEnd && this.domEnd < this.paragraphRecords.length - 1) {
-                    this.expandLeft();
-                    changed = true;
+                    if (this.justShrankLeft) {
+                        this.justShrankLeft = false;
+                    } else {
+                        this.expandLeft();
+                        this.justExpandedLeft = true;
+                        changed = true;
+                    }
                 }
             } else {
                 // Only shrink when the window is wide enough that the exiting boundary is
                 // clearly off-screen. Guard of +2 ensures at least one paragraph buffer remains.
                 if (divIndex === this.domStart && this.domEnd > this.domStart + 2) {
-                    this.shrinkRight(); // domStart (right boundary) exits → shrink from right
-                    changed = true;
+                    // After expandRight, reobserveBoundaries delivers the new domStart's
+                    // initial state as "not intersecting" (just outside the rootMargin).
+                    // Suppress this one delivery to prevent expand→shrink oscillation.
+                    if (this.justExpandedRight) {
+                        this.justExpandedRight = false;
+                    } else {
+                        this.shrinkRight();
+                        this.justShrankRight = true;
+                        changed = true;
+                    }
                 }
                 if (divIndex === this.domEnd && this.domEnd > this.domStart + 2) {
-                    this.shrinkLeft();  // domEnd (left boundary) exits → shrink from left
-                    changed = true;
+                    if (this.justExpandedLeft) {
+                        this.justExpandedLeft = false;
+                    } else {
+                        this.shrinkLeft();
+                        this.justShrankLeft = true;
+                        changed = true;
+                    }
                 }
             }
         }
