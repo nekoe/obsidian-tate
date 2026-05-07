@@ -2080,12 +2080,6 @@ var ParagraphVirtualizer = class {
       const windowDivCount = this.domEnd - this.domStart + 1;
       if (actualDivCount !== windowDivCount) {
         this.domEnd = Math.min(this.domStart + actualDivCount - 1, n - 1);
-        this.leftSpacerWidth = this.paragraphRecords.slice(this.domEnd + 1).reduce((sum, r) => sum + r.width, 0);
-        if (this.leftSpacer) {
-          if (this.leftSpacerWidth > 0) this.leftSpacer.style.setProperty("width", `${this.leftSpacerWidth}px`);
-          else this.leftSpacer.style.removeProperty("width");
-        }
-        this.reobserveBoundaries();
       }
     }
   }

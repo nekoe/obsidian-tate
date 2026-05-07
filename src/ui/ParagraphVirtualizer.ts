@@ -189,13 +189,15 @@ export class ParagraphVirtualizer {
             const windowDivCount = this.domEnd - this.domStart + 1;
             if (actualDivCount !== windowDivCount) {
                 this.domEnd = Math.min(this.domStart + actualDivCount - 1, n - 1);
-                this.leftSpacerWidth = this.paragraphRecords
-                    .slice(this.domEnd + 1).reduce((sum, r) => sum + r.width, 0);
-                if (this.leftSpacer) {
-                    if (this.leftSpacerWidth > 0) this.leftSpacer.style.setProperty('width', `${this.leftSpacerWidth}px`);
-                    else this.leftSpacer.style.removeProperty('width');
-                }
-                this.reobserveBoundaries();
+                // Do NOT recompute leftSpacerWidth or update leftSpacer.style here.
+                // syncWindowSrcs resizes paragraphRecords by appending/popping at the end,
+                // which misaligns stored widths (push-at-end does not insert at the split point).
+                // Recomputing leftSpacerWidth from these stale widths produces a wrong delta,
+                // changing leftSpacer.style.width and causing a visible scroll jump on Enter/Backspace.
+                // The spacer covers the same off-screen paragraphs as before — only the boundary
+                // index (domEnd) changed — so the spacer width remains conceptually correct.
+                // The window observer keeps watching the same domEnd element reference; the updated
+                // domEnd value ensures divIndex===domEnd remains true when the IO fires on scroll.
             }
         }
     }
