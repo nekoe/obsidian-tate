@@ -1954,6 +1954,9 @@ var ParagraphVirtualizer = class {
     this.windowObserver = null;
     // True while a drag selection is in progress (mousedown → mouseup).
     this.isDragging = false;
+    // True while IO callbacks should be suppressed (set after Enter/Backspace to prevent
+    // the IO from cascading expand/shrink before layout settles).
+    this.ioSuppressed = false;
     // Font size in px; used to estimate paragraph widths for off-window records.
     // Updated by setFontSize() when plugin settings change.
     this.fontSizePx = 22;
@@ -2027,6 +2030,7 @@ var ParagraphVirtualizer = class {
     this.rightSpacer = null;
     this.leftSpacer = null;
     this.isDragging = false;
+    this.ioSuppressed = false;
     this.editorEl.removeEventListener("mousedown", this.onMouseDown);
     document.removeEventListener("mouseup", this.onMouseUp);
   }
@@ -2080,6 +2084,13 @@ var ParagraphVirtualizer = class {
       const windowDivCount = this.domEnd - this.domStart + 1;
       if (actualDivCount !== windowDivCount) {
         this.domEnd = Math.min(this.domStart + actualDivCount - 1, n - 1);
+        if (!this.ioSuppressed) {
+          this.ioSuppressed = true;
+          requestAnimationFrame(() => requestAnimationFrame(() => {
+            this.ioSuppressed = false;
+            this.reobserveBoundaries();
+          }));
+        }
       }
     }
   }
@@ -2251,6 +2262,7 @@ var ParagraphVirtualizer = class {
   // Boundary div exits extended viewport → shrink window from that same end.
   onWindowBoundaryIntersection(entries) {
     if (this.paragraphRecords.length === 0) return;
+    if (this.ioSuppressed) return;
     let changed = false;
     for (const entry of entries) {
       const div = entry.target;

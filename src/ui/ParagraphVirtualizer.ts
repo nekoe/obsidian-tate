@@ -50,6 +50,10 @@ export class ParagraphVirtualizer {
     // True while a drag selection is in progress (mousedown → mouseup).
     private isDragging = false;
 
+    // True while IO callbacks should be suppressed (set after Enter/Backspace to prevent
+    // the IO from cascading expand/shrink before layout settles).
+    private ioSuppressed = false;
+
     // Font size in px; used to estimate paragraph widths for off-window records.
     // Updated by setFontSize() when plugin settings change.
     private fontSizePx = 22; // matches DEFAULT_SETTINGS.fontSize
@@ -124,6 +128,7 @@ export class ParagraphVirtualizer {
         this.rightSpacer = null;
         this.leftSpacer  = null;
         this.isDragging = false;
+        this.ioSuppressed = false;
         this.editorEl.removeEventListener('mousedown', this.onMouseDown);
         document.removeEventListener('mouseup', this.onMouseUp);
     }
@@ -192,12 +197,24 @@ export class ParagraphVirtualizer {
                 // Do NOT recompute leftSpacerWidth or update leftSpacer.style here.
                 // syncWindowSrcs resizes paragraphRecords by appending/popping at the end,
                 // which misaligns stored widths (push-at-end does not insert at the split point).
-                // Recomputing leftSpacerWidth from these stale widths produces a wrong delta,
-                // changing leftSpacer.style.width and causing a visible scroll jump on Enter/Backspace.
-                // The spacer covers the same off-screen paragraphs as before — only the boundary
-                // index (domEnd) changed — so the spacer width remains conceptually correct.
-                // The window observer keeps watching the same domEnd element reference; the updated
-                // domEnd value ensures divIndex===domEnd remains true when the IO fires on scroll.
+                // Recomputing from stale widths would change leftSpacer.style.width and cause
+                // a visible scroll jump. The spacer covers the same off-screen paragraphs; only
+                // the boundary index (domEnd) changed.
+                //
+                // Suppress IO for two animation frames so the IO does not fire while the
+                // browser is still settling the layout after the Enter/Backspace DOM change.
+                // Without suppression the boundary div can shift outside the 440px buffer,
+                // triggering a shrinkLeft → reobserveBoundaries cascade that depletes the
+                // spacer and causes scroll jumps (issues: cursor slides, spacer disappears).
+                // After two rAFs the layout is stable; reobserveBoundaries re-registers the
+                // observer on the correct boundary elements.
+                if (!this.ioSuppressed) {
+                    this.ioSuppressed = true;
+                    requestAnimationFrame(() => requestAnimationFrame(() => {
+                        this.ioSuppressed = false;
+                        this.reobserveBoundaries();
+                    }));
+                }
             }
         }
     }
@@ -392,6 +409,7 @@ export class ParagraphVirtualizer {
     // Boundary div exits extended viewport → shrink window from that same end.
     private onWindowBoundaryIntersection(entries: IntersectionObserverEntry[]): void {
         if (this.paragraphRecords.length === 0) return;
+        if (this.ioSuppressed) return;
         let changed = false;
         for (const entry of entries) {
             const div = entry.target as HTMLElement;
