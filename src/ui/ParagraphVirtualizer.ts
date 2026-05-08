@@ -50,11 +50,20 @@ export class ParagraphVirtualizer {
     // True while a drag selection is in progress (mousedown → mouseup).
     private isDragging = false;
 
-    // Hysteresis flags: prevent the oscillation that occurs when reobserveBoundaries()
-    // delivers an initial IO state for the newly-registered boundary div that is just
-    // outside the rootMargin (causing shrink immediately after expand, or vice versa).
-    // Each flag is set when an expand/shrink happens and cleared when the initial
-    // IO delivery for the new boundary div is handled (blocking the spurious action).
+    // Hysteresis flags: prevent spurious IO actions from initial deliveries.
+    //
+    // justExpandedLeft/Right: set in the IO callback after expandLeft/Right; blocks the
+    //   subsequent initial delivery of the new boundary div if it is "outside" (isIntersecting=false),
+    //   which would otherwise fire a spurious shrinkLeft/Right immediately after expand.
+    //
+    // justShrankLeft/Right: set only by syncWindowSrcs (all four flags) before calling
+    //   reobserveBoundaries() after Enter/Backspace. Blocks the initial "inside" delivery
+    //   for the new boundary divs near the cursor, which would otherwise fire expandLeft/Right
+    //   and change spacer widths (causing cursor slide).
+    //   NOT set in the IO callback's shrink branch: after a shrink cascade driven by
+    //   initial deliveries, the cascade termination state ("inside") should trigger expandLeft/Right
+    //   to settle the boundary just outside the 440 px zone, letting future scroll correctly fire
+    //   expand. Without this, the boundary is stuck as "inside" with no further IO transitions.
     private justExpandedLeft  = false;
     private justExpandedRight = false;
     private justShrankLeft    = false;
@@ -481,7 +490,6 @@ export class ParagraphVirtualizer {
                         this.justExpandedRight = false;
                     } else {
                         this.shrinkRight();
-                        this.justShrankRight = true;
                         this.reobserveOne('right', div);
                     }
                 }
@@ -490,7 +498,6 @@ export class ParagraphVirtualizer {
                         this.justExpandedLeft = false;
                     } else {
                         this.shrinkLeft();
-                        this.justShrankLeft = true;
                         this.reobserveOne('left', div);
                     }
                 }

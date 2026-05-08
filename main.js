@@ -1954,14 +1954,20 @@ var ParagraphVirtualizer = class {
     this.windowObserver = null;
     // True while a drag selection is in progress (mousedown → mouseup).
     this.isDragging = false;
-    // True while IO callbacks should be suppressed (set after Enter/Backspace to prevent
-    // the IO from firing while the browser is still settling layout after DOM mutation).
-    this.ioSuppressed = false;
-    // Hysteresis flags: prevent the oscillation that occurs when reobserveBoundaries()
-    // delivers an initial IO state for the newly-registered boundary div that is just
-    // outside the rootMargin (causing shrink immediately after expand, or vice versa).
-    // Each flag is set when an expand/shrink happens and cleared when the initial
-    // IO delivery for the new boundary div is handled (blocking the spurious action).
+    // Hysteresis flags: prevent spurious IO actions from initial deliveries.
+    //
+    // justExpandedLeft/Right: set in the IO callback after expandLeft/Right; blocks the
+    //   subsequent initial delivery of the new boundary div if it is "outside" (isIntersecting=false),
+    //   which would otherwise fire a spurious shrinkLeft/Right immediately after expand.
+    //
+    // justShrankLeft/Right: set only by syncWindowSrcs (all four flags) before calling
+    //   reobserveBoundaries() after Enter/Backspace. Blocks the initial "inside" delivery
+    //   for the new boundary divs near the cursor, which would otherwise fire expandLeft/Right
+    //   and change spacer widths (causing cursor slide).
+    //   NOT set in the IO callback's shrink branch: after a shrink cascade driven by
+    //   initial deliveries, the cascade termination state ("inside") should trigger expandLeft/Right
+    //   to settle the boundary just outside the 440 px zone, letting future scroll correctly fire
+    //   expand. Without this, the boundary is stuck as "inside" with no further IO transitions.
     this.justExpandedLeft = false;
     this.justExpandedRight = false;
     this.justShrankLeft = false;
@@ -2039,7 +2045,6 @@ var ParagraphVirtualizer = class {
     this.rightSpacer = null;
     this.leftSpacer = null;
     this.isDragging = false;
-    this.ioSuppressed = false;
     this.justExpandedLeft = false;
     this.justExpandedRight = false;
     this.justShrankLeft = false;
@@ -2097,12 +2102,11 @@ var ParagraphVirtualizer = class {
       const windowDivCount = this.domEnd - this.domStart + 1;
       if (actualDivCount !== windowDivCount) {
         this.domEnd = Math.min(this.domStart + actualDivCount - 1, n - 1);
-        if (!this.ioSuppressed) {
-          this.ioSuppressed = true;
-          requestAnimationFrame(() => requestAnimationFrame(() => {
-            this.ioSuppressed = false;
-          }));
-        }
+        this.justShrankLeft = true;
+        this.justShrankRight = true;
+        this.justExpandedLeft = true;
+        this.justExpandedRight = true;
+        this.reobserveBoundaries();
       }
     }
   }
@@ -2205,7 +2209,7 @@ var ParagraphVirtualizer = class {
     div.replaceChildren((0, import_obsidian3.sanitizeHTMLToDom)(parseInlineToHtml(rec.src) || "<br>"));
     const firstPara = this.rightSpacer ? this.editorEl.children[1] : this.editorEl.firstChild;
     this.editorEl.insertBefore(div, firstPara != null ? firstPara : null);
-    const w = rec.width > 0 ? rec.width : UNRENDERED_WIDTH_PX;
+    const w = rec.width > 0 ? rec.width : this.estimateWidth(rec.viewLen);
     this.rightSpacerWidth = Math.max(0, this.rightSpacerWidth - w);
     if (this.rightSpacer) this.rightSpacer.style.setProperty("width", `${this.rightSpacerWidth}px`);
     this.domStart--;
@@ -2219,7 +2223,7 @@ var ParagraphVirtualizer = class {
     const div = document.createElement("div");
     div.replaceChildren((0, import_obsidian3.sanitizeHTMLToDom)(parseInlineToHtml(rec.src) || "<br>"));
     this.editorEl.insertBefore(div, (_a = this.leftSpacer) != null ? _a : null);
-    const w = rec.width > 0 ? rec.width : UNRENDERED_WIDTH_PX;
+    const w = rec.width > 0 ? rec.width : this.estimateWidth(rec.viewLen);
     this.leftSpacerWidth = Math.max(0, this.leftSpacerWidth - w);
     if (this.leftSpacer) this.leftSpacer.style.setProperty("width", `${this.leftSpacerWidth}px`);
     this.domEnd++;
@@ -2259,8 +2263,11 @@ var ParagraphVirtualizer = class {
     if (!sel) return false;
     return div.contains(sel.anchorNode) || div.contains(sel.focusNode);
   }
-  // Re-registers the current boundary divs (domStart and domEnd) with the window observer.
-  // Must be called after any expand/shrink operation so the observer watches the new boundaries.
+  // Re-registers BOTH boundary divs with the window observer using disconnect+observe.
+  // Triggers an initial IO delivery for every re-observed div. Used by callers outside
+  // the IO callback (resetWindow, spliceRecords, syncWindowSrcs, ensureInWindow).
+  // Do NOT call from inside onWindowBoundaryIntersection — use reobserveOne() there
+  // to avoid spurious cross-boundary initial deliveries that cause oscillation.
   reobserveBoundaries() {
     if (!this.windowObserver) return;
     this.windowObserver.disconnect();
@@ -2269,13 +2276,38 @@ var ParagraphVirtualizer = class {
     if (startDiv) this.windowObserver.observe(startDiv);
     if (endDiv && endDiv !== startDiv) this.windowObserver.observe(endDiv);
   }
+  // Targeted reobservation used inside onWindowBoundaryIntersection.
+  // Unobserves the old boundary div (entry.target) and observes only the new boundary.
+  // The unchanged boundary keeps its current IO state — no new initial delivery fires
+  // for it, preventing the cross-boundary oscillation that reobserveBoundaries() causes.
+  //
+  // Edge case: when domStart === domEnd before the expand/shrink, oldDiv served as both
+  // boundaries. Unobserving it removes the other boundary too; it is re-registered here.
+  reobserveOne(side, oldDiv) {
+    if (!this.windowObserver) return;
+    const startDiv = this.getWindowDiv(this.domStart);
+    const endDiv = this.getWindowDiv(this.domEnd);
+    const newDiv = side === "left" ? endDiv : startDiv;
+    const keepDiv = side === "left" ? startDiv : endDiv;
+    this.windowObserver.unobserve(oldDiv);
+    if (keepDiv === oldDiv && keepDiv !== newDiv) {
+      this.windowObserver.observe(keepDiv);
+    }
+    if (newDiv && newDiv !== keepDiv) {
+      this.windowObserver.observe(newDiv);
+    }
+  }
   // Called by the window boundary IntersectionObserver.
   // Boundary div enters extended viewport → expand window in that direction.
   // Boundary div exits extended viewport → shrink window from that same end.
+  //
+  // Each expand/shrink calls reobserveOne() to watch only the changed boundary.
+  // This prevents the oscillation that reobserveBoundaries() (disconnect+observe both)
+  // caused: its initial delivery for the UNCHANGED boundary would fire a spurious
+  // shrink/expand, which itself called reobserveBoundaries() again, creating an
+  // expand→shrink→expand cycle that drained leftSpacerWidth.
   onWindowBoundaryIntersection(entries) {
     if (this.paragraphRecords.length === 0) return;
-    if (this.ioSuppressed) return;
-    let changed = false;
     for (const entry of entries) {
       const div = entry.target;
       const spacerOffset = this.rightSpacer ? 1 : 0;
@@ -2287,7 +2319,7 @@ var ParagraphVirtualizer = class {
           } else {
             this.expandRight();
             this.justExpandedRight = true;
-            changed = true;
+            this.reobserveOne("right", div);
           }
         }
         if (divIndex === this.domEnd && this.domEnd < this.paragraphRecords.length - 1) {
@@ -2296,7 +2328,7 @@ var ParagraphVirtualizer = class {
           } else {
             this.expandLeft();
             this.justExpandedLeft = true;
-            changed = true;
+            this.reobserveOne("left", div);
           }
         }
       } else {
@@ -2305,8 +2337,7 @@ var ParagraphVirtualizer = class {
             this.justExpandedRight = false;
           } else {
             this.shrinkRight();
-            this.justShrankRight = true;
-            changed = true;
+            this.reobserveOne("right", div);
           }
         }
         if (divIndex === this.domEnd && this.domEnd > this.domStart + 2) {
@@ -2314,13 +2345,11 @@ var ParagraphVirtualizer = class {
             this.justExpandedLeft = false;
           } else {
             this.shrinkLeft();
-            this.justShrankLeft = true;
-            changed = true;
+            this.reobserveOne("left", div);
           }
         }
       }
     }
-    if (changed) this.reobserveBoundaries();
   }
   // Computes visible text for an Aozora source line.
   // For every segment: take viewLen visible characters starting at srcStart.
