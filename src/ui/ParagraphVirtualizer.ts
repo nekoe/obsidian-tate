@@ -4,13 +4,19 @@ import { parseInlineToHtml } from './AozoraParser';
 
 // CSS class applied to both spacer divs so DOM walkers can skip them.
 export const SPACER_CLASS = 'tate-spacer';
-// Fallback width for paragraphs that have never entered the viewport and whose
-// estimated width cannot be computed (e.g. editorEl.clientHeight is 0).
-// Equals one column width at the default font size (22px × lineHeight 2 = 44px).
-const UNRENDERED_WIDTH_PX = 44;
 // CSS line-height value from .tate-editor. In vertical writing mode the column width
 // equals fontSize × lineHeight, so this ratio converts fontSizePx to column width.
 const VERTICAL_LINE_HEIGHT = 2;
+
+// Pixel margins for scroll-driven window management.
+// The scroll container (tate-scroll-area) is standard LTR; leftSpacer occupies
+// x=[0, leftSpacerWidth] and rightSpacer occupies x=[W-rightSpacerWidth, W].
+// The viewport shows x=[scrollLeft, scrollLeft+clientWidth].
+//   EXPAND_MARGIN: expand when a boundary's right/left edge is within this many px of the viewport.
+//   SHRINK_MARGIN: shrink when a boundary is more than this many px past the viewport.
+// The 440 px gap between the two thresholds prevents oscillation at the boundary.
+const EXPAND_MARGIN = 440;
+const SHRINK_MARGIN = 880;
 
 export interface ParagraphRecord {
     src: string;     // Aozora source line
@@ -26,6 +32,13 @@ export interface ParagraphRecord {
 //
 // Read path: in-window → serializeNode / computeDivViewLen (DOM)
 //            off-window → paragraphRecords[i].src / .viewLen
+//
+// Window management: driven by the scroll event. On each scroll, adjustWindowOnScroll()
+// computes the visible range from scrollLeft and spacer widths and expands/shrinks the
+// window to maintain EXPAND_MARGIN px of preloaded content on each side. No
+// IntersectionObserver is used — this avoids the "initial delivery" problem where IO
+// reports the current state of a newly-observed div, making it impossible to distinguish
+// "boundary is already in zone" from "boundary just entered zone".
 export class ParagraphVirtualizer {
     // Per-paragraph data store indexed 1:1 with paragraphs (not DOM children).
     // Maintained by initRecords() / spliceRecords() / syncWindowSrcs().
@@ -44,23 +57,8 @@ export class ParagraphVirtualizer {
     private rightSpacerWidth = 0;
     private leftSpacerWidth  = 0;
 
-    // Watches the two boundary divs of the window; expands/shrinks the window on intersection.
-    private windowObserver: IntersectionObserver | null = null;
-
     // True while a drag selection is in progress (mousedown → mouseup).
     private isDragging = false;
-
-    // Hysteresis flags: set after expandLeft/Right in the IO callback; block the subsequent
-    // initial delivery of the new boundary div when it is "outside" (isIntersecting=false),
-    // which would otherwise fire a spurious shrinkLeft/Right immediately after expand.
-    private justExpandedLeft  = false;
-    private justExpandedRight = false;
-
-    // Set by syncWindowSrcs when Enter/Delete changes the paragraph count mid-window.
-    // The observer must be re-registered (new boundary divs), but doing so during typing
-    // would fire initial IO deliveries near the cursor → spacer width changes → cursor slide.
-    // Instead, defer the re-registration to the next scroll event via the onScroll handler.
-    private needsReobserve = false;
 
     // Font size in px; used to estimate paragraph widths for off-window records.
     // Updated by setFontSize() when plugin settings change.
@@ -88,18 +86,9 @@ export class ParagraphVirtualizer {
         return cols * colWidthPx;
     }
 
-    // Starts the window boundary observer and inserts spacer divs.
+    // Starts scroll-based window management and inserts spacer divs.
     attach(): void {
-        if (this.windowObserver) return;
-        this.windowObserver = new IntersectionObserver(
-            (entries) => this.onWindowBoundaryIntersection(entries),
-            {
-                root: this.scrollArea,
-                // 440px margin on each side covers ~10 paragraphs (44px each) outside the viewport.
-                rootMargin: '0px 440px 0px 440px',
-                threshold: 0,
-            },
-        );
+        if (this.rightSpacer) return; // already attached
         this.initSpacers();
         this.editorEl.addEventListener('mousedown', this.onMouseDown);
         document.addEventListener('mouseup', this.onMouseUp);
@@ -123,10 +112,8 @@ export class ParagraphVirtualizer {
         this.leftSpacer  = left;
     }
 
-    // Stops observer, removes spacers.
+    // Stops window management, removes spacers.
     detach(): void {
-        this.windowObserver?.disconnect();
-        this.windowObserver = null;
         this.paragraphRecords.length = 0;
         this.domStart = 0;
         this.domEnd   = -1;
@@ -137,9 +124,6 @@ export class ParagraphVirtualizer {
         this.rightSpacer = null;
         this.leftSpacer  = null;
         this.isDragging = false;
-        this.justExpandedLeft  = false;
-        this.justExpandedRight = false;
-        this.needsReobserve = false;
         this.editorEl.removeEventListener('mousedown', this.onMouseDown);
         document.removeEventListener('mouseup', this.onMouseUp);
         this.scrollArea.removeEventListener('scroll', this.onScroll);
@@ -162,6 +146,8 @@ export class ParagraphVirtualizer {
     // Repositions the DOM window to [lo, hi] and updates spacer widths from estimated record
     // widths. Does NOT rebuild paragraph div nodes — the caller is responsible for that.
     // Used by EditorElement.loadContent() (initial load) and jumpWindowTo() (cursor jumps).
+    // The next scroll event will call adjustWindowOnScroll() to trim the window to the
+    // correct size for the current scroll position.
     resetWindow(lo: number, hi: number): void {
         this.domStart = Math.max(0, lo);
         this.domEnd   = Math.min(hi, this.paragraphRecords.length - 1);
@@ -177,7 +163,6 @@ export class ParagraphVirtualizer {
             if (this.leftSpacerWidth > 0) this.leftSpacer.style.setProperty('width', `${this.leftSpacerWidth}px`);
             else this.leftSpacer.style.removeProperty('width');
         }
-        this.reobserveBoundaries();
     }
 
     // Updates src/viewLen for all records in-place WITHOUT touching domStart, domEnd, or spacer
@@ -209,14 +194,8 @@ export class ParagraphVirtualizer {
                 // leftSpacerWidth does NOT need recomputing. Enter/Backspace only affect
                 // paragraphs inside the DOM window; the spacer region continues to represent
                 // the same physical off-screen paragraphs, so the stored accumulated width
-                // remains correct.
-                //
-                // The observer must be re-registered on the new boundary divs (Enter splits
-                // the old domEnd div; Backspace merges it). Doing so immediately would fire
-                // initial IO deliveries near the cursor → spacer width changes → cursor slide.
-                // Defer re-registration to the next scroll event instead. The scroll handler
-                // (onScroll) checks needsReobserve and calls reobserveBoundaries() then.
-                this.needsReobserve = true;
+                // remains correct. The next scroll event will call adjustWindowOnScroll()
+                // which re-evaluates the window size against the current scroll position.
             }
         }
     }
@@ -251,7 +230,6 @@ export class ParagraphVirtualizer {
             if (this.leftSpacerWidth > 0) this.leftSpacer.style.setProperty('width', `${this.leftSpacerWidth}px`);
             else this.leftSpacer.style.removeProperty('width');
         }
-        this.reobserveBoundaries();
     }
 
     // Returns the Aozora source for the paragraph at index i. O(1).
@@ -287,7 +265,6 @@ export class ParagraphVirtualizer {
         } else {
             while (this.domEnd < i) this.expandLeft();
         }
-        this.reobserveBoundaries();
     }
 
     // Replaces all paragraph divs with the full document content (one div per record).
@@ -312,14 +289,10 @@ export class ParagraphVirtualizer {
         this.leftSpacerWidth  = 0;
         if (this.rightSpacer) this.rightSpacer.style.removeProperty('width');
         if (this.leftSpacer)  this.leftSpacer.style.removeProperty('width');
-        this.reobserveBoundaries();
     }
 
-    // Called on selectionchange. The window mechanism (IntersectionObserver) keeps the cursor
-    // paragraph in the window proactively, so this is normally a no-op safety hook.
-    ensureWindowAroundCursor(): void {
-        // No-op: cursor paragraph is always in the window (IO expands before viewport edges).
-    }
+    // Called on selectionchange. Window management is scroll-driven, so this is a no-op.
+    ensureWindowAroundCursor(): void {}
 
     // ---- Window expand / shrink helpers ----
 
@@ -359,14 +332,17 @@ export class ParagraphVirtualizer {
 
     // Removes the leftmost div of the window (paragraphs[domEnd]) and grows leftSpacer.
     // Guards against removing a div that contains the current selection anchor or focus.
+    // Uses the stored/estimated record width to avoid a getBoundingClientRect() call
+    // inside the tight scroll-event adjustment loop.
     private shrinkLeft(): void {
         if (this.domEnd < this.domStart) return; // empty window guard
         const spacerOffset = this.rightSpacer ? 1 : 0;
         const div = this.editorEl.children[this.domEnd - this.domStart + spacerOffset] as HTMLElement;
         if (!div) return;
         if (this.isDragging && this.selectionOverlaps(div)) return;
-        const w = div.getBoundingClientRect().width || UNRENDERED_WIDTH_PX;
-        this.paragraphRecords[this.domEnd].width = w;
+        const rec = this.paragraphRecords[this.domEnd];
+        const w = rec.width > 0 ? rec.width : this.estimateWidth(rec.viewLen);
+        rec.width = w;
         div.remove();
         this.leftSpacerWidth += w;
         if (this.leftSpacer) this.leftSpacer.style.setProperty('width', `${this.leftSpacerWidth}px`);
@@ -380,8 +356,9 @@ export class ParagraphVirtualizer {
         const div = this.editorEl.children[spacerOffset] as HTMLElement; // first paragraph
         if (!div || div.classList.contains(SPACER_CLASS)) return;
         if (this.isDragging && this.selectionOverlaps(div)) return;
-        const w = div.getBoundingClientRect().width || UNRENDERED_WIDTH_PX;
-        this.paragraphRecords[this.domStart].width = w;
+        const rec = this.paragraphRecords[this.domStart];
+        const w = rec.width > 0 ? rec.width : this.estimateWidth(rec.viewLen);
+        rec.width = w;
         div.remove();
         this.rightSpacerWidth += w;
         if (this.rightSpacer) this.rightSpacer.style.setProperty('width', `${this.rightSpacerWidth}px`);
@@ -395,106 +372,75 @@ export class ParagraphVirtualizer {
         return div.contains(sel.anchorNode) || div.contains(sel.focusNode);
     }
 
-    // Re-registers BOTH boundary divs with the window observer using disconnect+observe.
-    // Triggers an initial IO delivery for every re-observed div. Used by callers outside
-    // the IO callback (resetWindow, spliceRecords, syncWindowSrcs, ensureInWindow).
-    // Do NOT call from inside onWindowBoundaryIntersection — use reobserveOne() there
-    // to avoid spurious cross-boundary initial deliveries that cause oscillation.
-    private reobserveBoundaries(): void {
-        if (!this.windowObserver) return;
-        this.windowObserver.disconnect();
-        const startDiv = this.getWindowDiv(this.domStart);
-        const endDiv   = this.getWindowDiv(this.domEnd);
-        if (startDiv) this.windowObserver.observe(startDiv);
-        if (endDiv && endDiv !== startDiv) this.windowObserver.observe(endDiv);
-    }
-
-    // Targeted reobservation used inside onWindowBoundaryIntersection.
-    // Unobserves the old boundary div (entry.target) and observes only the new boundary.
-    // The unchanged boundary keeps its current IO state — no new initial delivery fires
-    // for it, preventing the cross-boundary oscillation that reobserveBoundaries() causes.
+    // Adjusts the DOM window based on the current scroll position.
     //
-    // Edge case: when domStart === domEnd before the expand/shrink, oldDiv served as both
-    // boundaries. Unobserving it removes the other boundary too; it is re-registered here.
-    private reobserveOne(side: 'left' | 'right', oldDiv: HTMLElement): void {
-        if (!this.windowObserver) return;
-        const startDiv = this.getWindowDiv(this.domStart);
-        const endDiv   = this.getWindowDiv(this.domEnd);
-        const newDiv   = side === 'left' ? endDiv   : startDiv;
-        const keepDiv  = side === 'left' ? startDiv : endDiv;
-
-        this.windowObserver.unobserve(oldDiv);
-        // Re-register keepDiv if it was also unobserved because it shared oldDiv's element.
-        if (keepDiv === oldDiv && keepDiv !== newDiv) {
-            this.windowObserver.observe(keepDiv);
-        }
-        if (newDiv && newDiv !== keepDiv) {
-            this.windowObserver.observe(newDiv);
-        }
-    }
-
-    // Called by the window boundary IntersectionObserver.
-    // Boundary div enters extended viewport → expand window in that direction.
-    // Boundary div exits extended viewport → shrink window from that same end.
+    // Coordinate system (tate-scroll-area is a standard LTR scroll container):
+    //   leftSpacer  →  x = [0,                      leftSpacerWidth]       (end of document)
+    //   window divs →  x = [leftSpacerWidth,         leftSpacerWidth + W_win]
+    //   rightSpacer →  x = [W - rightSpacerWidth,    W]                    (start of document)
+    //   viewport    →  x = [scrollLeft,              scrollLeft + clientWidth]
     //
-    // Each expand/shrink calls reobserveOne() to watch only the changed boundary.
-    // Using reobserveOne() instead of reobserveBoundaries() avoids firing an initial
-    // delivery for the unchanged boundary, which would otherwise trigger a spurious
-    // expand or shrink on the opposite side.
-    private onWindowBoundaryIntersection(entries: IntersectionObserverEntry[]): void {
+    // Left boundary (domEnd = leftmost paragraph):
+    //   Its right edge is at leftSpacerWidth + domEnd.width.
+    //   Expand when right edge > scrollLeft - EXPAND_MARGIN (boundary approaching viewport).
+    //   Shrink when right edge < scrollLeft - SHRINK_MARGIN (boundary too far behind viewport).
+    //
+    // Right boundary (domStart = rightmost paragraph):
+    //   Its left edge is at W - rightSpacerWidth - domStart.width.
+    //   Expand when left edge < scrollLeft + clientWidth + EXPAND_MARGIN.
+    //   Shrink when left edge > scrollLeft + clientWidth + SHRINK_MARGIN.
+    //
+    // EXPAND_MARGIN < SHRINK_MARGIN provides hysteresis that prevents oscillation.
+    private adjustWindowOnScroll(): void {
         if (this.paragraphRecords.length === 0) return;
-        for (const entry of entries) {
-            const div = entry.target as HTMLElement;
-            const spacerOffset = this.rightSpacer ? 1 : 0;
-            const divIndex = Array.from(this.editorEl.children).indexOf(div) - spacerOffset + this.domStart;
-            if (entry.isIntersecting) {
-                if (divIndex === this.domStart && this.domStart > 0) {
-                    this.expandRight();
-                    this.justExpandedRight = true;
-                    this.reobserveOne('right', div);
-                }
-                if (divIndex === this.domEnd && this.domEnd < this.paragraphRecords.length - 1) {
-                    this.expandLeft();
-                    this.justExpandedLeft = true;
-                    this.reobserveOne('left', div);
-                }
-            } else {
-                // Only shrink when the window is wide enough that the exiting boundary is
-                // clearly off-screen. Guard of +2 ensures at least one paragraph buffer remains.
-                if (divIndex === this.domStart && this.domEnd > this.domStart + 2) {
-                    if (this.justExpandedRight) {
-                        this.justExpandedRight = false;
-                    } else {
-                        this.shrinkRight();
-                        this.reobserveOne('right', div);
-                    }
-                }
-                if (divIndex === this.domEnd && this.domEnd > this.domStart + 2) {
-                    if (this.justExpandedLeft) {
-                        this.justExpandedLeft = false;
-                    } else {
-                        this.shrinkLeft();
-                        this.reobserveOne('left', div);
-                    }
-                }
-            }
+        // Read layout properties once before any mutations to avoid thrashing.
+        const scrollLeft = this.scrollArea.scrollLeft;
+        const viewW      = this.scrollArea.clientWidth;
+        const W          = this.scrollArea.scrollWidth; // constant (spacer approach keeps it stable)
+
+        // ---- Left boundary (domEnd) ----
+        // Expand: domEnd's right edge within EXPAND_MARGIN of viewport's left edge.
+        while (this.domEnd < this.paragraphRecords.length - 1) {
+            const rec = this.paragraphRecords[this.domEnd];
+            const w   = rec.width > 0 ? rec.width : this.estimateWidth(rec.viewLen);
+            if (this.leftSpacerWidth + w > scrollLeft - EXPAND_MARGIN) {
+                this.expandLeft();
+            } else break;
+        }
+        // Shrink: domEnd's right edge more than SHRINK_MARGIN behind viewport's left edge.
+        while (this.domEnd > this.domStart + 2) {
+            if (this.isDragging) break;
+            const rec = this.paragraphRecords[this.domEnd];
+            const w   = rec.width > 0 ? rec.width : this.estimateWidth(rec.viewLen);
+            if (this.leftSpacerWidth + w < scrollLeft - SHRINK_MARGIN) {
+                this.shrinkLeft();
+            } else break;
+        }
+
+        // ---- Right boundary (domStart) ----
+        // Expand: domStart's left edge within EXPAND_MARGIN of viewport's right edge.
+        while (this.domStart > 0) {
+            const rec = this.paragraphRecords[this.domStart];
+            const w   = rec.width > 0 ? rec.width : this.estimateWidth(rec.viewLen);
+            if (W - this.rightSpacerWidth - w < scrollLeft + viewW + EXPAND_MARGIN) {
+                this.expandRight();
+            } else break;
+        }
+        // Shrink: domStart's left edge more than SHRINK_MARGIN past viewport's right edge.
+        while (this.domEnd > this.domStart + 2) {
+            if (this.isDragging) break;
+            const rec = this.paragraphRecords[this.domStart];
+            const w   = rec.width > 0 ? rec.width : this.estimateWidth(rec.viewLen);
+            if (W - this.rightSpacerWidth - w > scrollLeft + viewW + SHRINK_MARGIN) {
+                this.shrinkRight();
+            } else break;
         }
     }
 
     // Arrow functions so `this` is bound for addEventListener/removeEventListener.
     private readonly onMouseDown = () => { this.isDragging = true; };
     private readonly onMouseUp   = () => { this.isDragging = false; };
-
-    // Fires re-registration of boundary observers deferred by syncWindowSrcs.
-    // Running reobserveBoundaries() during typing (Enter/Delete) would fire initial IO
-    // deliveries near the cursor, changing spacer widths and sliding the cursor. Deferring
-    // to the first subsequent scroll event is safe: spacer widths only matter when the user
-    // is scrolling, and the scroll event fires before the IO callback in the same frame.
-    private readonly onScroll = (): void => {
-        if (!this.needsReobserve) return;
-        this.needsReobserve = false;
-        this.reobserveBoundaries();
-    };
+    private readonly onScroll    = () => { this.adjustWindowOnScroll(); };
 
     // Computes visible text for an Aozora source line.
     // For every segment: take viewLen visible characters starting at srcStart.
@@ -511,4 +457,3 @@ export class ParagraphVirtualizer {
     }
 
 }
-
