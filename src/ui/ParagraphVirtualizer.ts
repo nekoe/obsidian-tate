@@ -203,17 +203,25 @@ export class ParagraphVirtualizer {
             const windowDivCount = this.domEnd - this.domStart + 1;
             if (actualDivCount !== windowDivCount) {
                 this.domEnd = Math.min(this.domStart + actualDivCount - 1, n - 1);
-                // leftSpacerWidth does NOT need recomputing here. Enter/Backspace only
-                // affect paragraphs inside the DOM window; the spacer region continues to
-                // represent the same physical paragraphs at shifted record indices, so the
-                // stored accumulated width remains correct.
+                // leftSpacerWidth does NOT need recomputing. Enter/Backspace only affect
+                // paragraphs inside the DOM window; the spacer region continues to represent
+                // the same physical off-screen paragraphs, so the stored accumulated width
+                // remains correct.
                 //
                 // Re-register the observer on the new boundary divs. Without this, the IO
-                // keeps watching the old domEnd element (which may have been split by Enter
-                // or merged by Backspace) and the new domEnd div is never observed, causing
-                // expandLeft to stop firing permanently. The hysteresis flags in
-                // onWindowBoundaryIntersection prevent the initial IO delivery from starting
-                // a spurious expand/shrink cascade.
+                // keeps watching the old domEnd element (split by Enter or merged by
+                // Backspace) and the new domEnd div is never observed, so expandLeft stops
+                // firing permanently.
+                //
+                // Block all four actions for the initial IO delivery that reobserveBoundaries
+                // triggers. The new boundary divs are close to the viewport (cursor is there),
+                // so their initial states would fire expandLeft/expandRight immediately,
+                // changing leftSpacerWidth and causing visible cursor slide. After these
+                // one-shot flags are consumed, the IO resumes normal operation on scroll.
+                this.justShrankLeft   = true; // blocks expandLeft  from initial delivery
+                this.justShrankRight  = true; // blocks expandRight from initial delivery
+                this.justExpandedLeft  = true; // blocks shrinkLeft  from initial delivery
+                this.justExpandedRight = true; // blocks shrinkRight from initial delivery
                 this.reobserveBoundaries();
             }
         }
