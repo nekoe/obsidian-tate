@@ -50,24 +50,17 @@ export class ParagraphVirtualizer {
     // True while a drag selection is in progress (mousedown → mouseup).
     private isDragging = false;
 
-    // Hysteresis flags: prevent spurious IO actions from initial deliveries.
-    //
-    // justExpandedLeft/Right: set in the IO callback after expandLeft/Right; blocks the
-    //   subsequent initial delivery of the new boundary div if it is "outside" (isIntersecting=false),
-    //   which would otherwise fire a spurious shrinkLeft/Right immediately after expand.
-    //
-    // justShrankLeft/Right: set only by syncWindowSrcs (all four flags) before calling
-    //   reobserveBoundaries() after Enter/Backspace. Blocks the initial "inside" delivery
-    //   for the new boundary divs near the cursor, which would otherwise fire expandLeft/Right
-    //   and change spacer widths (causing cursor slide).
-    //   NOT set in the IO callback's shrink branch: after a shrink cascade driven by
-    //   initial deliveries, the cascade termination state ("inside") should trigger expandLeft/Right
-    //   to settle the boundary just outside the 440 px zone, letting future scroll correctly fire
-    //   expand. Without this, the boundary is stuck as "inside" with no further IO transitions.
+    // Hysteresis flags: set after expandLeft/Right in the IO callback; block the subsequent
+    // initial delivery of the new boundary div when it is "outside" (isIntersecting=false),
+    // which would otherwise fire a spurious shrinkLeft/Right immediately after expand.
     private justExpandedLeft  = false;
     private justExpandedRight = false;
-    private justShrankLeft    = false;
-    private justShrankRight   = false;
+
+    // Set by syncWindowSrcs when Enter/Delete changes the paragraph count mid-window.
+    // The observer must be re-registered (new boundary divs), but doing so during typing
+    // would fire initial IO deliveries near the cursor → spacer width changes → cursor slide.
+    // Instead, defer the re-registration to the next scroll event via the onScroll handler.
+    private needsReobserve = false;
 
     // Font size in px; used to estimate paragraph widths for off-window records.
     // Updated by setFontSize() when plugin settings change.
@@ -110,6 +103,7 @@ export class ParagraphVirtualizer {
         this.initSpacers();
         this.editorEl.addEventListener('mousedown', this.onMouseDown);
         document.addEventListener('mouseup', this.onMouseUp);
+        this.scrollArea.addEventListener('scroll', this.onScroll);
     }
 
     // Inserts rightSpacer and leftSpacer into editorEl.
@@ -145,10 +139,10 @@ export class ParagraphVirtualizer {
         this.isDragging = false;
         this.justExpandedLeft  = false;
         this.justExpandedRight = false;
-        this.justShrankLeft    = false;
-        this.justShrankRight   = false;
+        this.needsReobserve = false;
         this.editorEl.removeEventListener('mousedown', this.onMouseDown);
         document.removeEventListener('mouseup', this.onMouseUp);
+        this.scrollArea.removeEventListener('scroll', this.onScroll);
     }
 
     // Initializes paragraphRecords from content lines.
@@ -217,21 +211,12 @@ export class ParagraphVirtualizer {
                 // the same physical off-screen paragraphs, so the stored accumulated width
                 // remains correct.
                 //
-                // Re-register the observer on the new boundary divs. Without this, the IO
-                // keeps watching the old domEnd element (split by Enter or merged by
-                // Backspace) and the new domEnd div is never observed, so expandLeft stops
-                // firing permanently.
-                //
-                // Block all four actions for the initial IO delivery that reobserveBoundaries
-                // triggers. The new boundary divs are close to the viewport (cursor is there),
-                // so their initial states would fire expandLeft/expandRight immediately,
-                // changing leftSpacerWidth and causing visible cursor slide. After these
-                // one-shot flags are consumed, the IO resumes normal operation on scroll.
-                this.justShrankLeft   = true; // blocks expandLeft  from initial delivery
-                this.justShrankRight  = true; // blocks expandRight from initial delivery
-                this.justExpandedLeft  = true; // blocks shrinkLeft  from initial delivery
-                this.justExpandedRight = true; // blocks shrinkRight from initial delivery
-                this.reobserveBoundaries();
+                // The observer must be re-registered on the new boundary divs (Enter splits
+                // the old domEnd div; Backspace merges it). Doing so immediately would fire
+                // initial IO deliveries near the cursor → spacer width changes → cursor slide.
+                // Defer re-registration to the next scroll event instead. The scroll handler
+                // (onScroll) checks needsReobserve and calls reobserveBoundaries() then.
+                this.needsReobserve = true;
             }
         }
     }
@@ -453,10 +438,9 @@ export class ParagraphVirtualizer {
     // Boundary div exits extended viewport → shrink window from that same end.
     //
     // Each expand/shrink calls reobserveOne() to watch only the changed boundary.
-    // This prevents the oscillation that reobserveBoundaries() (disconnect+observe both)
-    // caused: its initial delivery for the UNCHANGED boundary would fire a spurious
-    // shrink/expand, which itself called reobserveBoundaries() again, creating an
-    // expand→shrink→expand cycle that drained leftSpacerWidth.
+    // Using reobserveOne() instead of reobserveBoundaries() avoids firing an initial
+    // delivery for the unchanged boundary, which would otherwise trigger a spurious
+    // expand or shrink on the opposite side.
     private onWindowBoundaryIntersection(entries: IntersectionObserverEntry[]): void {
         if (this.paragraphRecords.length === 0) return;
         for (const entry of entries) {
@@ -465,22 +449,14 @@ export class ParagraphVirtualizer {
             const divIndex = Array.from(this.editorEl.children).indexOf(div) - spacerOffset + this.domStart;
             if (entry.isIntersecting) {
                 if (divIndex === this.domStart && this.domStart > 0) {
-                    if (this.justShrankRight) {
-                        this.justShrankRight = false;
-                    } else {
-                        this.expandRight();
-                        this.justExpandedRight = true;
-                        this.reobserveOne('right', div);
-                    }
+                    this.expandRight();
+                    this.justExpandedRight = true;
+                    this.reobserveOne('right', div);
                 }
                 if (divIndex === this.domEnd && this.domEnd < this.paragraphRecords.length - 1) {
-                    if (this.justShrankLeft) {
-                        this.justShrankLeft = false;
-                    } else {
-                        this.expandLeft();
-                        this.justExpandedLeft = true;
-                        this.reobserveOne('left', div);
-                    }
+                    this.expandLeft();
+                    this.justExpandedLeft = true;
+                    this.reobserveOne('left', div);
                 }
             } else {
                 // Only shrink when the window is wide enough that the exiting boundary is
@@ -505,9 +481,20 @@ export class ParagraphVirtualizer {
         }
     }
 
-    // Arrow function so `this` is bound for addEventListener/removeEventListener.
+    // Arrow functions so `this` is bound for addEventListener/removeEventListener.
     private readonly onMouseDown = () => { this.isDragging = true; };
     private readonly onMouseUp   = () => { this.isDragging = false; };
+
+    // Fires re-registration of boundary observers deferred by syncWindowSrcs.
+    // Running reobserveBoundaries() during typing (Enter/Delete) would fire initial IO
+    // deliveries near the cursor, changing spacer widths and sliding the cursor. Deferring
+    // to the first subsequent scroll event is safe: spacer widths only matter when the user
+    // is scrolling, and the scroll event fires before the IO callback in the same frame.
+    private readonly onScroll = (): void => {
+        if (!this.needsReobserve) return;
+        this.needsReobserve = false;
+        this.reobserveBoundaries();
+    };
 
     // Computes visible text for an Aozora source line.
     // For every segment: take viewLen visible characters starting at srcStart.
