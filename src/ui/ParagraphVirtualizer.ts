@@ -342,7 +342,7 @@ export class ParagraphVirtualizer {
             : this.editorEl.firstChild as HTMLElement | null;
         this.editorEl.insertBefore(div, firstPara ?? null);
         // Shrink rightSpacer by the paragraph's estimated or measured width.
-        const w = rec.width > 0 ? rec.width : UNRENDERED_WIDTH_PX;
+        const w = rec.width > 0 ? rec.width : this.estimateWidth(rec.viewLen);
         this.rightSpacerWidth = Math.max(0, this.rightSpacerWidth - w);
         if (this.rightSpacer) this.rightSpacer.style.setProperty('width', `${this.rightSpacerWidth}px`);
         this.domStart--;
@@ -357,7 +357,7 @@ export class ParagraphVirtualizer {
         div.replaceChildren(sanitizeHTMLToDom(parseInlineToHtml(rec.src) || '<br>'));
         // Insert before leftSpacer (last child) → after the current last paragraph.
         this.editorEl.insertBefore(div, this.leftSpacer ?? null);
-        const w = rec.width > 0 ? rec.width : UNRENDERED_WIDTH_PX;
+        const w = rec.width > 0 ? rec.width : this.estimateWidth(rec.viewLen);
         this.leftSpacerWidth = Math.max(0, this.leftSpacerWidth - w);
         if (this.leftSpacer) this.leftSpacer.style.setProperty('width', `${this.leftSpacerWidth}px`);
         this.domEnd++;
@@ -401,8 +401,11 @@ export class ParagraphVirtualizer {
         return div.contains(sel.anchorNode) || div.contains(sel.focusNode);
     }
 
-    // Re-registers the current boundary divs (domStart and domEnd) with the window observer.
-    // Must be called after any expand/shrink operation so the observer watches the new boundaries.
+    // Re-registers BOTH boundary divs with the window observer using disconnect+observe.
+    // Triggers an initial IO delivery for every re-observed div. Used by callers outside
+    // the IO callback (resetWindow, spliceRecords, syncWindowSrcs, ensureInWindow).
+    // Do NOT call from inside onWindowBoundaryIntersection — use reobserveOne() there
+    // to avoid spurious cross-boundary initial deliveries that cause oscillation.
     private reobserveBoundaries(): void {
         if (!this.windowObserver) return;
         this.windowObserver.disconnect();
@@ -412,27 +415,53 @@ export class ParagraphVirtualizer {
         if (endDiv && endDiv !== startDiv) this.windowObserver.observe(endDiv);
     }
 
+    // Targeted reobservation used inside onWindowBoundaryIntersection.
+    // Unobserves the old boundary div (entry.target) and observes only the new boundary.
+    // The unchanged boundary keeps its current IO state — no new initial delivery fires
+    // for it, preventing the cross-boundary oscillation that reobserveBoundaries() causes.
+    //
+    // Edge case: when domStart === domEnd before the expand/shrink, oldDiv served as both
+    // boundaries. Unobserving it removes the other boundary too; it is re-registered here.
+    private reobserveOne(side: 'left' | 'right', oldDiv: HTMLElement): void {
+        if (!this.windowObserver) return;
+        const startDiv = this.getWindowDiv(this.domStart);
+        const endDiv   = this.getWindowDiv(this.domEnd);
+        const newDiv   = side === 'left' ? endDiv   : startDiv;
+        const keepDiv  = side === 'left' ? startDiv : endDiv;
+
+        this.windowObserver.unobserve(oldDiv);
+        // Re-register keepDiv if it was also unobserved because it shared oldDiv's element.
+        if (keepDiv === oldDiv && keepDiv !== newDiv) {
+            this.windowObserver.observe(keepDiv);
+        }
+        if (newDiv && newDiv !== keepDiv) {
+            this.windowObserver.observe(newDiv);
+        }
+    }
+
     // Called by the window boundary IntersectionObserver.
     // Boundary div enters extended viewport → expand window in that direction.
     // Boundary div exits extended viewport → shrink window from that same end.
+    //
+    // Each expand/shrink calls reobserveOne() to watch only the changed boundary.
+    // This prevents the oscillation that reobserveBoundaries() (disconnect+observe both)
+    // caused: its initial delivery for the UNCHANGED boundary would fire a spurious
+    // shrink/expand, which itself called reobserveBoundaries() again, creating an
+    // expand→shrink→expand cycle that drained leftSpacerWidth.
     private onWindowBoundaryIntersection(entries: IntersectionObserverEntry[]): void {
         if (this.paragraphRecords.length === 0) return;
-        let changed = false;
         for (const entry of entries) {
             const div = entry.target as HTMLElement;
             const spacerOffset = this.rightSpacer ? 1 : 0;
             const divIndex = Array.from(this.editorEl.children).indexOf(div) - spacerOffset + this.domStart;
             if (entry.isIntersecting) {
                 if (divIndex === this.domStart && this.domStart > 0) {
-                    // After shrinkRight, reobserveBoundaries delivers the new domStart's
-                    // initial state as "intersecting" (it was already inside the rootMargin).
-                    // Suppress this one delivery to prevent shrink→expand oscillation.
                     if (this.justShrankRight) {
                         this.justShrankRight = false;
                     } else {
                         this.expandRight();
                         this.justExpandedRight = true;
-                        changed = true;
+                        this.reobserveOne('right', div);
                     }
                 }
                 if (divIndex === this.domEnd && this.domEnd < this.paragraphRecords.length - 1) {
@@ -441,22 +470,19 @@ export class ParagraphVirtualizer {
                     } else {
                         this.expandLeft();
                         this.justExpandedLeft = true;
-                        changed = true;
+                        this.reobserveOne('left', div);
                     }
                 }
             } else {
                 // Only shrink when the window is wide enough that the exiting boundary is
                 // clearly off-screen. Guard of +2 ensures at least one paragraph buffer remains.
                 if (divIndex === this.domStart && this.domEnd > this.domStart + 2) {
-                    // After expandRight, reobserveBoundaries delivers the new domStart's
-                    // initial state as "not intersecting" (just outside the rootMargin).
-                    // Suppress this one delivery to prevent expand→shrink oscillation.
                     if (this.justExpandedRight) {
                         this.justExpandedRight = false;
                     } else {
                         this.shrinkRight();
                         this.justShrankRight = true;
-                        changed = true;
+                        this.reobserveOne('right', div);
                     }
                 }
                 if (divIndex === this.domEnd && this.domEnd > this.domStart + 2) {
@@ -465,12 +491,11 @@ export class ParagraphVirtualizer {
                     } else {
                         this.shrinkLeft();
                         this.justShrankLeft = true;
-                        changed = true;
+                        this.reobserveOne('left', div);
                     }
                 }
             }
         }
-        if (changed) this.reobserveBoundaries();
     }
 
     // Arrow function so `this` is bound for addEventListener/removeEventListener.
