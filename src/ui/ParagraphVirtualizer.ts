@@ -50,10 +50,6 @@ export class ParagraphVirtualizer {
     // True while a drag selection is in progress (mousedown → mouseup).
     private isDragging = false;
 
-    // True while IO callbacks should be suppressed (set after Enter/Backspace to prevent
-    // the IO from firing while the browser is still settling layout after DOM mutation).
-    private ioSuppressed = false;
-
     // Hysteresis flags: prevent the oscillation that occurs when reobserveBoundaries()
     // delivers an initial IO state for the newly-registered boundary div that is just
     // outside the rootMargin (causing shrink immediately after expand, or vice versa).
@@ -138,7 +134,6 @@ export class ParagraphVirtualizer {
         this.rightSpacer = null;
         this.leftSpacer  = null;
         this.isDragging = false;
-        this.ioSuppressed    = false;
         this.justExpandedLeft  = false;
         this.justExpandedRight = false;
         this.justShrankLeft    = false;
@@ -208,27 +203,18 @@ export class ParagraphVirtualizer {
             const windowDivCount = this.domEnd - this.domStart + 1;
             if (actualDivCount !== windowDivCount) {
                 this.domEnd = Math.min(this.domStart + actualDivCount - 1, n - 1);
-                // Do NOT recompute leftSpacerWidth or update leftSpacer.style here.
-                // syncWindowSrcs resizes paragraphRecords by appending/popping at the end,
-                // which misaligns stored widths (push-at-end does not insert at the split point).
-                // Recomputing from stale widths would change leftSpacer.style.width and cause
-                // a visible scroll jump. The spacer covers the same off-screen paragraphs; only
-                // the boundary index (domEnd) changed.
+                // leftSpacerWidth does NOT need recomputing here. Enter/Backspace only
+                // affect paragraphs inside the DOM window; the spacer region continues to
+                // represent the same physical paragraphs at shifted record indices, so the
+                // stored accumulated width remains correct.
                 //
-                // Suppress IO for two animation frames while the browser settles layout
-                // after the Enter/Backspace DOM mutation. The observer continues watching
-                // the same element references (the domEnd div has shifted in DOM position
-                // but not changed identity), so divIndex recomputes correctly without
-                // needing reobserveBoundaries. Calling reobserveBoundaries here would
-                // trigger an initial IO delivery that can start a shrink/expand cascade.
-                if (!this.ioSuppressed) {
-                    this.ioSuppressed = true;
-                    requestAnimationFrame(() => requestAnimationFrame(() => {
-                        this.ioSuppressed = false;
-                        // Do NOT call reobserveBoundaries: the observer already watches the
-                        // correct element references shifted by the DOM mutation.
-                    }));
-                }
+                // Re-register the observer on the new boundary divs. Without this, the IO
+                // keeps watching the old domEnd element (which may have been split by Enter
+                // or merged by Backspace) and the new domEnd div is never observed, causing
+                // expandLeft to stop firing permanently. The hysteresis flags in
+                // onWindowBoundaryIntersection prevent the initial IO delivery from starting
+                // a spurious expand/shrink cascade.
+                this.reobserveBoundaries();
             }
         }
     }
@@ -423,7 +409,6 @@ export class ParagraphVirtualizer {
     // Boundary div exits extended viewport → shrink window from that same end.
     private onWindowBoundaryIntersection(entries: IntersectionObserverEntry[]): void {
         if (this.paragraphRecords.length === 0) return;
-        if (this.ioSuppressed) return;
         let changed = false;
         for (const entry of entries) {
             const div = entry.target as HTMLElement;
