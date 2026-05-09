@@ -831,10 +831,14 @@ export class EditorElement {
         if (!container) return;
 
         const rect = range.getBoundingClientRect();
-        if (rect.width === 0 && rect.height === 0) {
-            // Range not yet laid out — fall back to element-based scroll.
+        // Collapsed ranges (cursor) in vertical-rl have width=0 and height=0 per CSSOM spec,
+        // but x and y are the actual caret position. Only fall back when all four are zero,
+        // which means the range is truly not laid out yet (no position info at all).
+        if (rect.width === 0 && rect.height === 0 && rect.x === 0 && rect.y === 0) {
+            // Range truly not laid out — fall back to element-based scroll.
+            // In a horizontal scroll container: inline=horizontal, block=vertical (no effect).
             const node = range.startContainer;
-            (node instanceof Element ? node : node.parentElement)?.scrollIntoView({ block, inline: 'nearest' });
+            (node instanceof Element ? node : node.parentElement)?.scrollIntoView({ block: 'nearest', inline: block });
             return;
         }
 
