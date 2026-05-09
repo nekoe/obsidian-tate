@@ -2381,6 +2381,9 @@ var INITIAL_WINDOW_HALF = 50;
 var EditorElement = class {
   constructor(container) {
     this.virtualizer = null;
+    // Set to true by setVisibleOffset() when jumpWindowTo() is called (cursor was off-window).
+    // Consumers (view.ts Undo/Redo handler) read this to decide 'center' vs 'nearest' scroll.
+    this._cursorJumped = false;
     this.el = container.createEl("div");
     this.el.addClass("tate-editor");
     this.el.setAttribute("contenteditable", "true");
@@ -2388,6 +2391,9 @@ var EditorElement = class {
     this.el.setAttribute("data-placeholder", "\u30D5\u30A1\u30A4\u30EB\u3092\u958B\u3044\u3066\u304F\u3060\u3055\u3044");
     this.inlineEditor = new InlineEditor(this.el);
     this.inputTransformer = new InputTransformer(this.el, DEFAULT_SETTINGS);
+  }
+  get cursorJumped() {
+    return this._cursorJumped;
   }
   // Sets the virtualizer. Called from view.ts after creating the EditorElement.
   setVirtualizer(v) {
@@ -3118,6 +3124,7 @@ var EditorElement = class {
     var _a, _b;
     const sel = window.getSelection();
     if (!sel) return;
+    this._cursorJumped = false;
     const virt = this.virtualizer;
     let remaining = offset;
     const N = virt && virt.domEnd >= 0 ? virt.paragraphRecords.length : this.el.children.length;
@@ -3129,6 +3136,7 @@ var EditorElement = class {
           remaining -= viewLen;
           continue;
         }
+        this._cursorJumped = true;
         this.jumpWindowTo(idx);
         idx--;
         continue;
@@ -4413,12 +4421,13 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
     if (newContent === prevContent) return;
     const srcOffset = this.deriveUndoRedoCursor(prevContent, newContent);
     const changedDivs = editorEl.applyFromCm6(prevContent, newContent, srcOffset);
+    const block = editorEl.cursorJumped ? "center" : "nearest";
     if (changedDivs === null) {
       const gen = this.beginScrollRestoring();
       requestAnimationFrame(() => {
         if (this.scrollRestoringGeneration !== gen) return;
         this.hideLoadingSpinner();
-        editorEl.scrollCursorIntoView("nearest", "nearest");
+        editorEl.scrollCursorIntoView(block, block);
         requestAnimationFrame(() => {
           if (this.scrollRestoringGeneration === gen) {
             editorEl.el.classList.remove("tate-scroll-restoring");
@@ -4426,7 +4435,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
         });
       });
     } else {
-      editorEl.scrollCursorIntoView("nearest", "nearest");
+      editorEl.scrollCursorIntoView(block, block);
     }
     this.lastCommittedContent = newContent;
     this.plugin.updateCharCount(countChars(newContent));

@@ -18,6 +18,10 @@ export class EditorElement {
     private readonly inlineEditor: InlineEditor;
     private readonly inputTransformer: InputTransformer;
     private virtualizer: ParagraphVirtualizer | null = null;
+    // Set to true by setVisibleOffset() when jumpWindowTo() is called (cursor was off-window).
+    // Consumers (view.ts Undo/Redo handler) read this to decide 'center' vs 'nearest' scroll.
+    private _cursorJumped = false;
+    get cursorJumped(): boolean { return this._cursorJumped; }
 
     constructor(container: HTMLElement) {
         this.el = container.createEl('div');
@@ -961,6 +965,7 @@ export class EditorElement {
     private setVisibleOffset(offset: number): void {
         const sel = window.getSelection();
         if (!sel) return;
+        this._cursorJumped = false;
         const virt = this.virtualizer;
         let remaining = offset;
 
@@ -980,6 +985,7 @@ export class EditorElement {
                     continue;
                 }
                 // Cursor is inside this off-window paragraph. Teleport the window to include it.
+                this._cursorJumped = true;
                 this.jumpWindowTo(idx);
                 idx--; // retry: paragraph is now in-window
                 continue;

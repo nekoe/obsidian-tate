@@ -838,6 +838,9 @@ export class VerticalWritingView extends ItemView {
         // Derive cursor position from the diff (end of the restored/deleted text)
         const srcOffset = this.deriveUndoRedoCursor(prevContent, newContent);
         const changedDivs = editorEl.applyFromCm6(prevContent, newContent, srcOffset);
+        // Use 'center' when the cursor jumped to an off-window paragraph (scrolled far away),
+        // 'nearest' when it was already in the window (minimal scroll suffices).
+        const block = editorEl.cursorJumped ? 'center' : 'nearest';
         if (changedDivs === null) {
             // hasCleanDivStructure failed → full rebuild. beginScrollRestoring adds
             // tate-scroll-restoring synchronously (class is pending before any layout).
@@ -848,7 +851,7 @@ export class VerticalWritingView extends ItemView {
             requestAnimationFrame(() => {
                 if (this.scrollRestoringGeneration !== gen) return;
                 this.hideLoadingSpinner();
-                editorEl.scrollCursorIntoView('nearest', 'nearest');
+                editorEl.scrollCursorIntoView(block, block);
                 requestAnimationFrame(() => {
                     if (this.scrollRestoringGeneration === gen) {
                         editorEl.el.classList.remove('tate-scroll-restoring');
@@ -856,7 +859,7 @@ export class VerticalWritingView extends ItemView {
                 });
             });
         } else {
-            editorEl.scrollCursorIntoView('nearest', 'nearest');
+            editorEl.scrollCursorIntoView(block, block);
         }
         // Update last committed content to reflect the new CM6 state.
         // Without this, onExternalModify() would misfire on the CM6 autosave modify event,
