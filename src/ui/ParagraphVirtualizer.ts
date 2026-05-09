@@ -437,6 +437,13 @@ export class ParagraphVirtualizer {
         }
     }
 
+    // Immediately adjusts the DOM window for the current scroll position.
+    // Call after any programmatic scrollLeft change so the window is correct before the next
+    // paint, without waiting for the async scroll event.
+    adjustNow(): void {
+        this.adjustWindowOnScroll();
+    }
+
     // Arrow functions so `this` is bound for addEventListener/removeEventListener.
     private readonly onMouseDown = () => { this.isDragging = true; };
     private readonly onMouseUp   = () => { this.isDragging = false; };

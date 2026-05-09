@@ -849,7 +849,13 @@ export class EditorElement {
         if (block === 'nearest') {
             const visLeft  = container.scrollLeft;
             const visRight = container.scrollLeft + viewWidth;
-            if (absLeft >= visLeft && absRight <= visRight) return; // already fully visible
+            if (absLeft >= visLeft && absRight <= visRight) {
+                // Cursor is already fully visible: scrollLeft will not change, so the async
+                // scroll event never fires. Adjust the virtual window immediately so the
+                // viewport is properly covered (e.g. after jumpWindowTo resets spacers).
+                this.virtualizer?.adjustNow();
+                return;
+            }
             newScrollLeft = absLeft < visLeft ? absLeft : absRight - viewWidth;
         } else {
             // 'center': place the range at the horizontal midpoint of the viewport.
@@ -857,6 +863,10 @@ export class EditorElement {
         }
 
         container.scrollLeft = Math.max(0, Math.min(container.scrollWidth - viewWidth, newScrollLeft));
+        // Synchronously adjust the virtual window for the new scrollLeft so the correct
+        // paragraph divs are in the DOM before the next paint, without waiting for the
+        // async scroll event that the scrollLeft assignment will schedule.
+        this.virtualizer?.adjustNow();
     }
 
     // Called after input/compositionend to manage U+200B in the cursor anchor span.

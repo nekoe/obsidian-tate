@@ -2285,6 +2285,12 @@ var ParagraphVirtualizer = class {
       } else break;
     }
   }
+  // Immediately adjusts the DOM window for the current scroll position.
+  // Call after any programmatic scrollLeft change so the window is correct before the next
+  // paint, without waiting for the async scroll event.
+  adjustNow() {
+    this.adjustWindowOnScroll();
+  }
   // Computes visible text for an Aozora source line.
   // For every segment: take viewLen visible characters starting at srcStart.
   // ruby-explicit is the only exception: it has a leading ｜ marker (+1 offset before the base text).
@@ -2944,7 +2950,7 @@ var EditorElement = class {
    *  or tate-layout-refreshing is active — runs with content-visibility:visible on the relevant
    *  divs, so the returned rect reflects actual (not cached) sizes. */
   scrollRangeIntoView(range, block) {
-    var _a;
+    var _a, _b, _c;
     const container = this.el.parentElement;
     if (!container) return;
     const rect = range.getBoundingClientRect();
@@ -2961,12 +2967,16 @@ var EditorElement = class {
     if (block === "nearest") {
       const visLeft = container.scrollLeft;
       const visRight = container.scrollLeft + viewWidth;
-      if (absLeft >= visLeft && absRight <= visRight) return;
+      if (absLeft >= visLeft && absRight <= visRight) {
+        (_b = this.virtualizer) == null ? void 0 : _b.adjustNow();
+        return;
+      }
       newScrollLeft = absLeft < visLeft ? absLeft : absRight - viewWidth;
     } else {
       newScrollLeft = absLeft - (viewWidth - (absRight - absLeft)) / 2;
     }
     container.scrollLeft = Math.max(0, Math.min(container.scrollWidth - viewWidth, newScrollLeft));
+    (_c = this.virtualizer) == null ? void 0 : _c.adjustNow();
   }
   // Called after input/compositionend to manage U+200B in the cursor anchor span.
   handleCursorAnchorInput() {
