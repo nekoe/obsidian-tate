@@ -2059,6 +2059,7 @@ var ParagraphVirtualizer = class {
   // widths. Used by commitToCm6() to keep outline data current after typing, where the DOM
   // window has already settled and a full initRecords() reset would corrupt getWindowDiv().
   syncWindowSrcs(lines) {
+    var _a, _b;
     const n = lines.length;
     const cur = this.paragraphRecords;
     while (cur.length < n) cur.push({ src: "", viewLen: 0, width: 0 });
@@ -2074,6 +2075,11 @@ var ParagraphVirtualizer = class {
       const windowDivCount = this.domEnd - this.domStart + 1;
       if (actualDivCount !== windowDivCount) {
         this.domEnd = Math.min(this.domStart + actualDivCount - 1, n - 1);
+        this.leftSpacerWidth = this.paragraphRecords.slice(this.domEnd + 1).reduce((sum, r) => sum + r.width, 0);
+        if (this.leftSpacerWidth > 0)
+          (_a = this.leftSpacer) == null ? void 0 : _a.style.setProperty("width", `${this.leftSpacerWidth}px`);
+        else
+          (_b = this.leftSpacer) == null ? void 0 : _b.style.removeProperty("width");
       }
     }
   }
@@ -2130,11 +2136,14 @@ var ParagraphVirtualizer = class {
   // Called by setVisibleOffset (cursor restore) and jump-to-heading.
   ensureInWindow(i) {
     if (this.isInWindow(i)) return;
+    const domStartBefore = this.domStart;
+    const domEndBefore = this.domEnd;
     if (i < this.domStart) {
       while (this.domStart > i) this.expandRight();
     } else {
       while (this.domEnd < i) this.expandLeft();
     }
+    this.correctSpacerAfterExpand(domStartBefore, domEndBefore);
   }
   // Replaces all paragraph divs with the full document content (one div per record).
   // Used by Cmd-A (select-all) so the selection can span the entire document.
@@ -2161,6 +2170,48 @@ var ParagraphVirtualizer = class {
   }
   // Called on selectionchange. Window management is scroll-driven, so this is a no-op.
   ensureWindowAroundCursor() {
+  }
+  // Measures newly expanded divs (those added since domStartBefore/domEndBefore were
+  // captured) and corrects the corresponding spacer widths. All DOM mutations must be
+  // complete before calling so that a single getBoundingClientRect() call triggers one
+  // layout flush and subsequent calls return cached values without extra computation.
+  // This eliminates the scrollWidth error introduced when expandLeft/expandRight use
+  // estimated rec.width but the rendered div has a different actual width.
+  correctSpacerAfterExpand(domStartBefore, domEndBefore) {
+    if (this.domStart < domStartBefore) {
+      let correction = 0;
+      for (let i = this.domStart; i < domStartBefore; i++) {
+        const div = this.getWindowDiv(i);
+        if (!div) continue;
+        const rec = this.paragraphRecords[i];
+        const actualW = div.getBoundingClientRect().width;
+        if (actualW > 0 && actualW !== rec.width) {
+          correction += actualW - rec.width;
+          rec.width = actualW;
+        }
+      }
+      if (correction !== 0) {
+        this.rightSpacerWidth = Math.max(0, this.rightSpacerWidth - correction);
+        if (this.rightSpacer) this.rightSpacer.style.setProperty("width", `${this.rightSpacerWidth}px`);
+      }
+    }
+    if (this.domEnd > domEndBefore) {
+      let correction = 0;
+      for (let i = domEndBefore + 1; i <= this.domEnd; i++) {
+        const div = this.getWindowDiv(i);
+        if (!div) continue;
+        const rec = this.paragraphRecords[i];
+        const actualW = div.getBoundingClientRect().width;
+        if (actualW > 0 && actualW !== rec.width) {
+          correction += actualW - rec.width;
+          rec.width = actualW;
+        }
+      }
+      if (correction !== 0) {
+        this.leftSpacerWidth = Math.max(0, this.leftSpacerWidth - correction);
+        if (this.leftSpacer) this.leftSpacer.style.setProperty("width", `${this.leftSpacerWidth}px`);
+      }
+    }
   }
   // ---- Window expand / shrink helpers ----
   // Adds a div for paragraphRecords[domStart-1] at the right end of the window.
@@ -2251,6 +2302,9 @@ var ParagraphVirtualizer = class {
   // EXPAND_MARGIN < SHRINK_MARGIN provides hysteresis that prevents oscillation.
   adjustWindowOnScroll() {
     if (this.paragraphRecords.length === 0) return;
+    this.premeasureWindowWidths();
+    const domStartBefore = this.domStart;
+    const domEndBefore = this.domEnd;
     const scrollLeft = this.scrollArea.scrollLeft;
     const viewW = this.scrollArea.clientWidth;
     const W = this.scrollArea.scrollWidth;
@@ -2288,13 +2342,13 @@ var ParagraphVirtualizer = class {
         if (this.domStart === startBefore) break;
       } else break;
     }
+    this.correctSpacerAfterExpand(domStartBefore, domEndBefore);
   }
   // Reads the actual rendered widths of all in-window paragraph divs and updates
   // paragraphRecords[i].width. A single layout flush — no DOM mutations between reads.
-  // Called at the start of adjustNow() so that shrink operations in adjustWindowOnScroll()
-  // use actual widths rather than estimates. When the actual width equals the stored width
-  // used by shrinkLeft/shrinkRight, the net scrollWidth change per shrink is zero, preventing
-  // cursor drift while scrollLeft stays fixed (overflow-anchor: none).
+  // Called at the start of adjustWindowOnScroll() so that shrink operations use actual
+  // widths. When the stored width equals the actual width, the net scrollWidth change
+  // per shrink is zero, keeping the cursor in place (overflow-anchor: none).
   premeasureWindowWidths() {
     if (!this.rightSpacer || this.domEnd < 0) return;
     const spacerOffset = 1;
@@ -2311,7 +2365,6 @@ var ParagraphVirtualizer = class {
   // Call after any programmatic scrollLeft change so the window is correct before the next
   // paint, without waiting for the async scroll event.
   adjustNow() {
-    this.premeasureWindowWidths();
     this.adjustWindowOnScroll();
   }
   // Computes visible text for an Aozora source line.
