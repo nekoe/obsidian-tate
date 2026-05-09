@@ -2266,7 +2266,9 @@ var ParagraphVirtualizer = class {
       const rec = this.paragraphRecords[this.domEnd];
       const w = rec.width > 0 ? rec.width : this.estimateWidth(rec.viewLen);
       if (this.leftSpacerWidth + w < scrollLeft - SHRINK_MARGIN) {
+        const endBefore = this.domEnd;
         this.shrinkLeft();
+        if (this.domEnd === endBefore) break;
       } else break;
     }
     while (this.domStart > 0) {
@@ -2281,14 +2283,35 @@ var ParagraphVirtualizer = class {
       const rec = this.paragraphRecords[this.domStart];
       const w = rec.width > 0 ? rec.width : this.estimateWidth(rec.viewLen);
       if (W - this.rightSpacerWidth - w > scrollLeft + viewW + SHRINK_MARGIN) {
+        const startBefore = this.domStart;
         this.shrinkRight();
+        if (this.domStart === startBefore) break;
       } else break;
+    }
+  }
+  // Reads the actual rendered widths of all in-window paragraph divs and updates
+  // paragraphRecords[i].width. A single layout flush — no DOM mutations between reads.
+  // Called at the start of adjustNow() so that shrink operations in adjustWindowOnScroll()
+  // use actual widths rather than estimates. When the actual width equals the stored width
+  // used by shrinkLeft/shrinkRight, the net scrollWidth change per shrink is zero, preventing
+  // cursor drift while scrollLeft stays fixed (overflow-anchor: none).
+  premeasureWindowWidths() {
+    if (!this.rightSpacer || this.domEnd < 0) return;
+    const spacerOffset = 1;
+    const children = this.editorEl.children;
+    for (let i = this.domStart; i <= this.domEnd; i++) {
+      const k = i - this.domStart;
+      const div = children[k + spacerOffset];
+      if (!div || div.classList.contains(SPACER_CLASS)) continue;
+      const w = div.getBoundingClientRect().width;
+      if (w > 0) this.paragraphRecords[i].width = w;
     }
   }
   // Immediately adjusts the DOM window for the current scroll position.
   // Call after any programmatic scrollLeft change so the window is correct before the next
   // paint, without waiting for the async scroll event.
   adjustNow() {
+    this.premeasureWindowWidths();
     this.adjustWindowOnScroll();
   }
   // Computes visible text for an Aozora source line.
@@ -2954,9 +2977,9 @@ var EditorElement = class {
     const container = this.el.parentElement;
     if (!container) return;
     const rect = range.getBoundingClientRect();
-    if (rect.width === 0 && rect.height === 0) {
+    if (rect.width === 0 && rect.height === 0 && rect.x === 0 && rect.y === 0) {
       const node = range.startContainer;
-      (_a = node instanceof Element ? node : node.parentElement) == null ? void 0 : _a.scrollIntoView({ block, inline: "nearest" });
+      (_a = node instanceof Element ? node : node.parentElement) == null ? void 0 : _a.scrollIntoView({ block: "nearest", inline: block });
       return;
     }
     const containerRect = container.getBoundingClientRect();
@@ -2975,7 +2998,8 @@ var EditorElement = class {
     } else {
       newScrollLeft = absLeft - (viewWidth - (absRight - absLeft)) / 2;
     }
-    container.scrollLeft = Math.max(0, Math.min(container.scrollWidth - viewWidth, newScrollLeft));
+    const clampedScrollLeft = Math.max(0, Math.min(container.scrollWidth - viewWidth, newScrollLeft));
+    container.scrollLeft = clampedScrollLeft;
     (_c = this.virtualizer) == null ? void 0 : _c.adjustNow();
   }
   // Called after input/compositionend to manage U+200B in the cursor anchor span.

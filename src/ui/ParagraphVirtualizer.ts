@@ -413,7 +413,9 @@ export class ParagraphVirtualizer {
             const rec = this.paragraphRecords[this.domEnd];
             const w   = rec.width > 0 ? rec.width : this.estimateWidth(rec.viewLen);
             if (this.leftSpacerWidth + w < scrollLeft - SHRINK_MARGIN) {
+                const endBefore = this.domEnd;
                 this.shrinkLeft();
+                if (this.domEnd === endBefore) break; // blocked (e.g. selection overlap), stop
             } else break;
         }
 
@@ -432,8 +434,29 @@ export class ParagraphVirtualizer {
             const rec = this.paragraphRecords[this.domStart];
             const w   = rec.width > 0 ? rec.width : this.estimateWidth(rec.viewLen);
             if (W - this.rightSpacerWidth - w > scrollLeft + viewW + SHRINK_MARGIN) {
+                const startBefore = this.domStart;
                 this.shrinkRight();
+                if (this.domStart === startBefore) break; // blocked (e.g. selection overlap), stop
             } else break;
+        }
+    }
+
+    // Reads the actual rendered widths of all in-window paragraph divs and updates
+    // paragraphRecords[i].width. A single layout flush — no DOM mutations between reads.
+    // Called at the start of adjustNow() so that shrink operations in adjustWindowOnScroll()
+    // use actual widths rather than estimates. When the actual width equals the stored width
+    // used by shrinkLeft/shrinkRight, the net scrollWidth change per shrink is zero, preventing
+    // cursor drift while scrollLeft stays fixed (overflow-anchor: none).
+    private premeasureWindowWidths(): void {
+        if (!this.rightSpacer || this.domEnd < 0) return;
+        const spacerOffset = 1; // rightSpacer is always children[0]
+        const children = this.editorEl.children;
+        for (let i = this.domStart; i <= this.domEnd; i++) {
+            const k = i - this.domStart;
+            const div = children[k + spacerOffset] as HTMLElement;
+            if (!div || div.classList.contains(SPACER_CLASS)) continue;
+            const w = div.getBoundingClientRect().width;
+            if (w > 0) this.paragraphRecords[i].width = w;
         }
     }
 
@@ -441,6 +464,7 @@ export class ParagraphVirtualizer {
     // Call after any programmatic scrollLeft change so the window is correct before the next
     // paint, without waiting for the async scroll event.
     adjustNow(): void {
+        this.premeasureWindowWidths();
         this.adjustWindowOnScroll();
     }
 

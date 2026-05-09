@@ -866,7 +866,8 @@ export class EditorElement {
             newScrollLeft = absLeft - (viewWidth - (absRight - absLeft)) / 2;
         }
 
-        container.scrollLeft = Math.max(0, Math.min(container.scrollWidth - viewWidth, newScrollLeft));
+        const clampedScrollLeft = Math.max(0, Math.min(container.scrollWidth - viewWidth, newScrollLeft));
+        container.scrollLeft = clampedScrollLeft;
         // Synchronously adjust the virtual window for the new scrollLeft so the correct
         // paragraph divs are in the DOM before the next paint, without waiting for the
         // async scroll event that the scrollLeft assignment will schedule.
