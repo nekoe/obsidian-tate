@@ -13,6 +13,10 @@
     height: 100%;
     overflow-x: auto;
     overflow-y: hidden;
+    /* Disable scroll anchoring so that virtual window adjustments (paragraph div
+       insertions/removals + spacer resizes) do not cascade-adjust scrollLeft and
+       push the cursor away from the programmatically set centered position. */
+    overflow-anchor: none;
 }
 
 /* Vertical writing editor (contenteditable div) */
