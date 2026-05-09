@@ -2059,7 +2059,6 @@ var ParagraphVirtualizer = class {
   // widths. Used by commitToCm6() to keep outline data current after typing, where the DOM
   // window has already settled and a full initRecords() reset would corrupt getWindowDiv().
   syncWindowSrcs(lines) {
-    var _a, _b;
     const n = lines.length;
     const cur = this.paragraphRecords;
     while (cur.length < n) cur.push({ src: "", viewLen: 0, width: 0 });
@@ -2075,11 +2074,6 @@ var ParagraphVirtualizer = class {
       const windowDivCount = this.domEnd - this.domStart + 1;
       if (actualDivCount !== windowDivCount) {
         this.domEnd = Math.min(this.domStart + actualDivCount - 1, n - 1);
-        this.leftSpacerWidth = this.paragraphRecords.slice(this.domEnd + 1).reduce((sum, r) => sum + r.width, 0);
-        if (this.leftSpacerWidth > 0)
-          (_a = this.leftSpacer) == null ? void 0 : _a.style.setProperty("width", `${this.leftSpacerWidth}px`);
-        else
-          (_b = this.leftSpacer) == null ? void 0 : _b.style.removeProperty("width");
       }
     }
   }

@@ -191,18 +191,12 @@ export class ParagraphVirtualizer {
             const windowDivCount = this.domEnd - this.domStart + 1;
             if (actualDivCount !== windowDivCount) {
                 this.domEnd = Math.min(this.domStart + actualDivCount - 1, n - 1);
-                // Recompute leftSpacerWidth: domEnd shifted so the spacer boundary moved.
-                // Without this, the left spacer over/under-counts by ~one paragraph's width,
-                // causing an immediate scrollWidth jump visible as a scroll position bounce.
-                // Record widths here are stale (syncWindowSrcs does not update .width), so
-                // the recomputed spacer is approximate; correctSpacerAfterExpand() corrects
-                // the residual error the next time those paragraphs expand into the window.
-                this.leftSpacerWidth = this.paragraphRecords
-                    .slice(this.domEnd + 1).reduce((sum, r) => sum + r.width, 0);
-                if (this.leftSpacerWidth > 0)
-                    this.leftSpacer?.style.setProperty('width', `${this.leftSpacerWidth}px`);
-                else
-                    this.leftSpacer?.style.removeProperty('width');
+                // leftSpacerWidth does NOT need recomputing. Enter/Backspace only add or
+                // remove divs inside the DOM window; the off-screen paragraphs represented
+                // by the spacer are unchanged, so the stored accumulated width stays correct.
+                // The next adjustWindowOnScroll() call (on the following scroll event or via
+                // adjustNow) will premeasure the updated in-window divs and call
+                // correctSpacerAfterExpand() if the window boundary moved further.
             }
         }
     }
