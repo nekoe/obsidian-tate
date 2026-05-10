@@ -1,7 +1,7 @@
 # Full DOM Virtualization: Design Notes and Implementation History
 
 Created: 2026-05-05  
-Last updated: 2026-05-07
+Last updated: 2026-05-10
 
 ## Background
 
@@ -72,41 +72,101 @@ interface ParagraphRecord {
 paragraphRecords: ParagraphRecord[];
 ```
 
-`width: 0` (or a placeholder estimate of 44 px = one column at the default font size) is used for
+`width: 0` (or a placeholder estimate of `fontSizePx × lineHeight × estimatedColumns`) is used for
 paragraphs that have never entered the viewport. The actual value is written when the paragraph
 first leaves the window and its measured width is captured.
 
-### DOM window management
+### DOM window management — scroll-event based
 
 The window is defined by `[domStart, domEnd]` (inclusive, paragraph indices). Window expansion
-and contraction are triggered by an `IntersectionObserver` on the boundary divs (first and last
-of the window):
+and contraction are driven by the `scroll` event on the scroll container (`tate-scroll-area`).
 
-- **Boundary div enters extended viewport** → expand the window by one paragraph in that direction:
-  create a new div from `paragraphRecords[domStart-1]` (or `domEnd+1`), insert it at the
-  appropriate end, and shrink the corresponding spacer by the new div's estimated/measured width.
-- **Boundary div leaves extended viewport (beyond a buffer threshold)** → contract the window from
-  the far end: read the div's current width, add it to the appropriate spacer, then remove the div.
+On every scroll event, `adjustWindowOnScroll()` is called:
 
-Because the spacer's width change and the div's width change cancel each other, `scrollWidth`
-remains constant and `scrollLeft` does not shift.
+1. **`premeasureWindowWidths()`** — batch-reads `getBoundingClientRect().width` for all in-window
+   divs before any DOM mutation. This ensures shrink and expand operations use accurate widths.
+2. **Expand check** — compute the right and left boundary positions from `scrollLeft`, `scrollWidth`,
+   `clientWidth`, and the stored spacer widths. If either boundary is within `EXPAND_MARGIN = 440 px`
+   of the viewport, add a paragraph div from the corresponding spacer side (`expandRight()` /
+   `expandLeft()`).
+3. **Shrink check** — if either boundary is more than `SHRINK_MARGIN = 880 px` past the viewport,
+   remove the far-end paragraph div and add its measured width to the corresponding spacer
+   (`shrinkLeft()` / `shrinkRight()`).
+4. **`correctSpacerAfterExpand()`** — after all DOM mutations, batch-measures newly added divs and
+   corrects the spacer by the difference between actual and estimated widths.
+
+The `EXPAND_MARGIN` / `SHRINK_MARGIN` gap (440 px) prevents oscillation: a div is never expanded
+and immediately shrunk back in the same scroll event.
+
+**`adjustNow()`** wraps `adjustWindowOnScroll()` for synchronous invocation at programmatic scroll
+points (e.g., after `scrollLeft` is set by `scrollRangeIntoView`). This avoids a one-frame flash
+where the wrong window layout is visible before the asynchronous scroll event fires.
 
 ### Scroll position stability
 
-When a new div is inserted at the right end of the window (right-side expansion in vertical-rl),
-the content shifts leftward if the browser adds the new div width to `scrollWidth` without
-adjusting `scrollLeft`. This is the classic "prepend items to a horizontal scroll container"
-problem. The spacer approach resolves it: the right spacer shrinks by exactly the new div's
-width simultaneously with the div insertion, keeping `scrollWidth` constant and eliminating any
-visual jump.
+Because `overflow-anchor: none` is set on `tate-scroll-area`, the browser does not auto-adjust
+`scrollLeft` when DOM content is added or removed. All spacer width changes must therefore keep
+`scrollWidth` constant manually:
 
-For paragraphs with an estimated width (never measured), the spacer size will be slightly
-inaccurate until the paragraph is measured. Accepting a small one-time positional correction on
-first measurement is the same trade-off made by all variable-height virtual scrollers.
+- `shrinkLeft()` / `shrinkRight()`: read the div's actual width (from `premeasureWindowWidths`),
+  remove the div, add exactly that width to the spacer → net scrollWidth change = 0.
+- `expandLeft()` / `expandRight()`: insert the div, subtract its estimated width from the spacer.
+  `correctSpacerAfterExpand()` then corrects any estimate error with the measured actual width.
 
 ---
 
-## Technical Challenges
+## Why IntersectionObserver Was Abandoned
+
+The initial Phase 2 implementation used `IntersectionObserver` (IO) to drive window management.
+IO watches two boundary divs (the `domStart` div and the `domEnd` div) with `rootMargin: '0px 440px
+0px 440px'` and triggers expand/shrink on intersection transitions.
+
+### Fundamental incompatibility: initial delivery
+
+IO has an "initial delivery" problem: when a new element is observed, IO fires immediately with the
+element's current intersection state. After `expandLeft()` adds a new `domEnd` div and calls
+`reobserveBoundaries()`, IO fires for the new div and reports it as already "inside the extended
+viewport" (because the expand just put it there). A subsequent rightward scroll that moves the
+viewport away from that div produces no `inside → outside` transition — meaning `shrinkLeft()`
+never fires. The window only grew, never shrank.
+
+### Band-aid fixes and their failure modes
+
+Several workarounds were attempted, each adding complexity and introducing new edge cases:
+
+| Fix | Commit | Problem |
+|---|---|---|
+| Hysteresis flags `justExpandedLeft/Right` to block the initial IO delivery | `187c93a` | Flags were sometimes not cleared in time, permanently blocking shrink |
+| `reobserveOne()`: re-observe only the new boundary div, not both | `52dd7e4` | Cross-boundary oscillation when expand triggered a cascade |
+| Remove `justShrankLeft/Right` flags from shrink branch | `c070bd2` | Shrink re-enabled too early, causing expand→shrink bounce |
+| Defer IO re-registration to the next scroll event after Enter/Delete | `38422af` | Added latency; still failed on edge cases with fast typing |
+
+After four successive patches the core instability remained, and each fix had made the code harder
+to reason about.
+
+### Why scroll-event geometry is simpler and reliable
+
+The scroll container (`tate-scroll-area`) exposes exact geometry at any moment:
+
+```
+rightBoundaryX = scrollWidth - rightSpacerWidth   (start of right spacer in scroll coords)
+leftBoundaryX  = leftSpacerWidth                  (end of left spacer in scroll coords)
+viewportLeft   = scrollLeft
+viewportRight  = scrollLeft + clientWidth
+```
+
+Expand/shrink decisions reduce to four comparisons. The geometry is always consistent (no
+asynchronous delivery), and the hysteresis gap (`SHRINK_MARGIN - EXPAND_MARGIN = 440 px`) prevents
+oscillation without any state flags. The scroll event fires for every pixel of user scroll,
+giving sub-pixel responsiveness.
+
+IO was removed in commit `4ce9438`. The following were deleted: `windowObserver`,
+`justExpandedLeft/Right`, `needsReobserve`, `reobserveBoundaries()`, `reobserveOne()`,
+`onWindowBoundaryIntersection()`.
+
+---
+
+## Technical Challenges and Fixes
 
 ### 1. Drag selection spanning virtual boundaries
 
@@ -119,27 +179,92 @@ remove a div from the window if it contains `selection.anchorNode` or `selection
 
 ### 2. Width of never-rendered paragraphs
 
-A paragraph that has never been in the viewport has no measured width. Using 44 px (one column
-width at the default font size 22px × lineHeight 2) as a placeholder causes the spacer to be
-inaccurate by `(realWidth - 44) × count` pixels for all unrendered paragraphs.
+A paragraph that has never been in the viewport has no measured width. Using a flat placeholder
+causes the spacer to be inaccurate.
 
-**Acceptable trade-off**: the inaccuracy only affects paragraphs in the right spacer (not yet
-scrolled to from the right, i.e., not yet read). The error corrects itself the first time each
-paragraph enters the viewport. For a document read front-to-back this causes no visible jump.
-For random-access navigation (e.g., the outline panel jumping to an unrendered heading), a
-one-time correction is acceptable.
+**Solution**: `estimateWidth(viewLen)` computes the initial width from visible character count,
+font size, and line height without touching the DOM:
 
-**Width estimation**: `estimateWidth(viewLen)` computes the initial width from the visible
-character count, font size, and line height, without touching the DOM. This produces a much better
-initial estimate than the flat 44 px fallback for multi-column paragraphs.
+```
+charsPerCol = floor(editorHeight / fontSizePx)
+cols        = ceil(max(1, viewLen) / charsPerCol)
+estimatedWidth = cols × fontSizePx × lineHeight
+```
 
-### 3. Contenteditable + mouse click on spacer (non-issue)
+This gives a much better estimate than a fixed constant for multi-column paragraphs. `correctSpacerAfterExpand()`
+then corrects any residual estimate error once the paragraph enters the viewport.
 
-Spacers are in the off-screen area. The user can only click on positions that are visible in
-the viewport, which are always within the DOM window. Clicks never land on a spacer.
-Spacers have `pointer-events: none` and `user-select: none` to prevent accidental selection.
+### 3. Cursor drift from estimate error during shrink
 
-### 4. IME composition (non-issue)
+`shrinkLeft()` / `shrinkRight()` added the stored `rec.width` back to the spacer. If `rec.width`
+was an estimate, the net `scrollWidth` change was non-zero, causing the cursor to drift with each
+shrink (`overflow-anchor: none` means `scrollLeft` is never auto-adjusted).
+
+**Solution** (`e119221`): `premeasureWindowWidths()` is called at the top of every
+`adjustWindowOnScroll()` invocation. It reads `getBoundingClientRect().width` for all in-window
+divs and stores the values in `paragraphRecords[i].width` before any DOM mutation. Shrink
+operations then use the measured (not estimated) width, ensuring net `scrollWidth` change = 0.
+
+### 4. One-frame flash after programmatic scroll
+
+When `scrollRangeIntoView` sets `container.scrollLeft`, the resulting `scroll` event fires
+asynchronously. The browser renders one frame with the stale window layout (potentially showing
+the right spacer where paragraph divs should be).
+
+Additionally, when `scrollRangeIntoView('nearest')` finds the cursor already fully visible, it
+returns early without changing `scrollLeft`, so no `scroll` event fires at all — leaving the
+window unadjusted after `jumpWindowTo()` resets spacers.
+
+**Solution** (`826bad4`): call `adjustNow()` synchronously at both exit points of
+`scrollRangeIntoView`: after setting `scrollLeft` and before the early-return when the cursor is
+already visible.
+
+### 5. Spacer oscillation after expand (estimate vs actual)
+
+`expandLeft()` / `expandRight()` subtracted the estimated `rec.width` from the spacer when
+inserting a div. If the rendered div had a different actual width, `scrollWidth` drifted with each
+expansion, causing a visible jump or bounce.
+
+**Solution** (`5298248`): `correctSpacerAfterExpand(domStartBefore, domEndBefore)` is called after
+all DOM mutations in `adjustWindowOnScroll()` and `ensureInWindow()`. It batch-reads actual widths
+for newly added divs and adjusts the spacer by the cumulative actual-vs-estimated difference in a
+single layout flush.
+
+### 6. Undo/Redo cursor slide proportional to Enter count
+
+After N Enter keystrokes inside the DOM window, pressing Undo caused a horizontal scroll
+proportional to N × paragraph_width. Root cause:
+
+- `syncWindowSrcs()` adjusts `domEnd` when the DOM div count changes (Enter adds a div), but
+  preserves `paragraphRecords[i].width` by index position rather than by content.
+- After N Enters, the records at off-window indices carry widths from paragraphs that have since
+  shifted; `width: 0` entries also accumulate for newly appended records.
+- Undo's `patchParagraphs` calls `spliceRecords()`, which recomputed `leftSpacerWidth` from those
+  stale record widths — producing a value that was off by roughly N × paragraph_width.
+- The spacer width change shifted the layout, making the cursor appear outside the viewport, and
+  `scrollCursorIntoView` scrolled to compensate.
+
+**Solution** (`824dbcb`): `spliceRecords()` detects whether the splice range lies entirely within
+`[domStart, domEnd]` before mutating the records array:
+
+```typescript
+const spliceWithinWindow =
+    lo >= this.domStart &&
+    lo <= this.domEnd &&
+    lo + deleteCount <= this.domEnd + 1;
+```
+
+When `spliceWithinWindow` is true, the off-screen paragraphs (spacer areas) are unchanged, so
+stored spacer widths remain correct and recomputation is skipped entirely. Recomputation runs
+only when the splice touches the right-spacer or left-spacer region.
+
+### 7. Contenteditable + mouse click on spacer (non-issue)
+
+Spacers are in the off-screen area. The user can only click on positions visible in the viewport,
+which are always within the DOM window. Clicks never land on a spacer. Spacers have
+`pointer-events: none` and `user-select: none` to prevent accidental selection.
+
+### 8. IME composition (non-issue)
 
 IME input occurs at the cursor position, which is always inside a visible paragraph div and
 therefore inside the DOM window.
@@ -163,6 +288,8 @@ in sync with the DOM changes. For changes entirely outside the current DOM windo
 `patchParagraphs` updates only the records (no DOM manipulation). `paragraphChildIndex(i)`
 accounts for the `rightSpacer` offset so `el.children[...]` references the correct div.
 
+`spliceRecords` skips spacer recomputation when the splice is within the window (see challenge 6).
+
 ### syncWindowSrcs (typing / commitToCm6)
 
 `syncWindowSrcs(lines)` is called from `commitToCm6()` after every commit. It updates `src` and
@@ -170,6 +297,13 @@ accounts for the `rightSpacer` offset so `el.children[...]` references the corre
 This keeps outline data and off-window reads current after plain typing. It also reconciles
 `domEnd` with the actual number of paragraph divs present in the DOM (Enter/Delete can shift the
 count inside the window without going through `patchParagraphs`).
+
+**Invariant**: when `syncWindowSrcs` adjusts `domEnd` due to Enter/Delete, it does NOT update
+`leftSpacerWidth`. This is intentional: Enter/Delete only add or remove divs inside the window;
+the off-screen paragraphs represented by the spacer are unchanged (they are merely renumbered),
+so the stored accumulated width stays correct. Recomputing `leftSpacerWidth` from
+`paragraphRecords[].width` here would give the wrong result because those widths are indexed by
+array position, which shifts after Enter.
 
 ### loadContent (file open)
 
@@ -189,11 +323,11 @@ without touching the DOM. If the cursor lands in an off-window paragraph, `jumpW
 teleports the window to be centered on that paragraph, rebuilding only the new window's divs from
 records' `.src` and calling `resetWindow(lo, hi)`.
 
-### selectionchange / ensureWindowAroundCursor
+### ensureWindowAroundCursor
 
-`ensureWindowAroundCursor()` is a no-op safety hook. The `IntersectionObserver` keeps the cursor
-paragraph in the window proactively (the IO fires before the cursor div would leave the extended
-viewport), so cursor-in-window is an invariant maintained automatically.
+`ensureWindowAroundCursor()` is a no-op safety hook. The scroll-event-based window manager keeps
+the cursor paragraph in the window proactively (EXPAND_MARGIN = 440 px prefetch buffer on each
+side), so cursor-in-window is maintained automatically by `adjustWindowOnScroll()`.
 
 ### SearchPanel (CSS Custom Highlight API)
 
@@ -228,21 +362,30 @@ div element identity were unaffected by positional shifts.
 Phase 2 eliminated the WeakMap approach entirely by removing frozen divs from the DOM, making
 `paragraphRecords` the sole source of truth.
 
-### Phase 2 — DOM window management + spacers (**DONE**)
+### Phase 2 — DOM window with IntersectionObserver (abandoned)
 
-Replaced frozen-div shells with true DOM removal. Only a sliding window of `~100` paragraph divs
-stays in the DOM; two spacer divs (`rightSpacer`, `leftSpacer`) represent the collapsed width of
-off-screen paragraphs. The frozen infrastructure (`FROZEN_CLASS`, `frozenSrc`/`frozenViewLen`
-WeakMaps, `freezeDiv()`/`thawDiv()`, `seenDivs`, `lastKnownWidths`, etc.) was removed entirely.
+The first Phase 2 implementation used IO watching the two boundary divs (`domStart` div and
+`domEnd` div) with `rootMargin: '0px 440px 0px 440px'`. Four successive bug-fix commits
+(`187c93a` → `52dd7e4` → `c070bd2` → `38422af`) attempted to work around IO's initial-delivery
+problem. All failed. See "Why IntersectionObserver Was Abandoned" above.
+
+### Phase 2 — DOM window with scroll-event geometry (**current, DONE**)
+
+Replaced IO with an `onScroll` handler that computes expand/shrink from `scrollLeft`,
+`scrollWidth`, `clientWidth`, and stored spacer widths directly. IO and all its support
+infrastructure were removed in `4ce9438`.
 
 **What was built:**
 
 - `rightSpacer` and `leftSpacer` divs (permanent fixtures, `pointer-events: none`,
   `user-select: none`).
-- `IntersectionObserver` watching the two boundary divs (`domStart` div and `domEnd` div) with
-  `rootMargin: '0px 440px 0px 440px'` (~10 paragraphs of prefetch buffer on each side).
+- `adjustWindowOnScroll()`: the core expand/shrink loop, called on every scroll event.
+- `premeasureWindowWidths()`: batch-reads actual div widths before any DOM mutation to prevent
+  cursor drift.
+- `correctSpacerAfterExpand()`: corrects spacer estimate error after expand, in one layout flush.
+- `adjustNow()`: synchronous wrapper for `adjustWindowOnScroll()`, called at programmatic scroll
+  points.
 - `expandRight()` / `shrinkRight()` / `expandLeft()` / `shrinkLeft()` window management methods.
-- `reobserveBoundaries()` to re-register the IO on new boundary divs after each expand/shrink.
 - `ensureInWindow(i)` for cursor restore (`setVisibleOffset`) and outline jump navigation.
 - `expandWindowToFull()` for Cmd-A select-all (rebuilds all paragraph divs in one
   `replaceChildren` call, then defers native select-all to one `requestAnimationFrame`).
@@ -251,6 +394,8 @@ WeakMaps, `freezeDiv()`/`thawDiv()`, `seenDivs`, `lastKnownWidths`, etc.) was re
 - `loadContent(content, initialViewOffset)` for file open: creates only the initial window of
   `INITIAL_WINDOW_HALF = 50` paragraphs on each side of the saved cursor position.
 - `syncWindowSrcs(lines)` for keeping records in sync during typing without disturbing the window.
+- `spliceRecords(lo, deleteCount, newLines)` with within-window detection to avoid stale-width
+  spacer recomputation during Undo/Redo.
 - `paragraphChildIndex(i)` accounting for `rightSpacer` offset in `patchParagraphs`.
 - Drag-selection guard: `isDragging` flag set by `mousedown`/`mouseup`; `shrinkLeft()`/
   `shrinkRight()` are no-ops when the target div contains `selection.anchorNode` or `.focusNode`.
@@ -262,11 +407,15 @@ WeakMaps, `freezeDiv()`/`thawDiv()`, `seenDivs`, `lastKnownWidths`, etc.) was re
 
 | Question | Decision |
 |---|---|
+| Window management trigger | Scroll event (geometry), not IntersectionObserver (transitions) |
 | Remove `content-visibility: auto`? | Yes. DOM window (~100 divs) makes C-V:auto unnecessary. |
-| Width for never-rendered paragraphs | `UNRENDERED_WIDTH_PX = 44` (one column at default font). Also `estimateWidth(viewLen)` for better initial estimates. |
+| Width for never-rendered paragraphs | `estimateWidth(viewLen)` from font size and line height. |
 | Cmd-A behavior | `expandWindowToFull()` (single `replaceChildren`) then deferred native select-all via rAF. |
-| IO trigger target | Boundary divs only (domStart div and domEnd div), rootMargin 440px. |
-| Initial window size | `INITIAL_WINDOW_HALF = 50` (100 total). Covers typical viewports plus IO prefetch buffer. |
+| Initial window size | `INITIAL_WINDOW_HALF = 50` (100 total). Covers typical viewports plus expand buffer. |
+| Expand margin | 440 px (~10 paragraphs at default font). |
+| Shrink margin | 880 px (440 + 440 gap prevents oscillation). |
+| Spacer width on shrink | Use premeasured actual width (not estimate) to keep net scrollWidth change = 0. |
+| Spacer width on Undo/Redo splice within window | Skip recomputation; stored widths are correct since off-screen content is unchanged. |
 
 ---
 
