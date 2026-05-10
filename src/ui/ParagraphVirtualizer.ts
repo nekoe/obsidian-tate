@@ -86,6 +86,22 @@ export class ParagraphVirtualizer {
         return cols * colWidthPx;
     }
 
+    private applyRightSpacer(newW: number): void {
+        this.rightSpacerWidth = newW;
+        if (this.rightSpacer) {
+            if (newW > 0) this.rightSpacer.style.setProperty('width', `${newW}px`);
+            else this.rightSpacer.style.removeProperty('width');
+        }
+    }
+
+    private applyLeftSpacer(newW: number): void {
+        this.leftSpacerWidth = newW;
+        if (this.leftSpacer) {
+            if (newW > 0) this.leftSpacer.style.setProperty('width', `${newW}px`);
+            else this.leftSpacer.style.removeProperty('width');
+        }
+    }
+
     // Starts scroll-based window management and inserts spacer divs.
     attach(): void {
         if (this.rightSpacer) return; // already attached
@@ -151,18 +167,10 @@ export class ParagraphVirtualizer {
     resetWindow(lo: number, hi: number): void {
         this.domStart = Math.max(0, lo);
         this.domEnd   = Math.min(hi, this.paragraphRecords.length - 1);
-        this.rightSpacerWidth = this.paragraphRecords
-            .slice(0, this.domStart).reduce((sum, r) => sum + r.width, 0);
-        this.leftSpacerWidth = this.paragraphRecords
-            .slice(this.domEnd + 1).reduce((sum, r) => sum + r.width, 0);
-        if (this.rightSpacer) {
-            if (this.rightSpacerWidth > 0) this.rightSpacer.style.setProperty('width', `${this.rightSpacerWidth}px`);
-            else this.rightSpacer.style.removeProperty('width');
-        }
-        if (this.leftSpacer) {
-            if (this.leftSpacerWidth > 0) this.leftSpacer.style.setProperty('width', `${this.leftSpacerWidth}px`);
-            else this.leftSpacer.style.removeProperty('width');
-        }
+        this.applyRightSpacer(this.paragraphRecords
+            .slice(0, this.domStart).reduce((sum, r) => sum + r.width, 0));
+        this.applyLeftSpacer(this.paragraphRecords
+            .slice(this.domEnd + 1).reduce((sum, r) => sum + r.width, 0));
     }
 
     // Updates src/viewLen for all records in-place WITHOUT touching domStart, domEnd, or spacer
@@ -205,6 +213,17 @@ export class ParagraphVirtualizer {
     // lo: first changed index; deleteCount: number of old records to remove;
     // newLines: replacement Aozora source lines (may be a different count than deleteCount).
     spliceRecords(lo: number, deleteCount: number, newLines: string[]): void {
+        // Classify the splice before mutating state so we can use the pre-splice window bounds.
+        // A splice is "within the window" when every deleted record lies inside [domStart, domEnd]
+        // and no off-screen paragraph moves in or out of a spacer area as a result.
+        // In that case the spacer widths remain correct as-is; recomputing them from the
+        // (now-shifted) records array produces wrong values because syncWindowSrcs preserves
+        // widths by index position rather than by paragraph content.
+        const spliceWithinWindow =
+            lo >= this.domStart &&
+            lo <= this.domEnd &&
+            lo + deleteCount <= this.domEnd + 1;
+
         const newRecords = newLines.map(src => {
             const viewLen = this.buildParagraphVisibleText(src).length;
             return { src, viewLen, width: this.estimateWidth(viewLen) };
@@ -218,19 +237,15 @@ export class ParagraphVirtualizer {
         // Adjust domEnd by the count delta and clamp to the new total.
         this.domEnd = Math.min(this.domEnd + delta, this.paragraphRecords.length - 1);
         this.domEnd = Math.max(this.domEnd, this.domStart);
+        if (spliceWithinWindow) {
+            // Off-screen paragraphs did not change; stored spacer widths remain correct.
+            return;
+        }
         // Recompute spacer widths so scrollWidth stays correct.
-        this.rightSpacerWidth = this.paragraphRecords
-            .slice(0, this.domStart).reduce((sum, r) => sum + r.width, 0);
-        this.leftSpacerWidth = this.paragraphRecords
-            .slice(this.domEnd + 1).reduce((sum, r) => sum + r.width, 0);
-        if (this.rightSpacer) {
-            if (this.rightSpacerWidth > 0) this.rightSpacer.style.setProperty('width', `${this.rightSpacerWidth}px`);
-            else this.rightSpacer.style.removeProperty('width');
-        }
-        if (this.leftSpacer) {
-            if (this.leftSpacerWidth > 0) this.leftSpacer.style.setProperty('width', `${this.leftSpacerWidth}px`);
-            else this.leftSpacer.style.removeProperty('width');
-        }
+        this.applyRightSpacer(this.paragraphRecords
+            .slice(0, this.domStart).reduce((sum, r) => sum + r.width, 0));
+        this.applyLeftSpacer(this.paragraphRecords
+            .slice(this.domEnd + 1).reduce((sum, r) => sum + r.width, 0));
     }
 
     // Returns the Aozora source for the paragraph at index i. O(1).
@@ -318,8 +333,7 @@ export class ParagraphVirtualizer {
                 }
             }
             if (correction !== 0) {
-                this.rightSpacerWidth = Math.max(0, this.rightSpacerWidth - correction);
-                if (this.rightSpacer) this.rightSpacer.style.setProperty('width', `${this.rightSpacerWidth}px`);
+                this.applyRightSpacer(Math.max(0, this.rightSpacerWidth - correction));
             }
         }
         if (this.domEnd > domEndBefore) {
@@ -335,8 +349,7 @@ export class ParagraphVirtualizer {
                 }
             }
             if (correction !== 0) {
-                this.leftSpacerWidth = Math.max(0, this.leftSpacerWidth - correction);
-                if (this.leftSpacer) this.leftSpacer.style.setProperty('width', `${this.leftSpacerWidth}px`);
+                this.applyLeftSpacer(Math.max(0, this.leftSpacerWidth - correction));
             }
         }
     }
@@ -357,8 +370,7 @@ export class ParagraphVirtualizer {
         this.editorEl.insertBefore(div, firstPara ?? null);
         // Shrink rightSpacer by the paragraph's estimated or measured width.
         const w = rec.width > 0 ? rec.width : this.estimateWidth(rec.viewLen);
-        this.rightSpacerWidth = Math.max(0, this.rightSpacerWidth - w);
-        if (this.rightSpacer) this.rightSpacer.style.setProperty('width', `${this.rightSpacerWidth}px`);
+        this.applyRightSpacer(Math.max(0, this.rightSpacerWidth - w));
         this.domStart--;
     }
 
@@ -372,8 +384,7 @@ export class ParagraphVirtualizer {
         // Insert before leftSpacer (last child) → after the current last paragraph.
         this.editorEl.insertBefore(div, this.leftSpacer ?? null);
         const w = rec.width > 0 ? rec.width : this.estimateWidth(rec.viewLen);
-        this.leftSpacerWidth = Math.max(0, this.leftSpacerWidth - w);
-        if (this.leftSpacer) this.leftSpacer.style.setProperty('width', `${this.leftSpacerWidth}px`);
+        this.applyLeftSpacer(Math.max(0, this.leftSpacerWidth - w));
         this.domEnd++;
     }
 
@@ -391,8 +402,7 @@ export class ParagraphVirtualizer {
         const w = rec.width > 0 ? rec.width : this.estimateWidth(rec.viewLen);
         rec.width = w;
         div.remove();
-        this.leftSpacerWidth += w;
-        if (this.leftSpacer) this.leftSpacer.style.setProperty('width', `${this.leftSpacerWidth}px`);
+        this.applyLeftSpacer(this.leftSpacerWidth + w);
         this.domEnd--;
     }
 
@@ -407,8 +417,7 @@ export class ParagraphVirtualizer {
         const w = rec.width > 0 ? rec.width : this.estimateWidth(rec.viewLen);
         rec.width = w;
         div.remove();
-        this.rightSpacerWidth += w;
-        if (this.rightSpacer) this.rightSpacer.style.setProperty('width', `${this.rightSpacerWidth}px`);
+        this.applyRightSpacer(this.rightSpacerWidth + w);
         this.domStart++;
     }
 
