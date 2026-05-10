@@ -170,7 +170,7 @@ export class VerticalWritingView extends ItemView {
                 } else if (e.inputType === 'insertParagraph') {
                     document.execCommand('insertParagraph');
                 }
-                this.scheduleCommit();
+                this.commitToCm6(); // immediate commit (same as cut — bulk deletion + insertion)
                 this.searchPanel?.onContentChanged();
                 return;
             }

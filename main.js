@@ -766,7 +766,7 @@ function computeDivViewLen(div, rootEl) {
   let node = walker.nextNode();
   while (node) {
     if (!isInsideRtNode(node, rootEl)) {
-      count += findCursorAnchorAncestor(node, rootEl) ? ((_a = node.textContent) != null ? _a : "").replace(/​/g, "").length : node.length;
+      count += findCursorAnchorAncestor(node, rootEl) ? ((_a = node.textContent) != null ? _a : "").replace(/\u200B/g, "").length : node.length;
     }
     node = walker.nextNode();
   }
@@ -781,10 +781,10 @@ function computeViewOffsetInDiv(div, editorEl, targetNode, targetOffset) {
     if (!isInsideRtNode(node, editorEl)) {
       const isAnchor = !!findCursorAnchorAncestor(node, editorEl);
       if (node === targetNode) {
-        count += isAnchor ? ((_a = node.textContent) != null ? _a : "").slice(0, targetOffset).replace(/​/g, "").length : targetOffset;
+        count += isAnchor ? ((_a = node.textContent) != null ? _a : "").slice(0, targetOffset).replace(/\u200B/g, "").length : targetOffset;
         return count;
       }
-      count += isAnchor ? ((_b = node.textContent) != null ? _b : "").replace(/​/g, "").length : node.length;
+      count += isAnchor ? ((_b = node.textContent) != null ? _b : "").replace(/\u200B/g, "").length : node.length;
     }
     node = walker.nextNode();
   }
@@ -800,7 +800,7 @@ function computeDomPositionFromViewOff(div, editorEl, viewOff) {
       const isAnchor = !!findCursorAnchorAncestor(node, editorEl);
       const text = (_a = node.textContent) != null ? _a : "";
       if (isAnchor) {
-        const visLen = text.replace(/​/g, "").length;
+        const visLen = text.replace(/\u200B/g, "").length;
         if (remaining <= visLen) {
           let visible = 0;
           let actualOffset = text.length;
@@ -4167,7 +4167,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
         } else if (e.inputType === "insertParagraph") {
           document.execCommand("insertParagraph");
         }
-        this.scheduleCommit();
+        this.commitToCm6();
         (_a = this.searchPanel) == null ? void 0 : _a.onContentChanged();
         return;
       }

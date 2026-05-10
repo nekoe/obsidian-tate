@@ -177,7 +177,7 @@ export function computeDivViewLen(div: HTMLElement, rootEl: HTMLElement): number
     while (node) {
         if (!isInsideRtNode(node, rootEl)) {
             count += findCursorAnchorAncestor(node, rootEl)
-                ? (node.textContent ?? '').replace(/​/g, '').length
+                ? (node.textContent ?? '').replace(/\u200B/g, '').length
                 : node.length;
         }
         node = walker.nextNode() as Text | null;
@@ -199,12 +199,12 @@ export function computeViewOffsetInDiv(
             const isAnchor = !!findCursorAnchorAncestor(node, editorEl);
             if (node === targetNode) {
                 count += isAnchor
-                    ? (node.textContent ?? '').slice(0, targetOffset).replace(/​/g, '').length
+                    ? (node.textContent ?? '').slice(0, targetOffset).replace(/\u200B/g, '').length
                     : targetOffset;
                 return count;
             }
             count += isAnchor
-                ? (node.textContent ?? '').replace(/​/g, '').length
+                ? (node.textContent ?? '').replace(/\u200B/g, '').length
                 : node.length;
         }
         node = walker.nextNode() as Text | null;
@@ -225,13 +225,13 @@ export function computeDomPositionFromViewOff(
             const isAnchor = !!findCursorAnchorAncestor(node, editorEl);
             const text = node.textContent ?? '';
             if (isAnchor) {
-                const visLen = text.replace(/​/g, '').length;
+                const visLen = text.replace(/\u200B/g, '').length;
                 if (remaining <= visLen) {
                     let visible = 0;
                     let actualOffset = text.length;
                     for (let ci = 0; ci < text.length; ci++) {
                         if (visible === remaining) { actualOffset = ci; break; }
-                        if (text[ci] !== '​') visible++;
+                        if (text[ci] !== '\u200B') visible++;
                     }
                     return { node, offset: actualOffset };
                 }
