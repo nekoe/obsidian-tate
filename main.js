@@ -1951,18 +1951,10 @@ var ParagraphVirtualizer = class {
     // Accumulated pixel widths of paragraphs evicted to the right and left spacers.
     this.rightSpacerWidth = 0;
     this.leftSpacerWidth = 0;
-    // True while a drag selection is in progress (mousedown → mouseup).
-    this.isDragging = false;
     // Font size in px; used to estimate paragraph widths for off-window records.
     // Updated by setFontSize() when plugin settings change.
     this.fontSizePx = 22;
-    // Arrow functions so `this` is bound for addEventListener/removeEventListener.
-    this.onMouseDown = () => {
-      this.isDragging = true;
-    };
-    this.onMouseUp = () => {
-      this.isDragging = false;
-    };
+    // Arrow function so `this` is bound for addEventListener/removeEventListener.
     this.onScroll = () => {
       this.adjustWindowOnScroll();
     };
@@ -2000,8 +1992,6 @@ var ParagraphVirtualizer = class {
   attach() {
     if (this.rightSpacer) return;
     this.initSpacers();
-    this.editorEl.addEventListener("mousedown", this.onMouseDown);
-    document.addEventListener("mouseup", this.onMouseUp);
     this.scrollArea.addEventListener("scroll", this.onScroll);
   }
   // Inserts rightSpacer and leftSpacer into editorEl.
@@ -2032,9 +2022,6 @@ var ParagraphVirtualizer = class {
     (_b = this.leftSpacer) == null ? void 0 : _b.remove();
     this.rightSpacer = null;
     this.leftSpacer = null;
-    this.isDragging = false;
-    this.editorEl.removeEventListener("mousedown", this.onMouseDown);
-    document.removeEventListener("mouseup", this.onMouseUp);
     this.scrollArea.removeEventListener("scroll", this.onScroll);
   }
   // Initializes paragraphRecords from content lines.
@@ -2243,7 +2230,7 @@ var ParagraphVirtualizer = class {
     const spacerOffset = this.rightSpacer ? 1 : 0;
     const div = this.editorEl.children[this.domEnd - this.domStart + spacerOffset];
     if (!div) return;
-    if (this.isDragging && this.selectionOverlaps(div)) return;
+    if (this.selectionOverlaps(div)) return;
     const rec = this.paragraphRecords[this.domEnd];
     const w = rec.width > 0 ? rec.width : this.estimateWidth(rec.viewLen);
     rec.width = w;
@@ -2257,7 +2244,7 @@ var ParagraphVirtualizer = class {
     const spacerOffset = this.rightSpacer ? 1 : 0;
     const div = this.editorEl.children[spacerOffset];
     if (!div || div.classList.contains(SPACER_CLASS)) return;
-    if (this.isDragging && this.selectionOverlaps(div)) return;
+    if (this.selectionOverlaps(div)) return;
     const rec = this.paragraphRecords[this.domStart];
     const w = rec.width > 0 ? rec.width : this.estimateWidth(rec.viewLen);
     rec.width = w;
@@ -2306,7 +2293,6 @@ var ParagraphVirtualizer = class {
       } else break;
     }
     while (this.domEnd > this.domStart + 2) {
-      if (this.isDragging) break;
       const rec = this.paragraphRecords[this.domEnd];
       const w = rec.width > 0 ? rec.width : this.estimateWidth(rec.viewLen);
       if (this.leftSpacerWidth + w < scrollLeft - SHRINK_MARGIN) {
@@ -2323,7 +2309,6 @@ var ParagraphVirtualizer = class {
       } else break;
     }
     while (this.domEnd > this.domStart + 2) {
-      if (this.isDragging) break;
       const rec = this.paragraphRecords[this.domStart];
       const w = rec.width > 0 ? rec.width : this.estimateWidth(rec.viewLen);
       if (W - this.rightSpacerWidth - w > scrollLeft + viewW + SHRINK_MARGIN) {
