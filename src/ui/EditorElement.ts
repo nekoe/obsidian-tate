@@ -1,11 +1,11 @@
 import { sanitizeHTMLToDom } from 'obsidian';
 import { DEFAULT_SETTINGS, TatePluginSettings } from '../settings';
-import { buildSegmentMap, srcToView } from './SegmentMap';
+import { buildSegmentMap, srcToView, viewToSrc } from './SegmentMap';
 import { parseInlineToHtml, parseToHtml, serializeNode } from './AozoraParser';
 import { InlineEditor } from './InlineEditor';
 import { InputTransformer } from './InputTransformer';
 import { isEffectivelyEmpty, clearChildren, ensureBrPlaceholder, computeDivViewLen, isInsideRtNode, findCursorAnchorAncestor } from './domHelpers';
-import type { ParagraphVirtualizer } from './ParagraphVirtualizer';
+import type { ParagraphVirtualizer, VirtualSelection } from './ParagraphVirtualizer';
 import { SPACER_CLASS } from './ParagraphVirtualizer';
 
 // Half the number of paragraph divs to create on each side of the cursor on file load.
@@ -226,12 +226,27 @@ export class EditorElement {
 
     // Copy handler: serializes the selected DOM to Aozora notation and writes it to text/plain.
     // This ensures ruby/tcy/bouten are preserved when copying within the editor.
+    // When a VirtualSelection is active, uses the virtual selection data model instead of the DOM.
     handleCopy(e: ClipboardEvent): void {
+        const vs = this.virtualizer?.getVirtualSelection();
+        if (vs) {
+            e.preventDefault();
+            e.clipboardData?.setData('text/plain', this.buildClipboardTextFromVirtual(vs));
+            return;
+        }
         this.serializeSelectionToClipboard(e);
     }
 
     // Cut handler: same as copy, then deletes the selected content.
     handleCut(e: ClipboardEvent): void {
+        const vs = this.virtualizer?.getVirtualSelection();
+        if (vs) {
+            e.preventDefault();
+            e.clipboardData?.setData('text/plain', this.buildClipboardTextFromVirtual(vs));
+            this.virtualizer!.clearVirtualSelection();
+            this.deleteVirtualSelection(vs);
+            return;
+        }
         const range = this.serializeSelectionToClipboard(e);
         if (!range) return;
         this.deleteRangeContents(range);
@@ -245,9 +260,17 @@ export class EditorElement {
     // Returns true if the event was handled (caller must call e.preventDefault()).
     // Collapsed-cursor single-character deletion is left to the browser (grapheme-cluster
     // boundary handling is complex and Chrome does it correctly for free).
+    // When a VirtualSelection is active, uses the virtual selection data model.
     handleSelectionDelete(e: InputEvent): boolean {
         if (e.isComposing) return false;
         if (!e.inputType.startsWith('deleteContent')) return false;
+        const virt = this.virtualizer;
+        const vs = virt?.getVirtualSelection();
+        if (vs) {
+            virt!.clearVirtualSelection();
+            this.deleteVirtualSelection(vs);
+            return true;
+        }
         const sel = window.getSelection();
         if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return false;
         const range = sel.getRangeAt(0);
@@ -672,6 +695,79 @@ export class EditorElement {
     // Resets the burst flag and clears boutenGuard on mouse click or navigation key.
     afterNavigation(): void {
         this.inlineEditor.afterNavigation();
+    }
+
+    // Deletes the content covered by a VirtualSelection. Rebuilds the content from
+    // paragraphRecords (using the DOM for in-window paragraphs) with the selected range
+    // removed, then reloads and positions the cursor at the deletion point.
+    deleteVirtualSelection(vs: VirtualSelection): void {
+        const virt = this.virtualizer;
+        if (!virt) return;
+        const { anchorParaIdx, anchorViewOff, focusParaIdx, focusViewOff } = vs;
+        const [si, so, ei, eo] = anchorParaIdx <= focusParaIdx
+            ? [anchorParaIdx, anchorViewOff, focusParaIdx, focusViewOff]
+            : [focusParaIdx, focusViewOff, anchorParaIdx, anchorViewOff];
+        const N = virt.paragraphRecords.length;
+
+        const getSrc = (i: number): string => {
+            const div = virt.getWindowDiv(i);
+            if (div) return Array.from(div.childNodes).map(n => serializeNode(n, this.el)).join('');
+            return virt.getSrcByIndex(i);
+        };
+
+        const allLines: string[] = [];
+        for (let i = 0; i < si; i++) allLines.push(getSrc(i));
+        allLines.push(
+            this.sliceAozoraSrcByView(getSrc(si), 0, so) +
+            this.sliceAozoraSrcByView(getSrc(ei), eo)
+        );
+        for (let i = ei + 1; i < N; i++) allLines.push(getSrc(i));
+
+        const newContent = allLines.join('\n');
+        let cursorViewOffset = 0;
+        for (let i = 0; i < si; i++) cursorViewOffset += virt.getViewLenByIndex(i);
+        cursorViewOffset += so;
+
+        this.inlineEditor.reset();
+        this.loadContent(newContent, cursorViewOffset);
+        this.setViewCursorOffset(cursorViewOffset);
+    }
+
+    // Slices an Aozora source string to the visible character range [startViewOff, endViewOff).
+    private sliceAozoraSrcByView(src: string, startViewOff: number, endViewOff?: number): string {
+        if (startViewOff === 0 && endViewOff === undefined) return src;
+        const segs = buildSegmentMap(src);
+        const srcStart = startViewOff > 0 ? viewToSrc(segs, startViewOff) : 0;
+        const srcEnd = endViewOff !== undefined ? viewToSrc(segs, endViewOff) : src.length;
+        return src.slice(srcStart, srcEnd);
+    }
+
+    // Builds clipboard text from a VirtualSelection using Aozora src strings.
+    // In-window paragraphs are serialized from the live DOM; off-window from paragraphRecords.
+    private buildClipboardTextFromVirtual(vs: VirtualSelection): string {
+        const virt = this.virtualizer!;
+        const { anchorParaIdx, anchorViewOff, focusParaIdx, focusViewOff } = vs;
+        const [si, so, ei, eo] = anchorParaIdx <= focusParaIdx
+            ? [anchorParaIdx, anchorViewOff, focusParaIdx, focusViewOff]
+            : [focusParaIdx, focusViewOff, anchorParaIdx, anchorViewOff];
+
+        const getSrc = (i: number): string => {
+            const div = virt.getWindowDiv(i);
+            if (div) return Array.from(div.childNodes).map(n => serializeNode(n, this.el)).join('');
+            return virt.getSrcByIndex(i);
+        };
+
+        const parts: string[] = [];
+        for (let i = si; i <= ei; i++) {
+            const src = getSrc(i);
+            let sliced: string;
+            if (i === si && i === ei) sliced = this.sliceAozoraSrcByView(src, so, eo);
+            else if (i === si)        sliced = this.sliceAozoraSrcByView(src, so);
+            else if (i === ei)        sliced = this.sliceAozoraSrcByView(src, 0, eo);
+            else                      sliced = src;
+            parts.push(i === si ? sliced : '\n' + sliced);
+        }
+        return parts.join('');
     }
 
     // Called after CM6 Undo/Redo. Applies content to the vertical writing view and

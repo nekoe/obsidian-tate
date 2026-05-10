@@ -772,6 +772,57 @@ function computeDivViewLen(div, rootEl) {
   }
   return count;
 }
+function computeViewOffsetInDiv(div, editorEl, targetNode, targetOffset) {
+  var _a, _b;
+  let count = 0;
+  const walker = document.createTreeWalker(div, NodeFilter.SHOW_TEXT);
+  let node = walker.nextNode();
+  while (node) {
+    if (!isInsideRtNode(node, editorEl)) {
+      const isAnchor = !!findCursorAnchorAncestor(node, editorEl);
+      if (node === targetNode) {
+        count += isAnchor ? ((_a = node.textContent) != null ? _a : "").slice(0, targetOffset).replace(/​/g, "").length : targetOffset;
+        return count;
+      }
+      count += isAnchor ? ((_b = node.textContent) != null ? _b : "").replace(/​/g, "").length : node.length;
+    }
+    node = walker.nextNode();
+  }
+  return count;
+}
+function computeDomPositionFromViewOff(div, editorEl, viewOff) {
+  var _a;
+  let remaining = viewOff;
+  const walker = document.createTreeWalker(div, NodeFilter.SHOW_TEXT);
+  let node = walker.nextNode();
+  while (node) {
+    if (!isInsideRtNode(node, editorEl)) {
+      const isAnchor = !!findCursorAnchorAncestor(node, editorEl);
+      const text = (_a = node.textContent) != null ? _a : "";
+      if (isAnchor) {
+        const visLen = text.replace(/​/g, "").length;
+        if (remaining <= visLen) {
+          let visible = 0;
+          let actualOffset = text.length;
+          for (let ci = 0; ci < text.length; ci++) {
+            if (visible === remaining) {
+              actualOffset = ci;
+              break;
+            }
+            if (text[ci] !== "\u200B") visible++;
+          }
+          return { node, offset: actualOffset };
+        }
+        remaining -= visLen;
+      } else {
+        if (remaining <= node.length) return { node, offset: remaining };
+        remaining -= node.length;
+      }
+    }
+    node = walker.nextNode();
+  }
+  return { node: div, offset: div.childNodes.length };
+}
 function getExtraCharsFromAnnotation(rawText) {
   const patterns = [
     /［＃「([^「」\n]+)」は縦中横］/,
@@ -1945,6 +1996,13 @@ var ParagraphVirtualizer = class {
     // domEnd = -1 signals "no records loaded yet" (initial state before first setValue).
     this.domStart = 0;
     this.domEnd = -1;
+    // Virtual selection: tracks true selection endpoints when a non-collapsed selection
+    // spans paragraphs outside the DOM window. Null when no gap-spanning selection is active.
+    this.virtualSelection = null;
+    // Counter incremented for each programmatic sel.setBaseAndExtent() call; decremented
+    // by a 0ms setTimeout after the selectionchange microtask has fired. When > 0, the
+    // selectionchange handler skips VS sync to avoid an infinite re-entry loop.
+    this.programmaticSelectionUpdates = 0;
     // Spacer divs inserted at the right (first child) and left (last child) of editorEl.
     this.rightSpacer = null;
     this.leftSpacer = null;
@@ -2013,6 +2071,7 @@ var ParagraphVirtualizer = class {
   // Stops window management, removes spacers.
   detach() {
     var _a, _b;
+    this.clearVirtualSelection();
     this.paragraphRecords.length = 0;
     this.domStart = 0;
     this.domEnd = -1;
@@ -2222,15 +2281,23 @@ var ParagraphVirtualizer = class {
     this.domEnd++;
   }
   // Removes the leftmost div of the window (paragraphs[domEnd]) and grows leftSpacer.
-  // Guards against removing a div that contains the current selection anchor or focus.
-  // Uses the stored/estimated record width to avoid a getBoundingClientRect() call
-  // inside the tight scroll-event adjustment loop.
+  // When the cursor (collapsed) is inside this div, removal is blocked to protect editing.
+  // When a non-collapsed selection endpoint is inside this div, clampSelectionOnShrink()
+  // moves the endpoint to a proxy position before removal so VS tracking stays intact.
   shrinkLeft() {
     if (this.domEnd < this.domStart) return;
     const spacerOffset = this.rightSpacer ? 1 : 0;
     const div = this.editorEl.children[this.domEnd - this.domStart + spacerOffset];
     if (!div) return;
-    if (this.selectionOverlaps(div)) return;
+    const sel = window.getSelection();
+    if (sel) {
+      const collidingAnchor = div.contains(sel.anchorNode);
+      const collidingFocus = div.contains(sel.focusNode);
+      if (sel.isCollapsed && collidingAnchor) return;
+      if (!sel.isCollapsed && (collidingAnchor || collidingFocus)) {
+        this.clampSelectionOnShrink(div, this.domEnd);
+      }
+    }
     const rec = this.paragraphRecords[this.domEnd];
     const w = rec.width > 0 ? rec.width : this.estimateWidth(rec.viewLen);
     rec.width = w;
@@ -2244,19 +2311,21 @@ var ParagraphVirtualizer = class {
     const spacerOffset = this.rightSpacer ? 1 : 0;
     const div = this.editorEl.children[spacerOffset];
     if (!div || div.classList.contains(SPACER_CLASS)) return;
-    if (this.selectionOverlaps(div)) return;
+    const sel = window.getSelection();
+    if (sel) {
+      const collidingAnchor = div.contains(sel.anchorNode);
+      const collidingFocus = div.contains(sel.focusNode);
+      if (sel.isCollapsed && collidingAnchor) return;
+      if (!sel.isCollapsed && (collidingAnchor || collidingFocus)) {
+        this.clampSelectionOnShrink(div, this.domStart);
+      }
+    }
     const rec = this.paragraphRecords[this.domStart];
     const w = rec.width > 0 ? rec.width : this.estimateWidth(rec.viewLen);
     rec.width = w;
     div.remove();
     this.applyRightSpacer(this.rightSpacerWidth + w);
     this.domStart++;
-  }
-  // Returns true if the current selection anchor or focus node is inside div.
-  selectionOverlaps(div) {
-    const sel = window.getSelection();
-    if (!sel) return false;
-    return div.contains(sel.anchorNode) || div.contains(sel.focusNode);
   }
   // Adjusts the DOM window based on the current scroll position.
   //
@@ -2318,6 +2387,7 @@ var ParagraphVirtualizer = class {
       } else break;
     }
     this.correctSpacerAfterExpand(domStartBefore, domEndBefore);
+    if (this.virtualSelection) this.syncDomRangeToVirtual();
   }
   // Reads the actual rendered widths of all in-window paragraph divs and updates
   // paragraphRecords[i].width. A single layout flush — no DOM mutations between reads.
@@ -2354,6 +2424,171 @@ var ParagraphVirtualizer = class {
       result.push(src.slice(start, start + seg.viewLen));
     }
     return result.join("");
+  }
+  // ---- Virtual Selection API ----
+  // True while a programmatic setBaseAndExtent() call is in flight (counter > 0).
+  // selectionchange handlers should skip VS update logic when this is true.
+  get isSyncingSelection() {
+    return this.programmaticSelectionUpdates > 0;
+  }
+  getVirtualSelection() {
+    return this.virtualSelection;
+  }
+  clearVirtualSelection() {
+    this.virtualSelection = null;
+  }
+  // Initializes VS to span the entire document and syncs the DOM Range to proxy positions.
+  // Called from the Cmd-A handler instead of expandWindowToFull().
+  setVirtualSelectAll() {
+    const N = this.paragraphRecords.length;
+    if (N === 0) return;
+    this.virtualSelection = {
+      anchorParaIdx: 0,
+      anchorViewOff: 0,
+      focusParaIdx: N - 1,
+      focusViewOff: this.paragraphRecords[N - 1].viewLen
+    };
+    this.syncDomRangeToVirtual();
+  }
+  // Called from selectionchange when VS is active and the event is not programmatic.
+  // Reads the new focus position from the DOM and updates VS.focusParaIdx/focusViewOff.
+  // Returns true if VS was changed (caller should then call syncDomRangeToVirtual()).
+  tryUpdateFocusFromDom(sel) {
+    const vs = this.virtualSelection;
+    if (!vs) return false;
+    const focusNode = sel.focusNode;
+    if (!focusNode) return false;
+    const focusDiv = this.findParaDiv(focusNode);
+    if (!focusDiv) return false;
+    const focusParaIdx = this.getParagraphIndex(focusDiv);
+    if (focusParaIdx < 0) return false;
+    const newFocusViewOff = computeViewOffsetInDiv(focusDiv, this.editorEl, focusNode, sel.focusOffset);
+    if (focusParaIdx === vs.focusParaIdx && newFocusViewOff === vs.focusViewOff) return false;
+    this.virtualSelection = { ...vs, focusParaIdx, focusViewOff: newFocusViewOff };
+    return true;
+  }
+  // Sets the DOM Range to proxy positions derived from the current VS, so that native
+  // ::selection highlights all in-window paragraphs covered by the virtual selection.
+  syncDomRangeToVirtual() {
+    const vs = this.virtualSelection;
+    if (!vs || this.domEnd < 0) return;
+    const sel = window.getSelection();
+    if (!sel) return;
+    const anchor = this.proxyForEndpoint(vs.anchorParaIdx, vs.anchorViewOff);
+    const focus = this.proxyForEndpoint(vs.focusParaIdx, vs.focusViewOff);
+    this.markProgrammaticSelection();
+    sel.setBaseAndExtent(anchor.node, anchor.offset, focus.node, focus.offset);
+  }
+  // Returns the DOM node/offset for the given (paraIdx, viewOff) endpoint.
+  // For off-window paragraphs, returns a proxy at the nearest window boundary div.
+  proxyForEndpoint(paraIdx, viewOff) {
+    if (paraIdx < this.domStart) {
+      const div = this.getWindowDiv(this.domStart);
+      if (div) return { node: div, offset: 0 };
+    } else if (paraIdx > this.domEnd) {
+      const div = this.getWindowDiv(this.domEnd);
+      if (div) {
+        const last = findLastBaseTextInElement(div, this.editorEl);
+        if (last) return { node: last.node, offset: last.offset };
+        return { node: div, offset: div.childNodes.length };
+      }
+    } else {
+      const div = this.getWindowDiv(paraIdx);
+      if (div) return computeDomPositionFromViewOff(div, this.editorEl, viewOff);
+    }
+    return { node: this.editorEl, offset: 0 };
+  }
+  // Increments the programmatic-update counter and schedules a decrement after the
+  // selectionchange event (macrotask) has had a chance to fire and be suppressed.
+  markProgrammaticSelection() {
+    this.programmaticSelectionUpdates++;
+    setTimeout(() => {
+      this.programmaticSelectionUpdates--;
+    }, 0);
+  }
+  // Saves the current selection into VS and moves DOM endpoints out of the div that is
+  // about to be removed. Called from shrinkLeft/shrinkRight when a non-collapsed selection
+  // endpoint is inside the div being evicted from the DOM window.
+  clampSelectionOnShrink(div, paraIdx) {
+    const sel = window.getSelection();
+    if (!sel || sel.isCollapsed) return;
+    const anchorInDiv = div.contains(sel.anchorNode);
+    const focusInDiv = div.contains(sel.focusNode);
+    if (!anchorInDiv && !focusInDiv) return;
+    if (!this.virtualSelection) {
+      const anchorDiv = this.findParaDiv(sel.anchorNode);
+      const focusDiv = this.findParaDiv(sel.focusNode);
+      const anchorIdx = anchorDiv ? this.getParagraphIndex(anchorDiv) : -1;
+      const focusIdx = focusDiv ? this.getParagraphIndex(focusDiv) : -1;
+      if (anchorIdx < 0 || focusIdx < 0) return;
+      this.virtualSelection = {
+        anchorParaIdx: anchorIdx,
+        anchorViewOff: anchorDiv ? computeViewOffsetInDiv(anchorDiv, this.editorEl, sel.anchorNode, sel.anchorOffset) : 0,
+        focusParaIdx: focusIdx,
+        focusViewOff: focusDiv ? computeViewOffsetInDiv(focusDiv, this.editorEl, sel.focusNode, sel.focusOffset) : 0
+      };
+    }
+    let proxyNode;
+    let proxyOffset;
+    if (paraIdx === this.domEnd) {
+      const safeDiv = this.getWindowDiv(this.domEnd - 1);
+      if (!safeDiv) return;
+      const last = findLastBaseTextInElement(safeDiv, this.editorEl);
+      if (last) {
+        proxyNode = last.node;
+        proxyOffset = last.offset;
+      } else {
+        proxyNode = safeDiv;
+        proxyOffset = safeDiv.childNodes.length;
+      }
+    } else if (paraIdx === this.domStart) {
+      const safeDiv = this.getWindowDiv(this.domStart + 1);
+      if (!safeDiv) return;
+      proxyNode = safeDiv;
+      proxyOffset = 0;
+    } else {
+      return;
+    }
+    let newAnchorNode, newAnchorOffset;
+    let newFocusNode, newFocusOffset;
+    if (anchorInDiv && focusInDiv) {
+      newAnchorNode = proxyNode;
+      newAnchorOffset = proxyOffset;
+      newFocusNode = proxyNode;
+      newFocusOffset = proxyOffset;
+    } else if (anchorInDiv) {
+      newAnchorNode = proxyNode;
+      newAnchorOffset = proxyOffset;
+      newFocusNode = sel.focusNode;
+      newFocusOffset = sel.focusOffset;
+    } else {
+      newAnchorNode = sel.anchorNode;
+      newAnchorOffset = sel.anchorOffset;
+      newFocusNode = proxyNode;
+      newFocusOffset = proxyOffset;
+    }
+    this.markProgrammaticSelection();
+    sel.setBaseAndExtent(newAnchorNode, newAnchorOffset, newFocusNode, newFocusOffset);
+  }
+  // Returns the direct paragraph div (non-spacer DIV child of editorEl) that contains node.
+  findParaDiv(node) {
+    let el = node;
+    while (el && el !== this.editorEl) {
+      if (el instanceof HTMLElement && el.parentElement === this.editorEl && el.tagName === "DIV" && !el.classList.contains(SPACER_CLASS)) {
+        return el;
+      }
+      el = el.parentElement;
+    }
+    return null;
+  }
+  // Returns the paragraphRecords index for the given in-window div, or -1 if not found.
+  getParagraphIndex(div) {
+    const spacerOffset = this.rightSpacer ? 1 : 0;
+    const children = this.editorEl.children;
+    for (let k = spacerOffset; k < children.length; k++) {
+      if (children[k] === div) return this.domStart + (k - spacerOffset);
+    }
+    return -1;
   }
 };
 
@@ -2530,11 +2765,28 @@ var EditorElement = class {
   }
   // Copy handler: serializes the selected DOM to Aozora notation and writes it to text/plain.
   // This ensures ruby/tcy/bouten are preserved when copying within the editor.
+  // When a VirtualSelection is active, uses the virtual selection data model instead of the DOM.
   handleCopy(e) {
+    var _a, _b;
+    const vs = (_a = this.virtualizer) == null ? void 0 : _a.getVirtualSelection();
+    if (vs) {
+      e.preventDefault();
+      (_b = e.clipboardData) == null ? void 0 : _b.setData("text/plain", this.buildClipboardTextFromVirtual(vs));
+      return;
+    }
     this.serializeSelectionToClipboard(e);
   }
   // Cut handler: same as copy, then deletes the selected content.
   handleCut(e) {
+    var _a, _b;
+    const vs = (_a = this.virtualizer) == null ? void 0 : _a.getVirtualSelection();
+    if (vs) {
+      e.preventDefault();
+      (_b = e.clipboardData) == null ? void 0 : _b.setData("text/plain", this.buildClipboardTextFromVirtual(vs));
+      this.virtualizer.clearVirtualSelection();
+      this.deleteVirtualSelection(vs);
+      return;
+    }
     const range = this.serializeSelectionToClipboard(e);
     if (!range) return;
     this.deleteRangeContents(range);
@@ -2546,9 +2798,17 @@ var EditorElement = class {
   // Returns true if the event was handled (caller must call e.preventDefault()).
   // Collapsed-cursor single-character deletion is left to the browser (grapheme-cluster
   // boundary handling is complex and Chrome does it correctly for free).
+  // When a VirtualSelection is active, uses the virtual selection data model.
   handleSelectionDelete(e) {
     if (e.isComposing) return false;
     if (!e.inputType.startsWith("deleteContent")) return false;
+    const virt = this.virtualizer;
+    const vs = virt == null ? void 0 : virt.getVirtualSelection();
+    if (vs) {
+      virt.clearVirtualSelection();
+      this.deleteVirtualSelection(vs);
+      return true;
+    }
     const sel = window.getSelection();
     if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return false;
     const range = sel.getRangeAt(0);
@@ -2886,6 +3146,65 @@ var EditorElement = class {
   // Resets the burst flag and clears boutenGuard on mouse click or navigation key.
   afterNavigation() {
     this.inlineEditor.afterNavigation();
+  }
+  // Deletes the content covered by a VirtualSelection. Rebuilds the content from
+  // paragraphRecords (using the DOM for in-window paragraphs) with the selected range
+  // removed, then reloads and positions the cursor at the deletion point.
+  deleteVirtualSelection(vs) {
+    const virt = this.virtualizer;
+    if (!virt) return;
+    const { anchorParaIdx, anchorViewOff, focusParaIdx, focusViewOff } = vs;
+    const [si, so, ei, eo] = anchorParaIdx <= focusParaIdx ? [anchorParaIdx, anchorViewOff, focusParaIdx, focusViewOff] : [focusParaIdx, focusViewOff, anchorParaIdx, anchorViewOff];
+    const N = virt.paragraphRecords.length;
+    const getSrc = (i) => {
+      const div = virt.getWindowDiv(i);
+      if (div) return Array.from(div.childNodes).map((n) => serializeNode(n, this.el)).join("");
+      return virt.getSrcByIndex(i);
+    };
+    const allLines = [];
+    for (let i = 0; i < si; i++) allLines.push(getSrc(i));
+    allLines.push(
+      this.sliceAozoraSrcByView(getSrc(si), 0, so) + this.sliceAozoraSrcByView(getSrc(ei), eo)
+    );
+    for (let i = ei + 1; i < N; i++) allLines.push(getSrc(i));
+    const newContent = allLines.join("\n");
+    let cursorViewOffset = 0;
+    for (let i = 0; i < si; i++) cursorViewOffset += virt.getViewLenByIndex(i);
+    cursorViewOffset += so;
+    this.inlineEditor.reset();
+    this.loadContent(newContent, cursorViewOffset);
+    this.setViewCursorOffset(cursorViewOffset);
+  }
+  // Slices an Aozora source string to the visible character range [startViewOff, endViewOff).
+  sliceAozoraSrcByView(src, startViewOff, endViewOff) {
+    if (startViewOff === 0 && endViewOff === void 0) return src;
+    const segs = buildSegmentMap(src);
+    const srcStart = startViewOff > 0 ? viewToSrc(segs, startViewOff) : 0;
+    const srcEnd = endViewOff !== void 0 ? viewToSrc(segs, endViewOff) : src.length;
+    return src.slice(srcStart, srcEnd);
+  }
+  // Builds clipboard text from a VirtualSelection using Aozora src strings.
+  // In-window paragraphs are serialized from the live DOM; off-window from paragraphRecords.
+  buildClipboardTextFromVirtual(vs) {
+    const virt = this.virtualizer;
+    const { anchorParaIdx, anchorViewOff, focusParaIdx, focusViewOff } = vs;
+    const [si, so, ei, eo] = anchorParaIdx <= focusParaIdx ? [anchorParaIdx, anchorViewOff, focusParaIdx, focusViewOff] : [focusParaIdx, focusViewOff, anchorParaIdx, anchorViewOff];
+    const getSrc = (i) => {
+      const div = virt.getWindowDiv(i);
+      if (div) return Array.from(div.childNodes).map((n) => serializeNode(n, this.el)).join("");
+      return virt.getSrcByIndex(i);
+    };
+    const parts = [];
+    for (let i = si; i <= ei; i++) {
+      const src = getSrc(i);
+      let sliced;
+      if (i === si && i === ei) sliced = this.sliceAozoraSrcByView(src, so, eo);
+      else if (i === si) sliced = this.sliceAozoraSrcByView(src, so);
+      else if (i === ei) sliced = this.sliceAozoraSrcByView(src, 0, eo);
+      else sliced = src;
+      parts.push(i === si ? sliced : "\n" + sliced);
+    }
+    return parts.join("");
   }
   // Called after CM6 Undo/Redo. Applies content to the vertical writing view and
   // restores the cursor by converting srcOffset (CM6 cursor position) via srcToView.
@@ -3836,8 +4155,22 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
       (_a = this.searchPanel) == null ? void 0 : _a.onContentChanged();
     });
     this.registerDomEvent(editorEl.el, "beforeinput", (e) => {
-      var _a;
+      var _a, _b;
       if (!this.guardCm6(e)) return;
+      if (!e.isComposing && e.inputType.startsWith("insert") && virtualizer.getVirtualSelection()) {
+        const vs = virtualizer.getVirtualSelection();
+        e.preventDefault();
+        virtualizer.clearVirtualSelection();
+        editorEl.deleteVirtualSelection(vs);
+        if (e.inputType === "insertText" && e.data) {
+          document.execCommand("insertText", false, e.data);
+        } else if (e.inputType === "insertParagraph") {
+          document.execCommand("insertParagraph");
+        }
+        this.scheduleCommit();
+        (_a = this.searchPanel) == null ? void 0 : _a.onContentChanged();
+        return;
+      }
       if (!e.isComposing && e.inputType === "insertParagraph" && editorEl.isInlineExpanded()) {
         e.preventDefault();
         const contentChanged = editorEl.collapseForEnter();
@@ -3849,7 +4182,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
         editorEl.normalizeEmptyDom();
         virtualizer.adjustNow();
         this.scheduleCommit();
-        (_a = this.searchPanel) == null ? void 0 : _a.onContentChanged();
+        (_b = this.searchPanel) == null ? void 0 : _b.onContentChanged();
         return;
       }
       editorEl.onBeforeInput(e);
@@ -3903,6 +4236,20 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
       if (document.activeElement === editorEl.el) virtualizer.ensureWindowAroundCursor();
       const contentChanged = editorEl.handleSelectionChange();
       if (contentChanged) this.commitToCm6();
+      if (document.activeElement === editorEl.el && !virtualizer.isSyncingSelection) {
+        const sel = window.getSelection();
+        if (sel) {
+          const vs = virtualizer.getVirtualSelection();
+          if (vs) {
+            if (sel.isCollapsed) {
+              virtualizer.clearVirtualSelection();
+            } else {
+              const changed = virtualizer.tryUpdateFocusFromDom(sel);
+              if (changed) virtualizer.syncDomRangeToVirtual();
+            }
+          }
+        }
+      }
       if (document.activeElement === editorEl.el && !editorEl.isInlineExpanded()) {
         if (this.selectionChangeRafId !== null) cancelAnimationFrame(this.selectionChangeRafId);
         this.selectionChangeRafId = requestAnimationFrame(() => {
@@ -3915,6 +4262,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
     });
     this.registerDomEvent(editorEl.el, "mousedown", () => {
       this.commitToCm6();
+      virtualizer.clearVirtualSelection();
       editorEl.afterNavigation();
     });
     this.registerDomEvent(editorEl.el, "keydown", (e) => {
@@ -3925,11 +4273,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
       }
       if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.key === "a") {
         e.preventDefault();
-        virtualizer.expandWindowToFull();
-        requestAnimationFrame(() => {
-          editorEl.el.focus();
-          document.execCommand("selectAll");
-        });
+        if (virtualizer.paragraphRecords.length > 0) virtualizer.setVirtualSelectAll();
         return;
       }
       if (!e.isComposing && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
@@ -3951,6 +4295,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
         "PageDown"
       ].includes(e.key)) {
         editorEl.notifyNavigationKey(e.key);
+        if (!e.shiftKey) virtualizer.clearVirtualSelection();
         if (this.commitTimer !== null) this.commitToCm6();
         editorEl.afterNavigation();
       }

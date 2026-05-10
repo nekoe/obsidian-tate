@@ -1,6 +1,7 @@
 import { sanitizeHTMLToDom } from 'obsidian';
 import { buildSegmentMap } from './SegmentMap';
 import { parseInlineToHtml } from './AozoraParser';
+import { computeViewOffsetInDiv, computeDomPositionFromViewOff, findLastBaseTextInElement } from './domHelpers';
 
 // CSS class applied to both spacer divs so DOM walkers can skip them.
 export const SPACER_CLASS = 'tate-spacer';
@@ -17,6 +18,17 @@ const VERTICAL_LINE_HEIGHT = 2;
 // The 440 px gap between the two thresholds prevents oscillation at the boundary.
 const EXPAND_MARGIN = 440;
 const SHRINK_MARGIN = 880;
+
+// Tracks the "true" selection across the virtual DOM window. When a non-collapsed
+// selection spans paragraphs outside the current DOM window, DOM Range endpoints are
+// represented by proxy positions at the window boundary (first/last visible paragraph).
+// This allows native ::selection highlighting and Shift+Arrow shrink to work correctly.
+export interface VirtualSelection {
+    anchorParaIdx: number;
+    anchorViewOff: number;
+    focusParaIdx:  number;
+    focusViewOff:  number;
+}
 
 export interface ParagraphRecord {
     src: string;     // Aozora source line
@@ -48,6 +60,14 @@ export class ParagraphVirtualizer {
     // domEnd = -1 signals "no records loaded yet" (initial state before first setValue).
     domStart = 0;
     domEnd   = -1;
+
+    // Virtual selection: tracks true selection endpoints when a non-collapsed selection
+    // spans paragraphs outside the DOM window. Null when no gap-spanning selection is active.
+    private virtualSelection: VirtualSelection | null = null;
+    // Counter incremented for each programmatic sel.setBaseAndExtent() call; decremented
+    // by a 0ms setTimeout after the selectionchange microtask has fired. When > 0, the
+    // selectionchange handler skips VS sync to avoid an infinite re-entry loop.
+    private programmaticSelectionUpdates = 0;
 
     // Spacer divs inserted at the right (first child) and left (last child) of editorEl.
     rightSpacer: HTMLElement | null = null;
@@ -125,6 +145,7 @@ export class ParagraphVirtualizer {
 
     // Stops window management, removes spacers.
     detach(): void {
+        this.clearVirtualSelection();
         this.paragraphRecords.length = 0;
         this.domStart = 0;
         this.domEnd   = -1;
@@ -381,15 +402,23 @@ export class ParagraphVirtualizer {
     }
 
     // Removes the leftmost div of the window (paragraphs[domEnd]) and grows leftSpacer.
-    // Guards against removing a div that contains the current selection anchor or focus.
-    // Uses the stored/estimated record width to avoid a getBoundingClientRect() call
-    // inside the tight scroll-event adjustment loop.
+    // When the cursor (collapsed) is inside this div, removal is blocked to protect editing.
+    // When a non-collapsed selection endpoint is inside this div, clampSelectionOnShrink()
+    // moves the endpoint to a proxy position before removal so VS tracking stays intact.
     private shrinkLeft(): void {
         if (this.domEnd < this.domStart) return; // empty window guard
         const spacerOffset = this.rightSpacer ? 1 : 0;
         const div = this.editorEl.children[this.domEnd - this.domStart + spacerOffset] as HTMLElement;
         if (!div) return;
-        if (this.selectionOverlaps(div)) return;
+        const sel = window.getSelection();
+        if (sel) {
+            const collidingAnchor = div.contains(sel.anchorNode);
+            const collidingFocus  = div.contains(sel.focusNode);
+            if (sel.isCollapsed && collidingAnchor) return; // cursor in this div — protect
+            if (!sel.isCollapsed && (collidingAnchor || collidingFocus)) {
+                this.clampSelectionOnShrink(div, this.domEnd);
+            }
+        }
         const rec = this.paragraphRecords[this.domEnd];
         const w = rec.width > 0 ? rec.width : this.estimateWidth(rec.viewLen);
         rec.width = w;
@@ -404,20 +433,21 @@ export class ParagraphVirtualizer {
         const spacerOffset = this.rightSpacer ? 1 : 0;
         const div = this.editorEl.children[spacerOffset] as HTMLElement; // first paragraph
         if (!div || div.classList.contains(SPACER_CLASS)) return;
-        if (this.selectionOverlaps(div)) return;
+        const sel = window.getSelection();
+        if (sel) {
+            const collidingAnchor = div.contains(sel.anchorNode);
+            const collidingFocus  = div.contains(sel.focusNode);
+            if (sel.isCollapsed && collidingAnchor) return; // cursor in this div — protect
+            if (!sel.isCollapsed && (collidingAnchor || collidingFocus)) {
+                this.clampSelectionOnShrink(div, this.domStart);
+            }
+        }
         const rec = this.paragraphRecords[this.domStart];
         const w = rec.width > 0 ? rec.width : this.estimateWidth(rec.viewLen);
         rec.width = w;
         div.remove();
         this.applyRightSpacer(this.rightSpacerWidth + w);
         this.domStart++;
-    }
-
-    // Returns true if the current selection anchor or focus node is inside div.
-    private selectionOverlaps(div: HTMLElement): boolean {
-        const sel = window.getSelection();
-        if (!sel) return false;
-        return div.contains(sel.anchorNode) || div.contains(sel.focusNode);
     }
 
     // Adjusts the DOM window based on the current scroll position.
@@ -498,6 +528,10 @@ export class ParagraphVirtualizer {
         // All DOM mutations are complete; getBoundingClientRect() triggers one layout flush and
         // subsequent calls on the unmodified DOM return cached values.
         this.correctSpacerAfterExpand(domStartBefore, domEndBefore);
+
+        // Re-sync the DOM Range to the VS proxy positions after the window has settled.
+        // Without this, the selection appears stuck at the old proxy boundary div.
+        if (this.virtualSelection) this.syncDomRangeToVirtual();
     }
 
     // Reads the actual rendered widths of all in-window paragraph divs and updates
@@ -540,6 +574,180 @@ export class ParagraphVirtualizer {
             result.push(src.slice(start, start + seg.viewLen));
         }
         return result.join('');
+    }
+
+    // ---- Virtual Selection API ----
+
+    // True while a programmatic setBaseAndExtent() call is in flight (counter > 0).
+    // selectionchange handlers should skip VS update logic when this is true.
+    get isSyncingSelection(): boolean { return this.programmaticSelectionUpdates > 0; }
+
+    getVirtualSelection(): VirtualSelection | null { return this.virtualSelection; }
+
+    clearVirtualSelection(): void { this.virtualSelection = null; }
+
+    // Initializes VS to span the entire document and syncs the DOM Range to proxy positions.
+    // Called from the Cmd-A handler instead of expandWindowToFull().
+    setVirtualSelectAll(): void {
+        const N = this.paragraphRecords.length;
+        if (N === 0) return;
+        this.virtualSelection = {
+            anchorParaIdx: 0,
+            anchorViewOff: 0,
+            focusParaIdx:  N - 1,
+            focusViewOff:  this.paragraphRecords[N - 1].viewLen,
+        };
+        this.syncDomRangeToVirtual();
+    }
+
+    // Called from selectionchange when VS is active and the event is not programmatic.
+    // Reads the new focus position from the DOM and updates VS.focusParaIdx/focusViewOff.
+    // Returns true if VS was changed (caller should then call syncDomRangeToVirtual()).
+    tryUpdateFocusFromDom(sel: Selection): boolean {
+        const vs = this.virtualSelection;
+        if (!vs) return false;
+        const focusNode = sel.focusNode;
+        if (!focusNode) return false;
+        const focusDiv = this.findParaDiv(focusNode);
+        if (!focusDiv) return false;
+        const focusParaIdx = this.getParagraphIndex(focusDiv);
+        if (focusParaIdx < 0) return false;
+        const newFocusViewOff = computeViewOffsetInDiv(focusDiv, this.editorEl, focusNode, sel.focusOffset);
+        if (focusParaIdx === vs.focusParaIdx && newFocusViewOff === vs.focusViewOff) return false;
+        this.virtualSelection = { ...vs, focusParaIdx, focusViewOff: newFocusViewOff };
+        return true;
+    }
+
+    // Sets the DOM Range to proxy positions derived from the current VS, so that native
+    // ::selection highlights all in-window paragraphs covered by the virtual selection.
+    syncDomRangeToVirtual(): void {
+        const vs = this.virtualSelection;
+        if (!vs || this.domEnd < 0) return;
+        const sel = window.getSelection();
+        if (!sel) return;
+        const anchor = this.proxyForEndpoint(vs.anchorParaIdx, vs.anchorViewOff);
+        const focus  = this.proxyForEndpoint(vs.focusParaIdx,  vs.focusViewOff);
+        this.markProgrammaticSelection();
+        sel.setBaseAndExtent(anchor.node, anchor.offset, focus.node, focus.offset);
+    }
+
+    // Returns the DOM node/offset for the given (paraIdx, viewOff) endpoint.
+    // For off-window paragraphs, returns a proxy at the nearest window boundary div.
+    private proxyForEndpoint(paraIdx: number, viewOff: number): { node: Node; offset: number } {
+        if (paraIdx < this.domStart) {
+            // Off-right: proxy = start of domStart div (rightmost visible paragraph)
+            const div = this.getWindowDiv(this.domStart);
+            if (div) return { node: div, offset: 0 };
+        } else if (paraIdx > this.domEnd) {
+            // Off-left: proxy = end of domEnd div (leftmost visible paragraph)
+            const div = this.getWindowDiv(this.domEnd);
+            if (div) {
+                const last = findLastBaseTextInElement(div, this.editorEl);
+                if (last) return { node: last.node, offset: last.offset };
+                return { node: div, offset: div.childNodes.length };
+            }
+        } else {
+            // In-window: actual DOM position
+            const div = this.getWindowDiv(paraIdx);
+            if (div) return computeDomPositionFromViewOff(div, this.editorEl, viewOff);
+        }
+        return { node: this.editorEl, offset: 0 };
+    }
+
+    // Increments the programmatic-update counter and schedules a decrement after the
+    // selectionchange event (macrotask) has had a chance to fire and be suppressed.
+    private markProgrammaticSelection(): void {
+        this.programmaticSelectionUpdates++;
+        setTimeout(() => { this.programmaticSelectionUpdates--; }, 0);
+    }
+
+    // Saves the current selection into VS and moves DOM endpoints out of the div that is
+    // about to be removed. Called from shrinkLeft/shrinkRight when a non-collapsed selection
+    // endpoint is inside the div being evicted from the DOM window.
+    private clampSelectionOnShrink(div: HTMLElement, paraIdx: number): void {
+        const sel = window.getSelection();
+        if (!sel || sel.isCollapsed) return;
+        const anchorInDiv = div.contains(sel.anchorNode);
+        const focusInDiv  = div.contains(sel.focusNode);
+        if (!anchorInDiv && !focusInDiv) return;
+
+        // Initialize VS from DOM if not yet active
+        if (!this.virtualSelection) {
+            const anchorDiv = this.findParaDiv(sel.anchorNode!);
+            const focusDiv  = this.findParaDiv(sel.focusNode!);
+            const anchorIdx = anchorDiv ? this.getParagraphIndex(anchorDiv) : -1;
+            const focusIdx  = focusDiv  ? this.getParagraphIndex(focusDiv)  : -1;
+            if (anchorIdx < 0 || focusIdx < 0) return;
+            this.virtualSelection = {
+                anchorParaIdx: anchorIdx,
+                anchorViewOff: anchorDiv
+                    ? computeViewOffsetInDiv(anchorDiv, this.editorEl, sel.anchorNode!, sel.anchorOffset)
+                    : 0,
+                focusParaIdx:  focusIdx,
+                focusViewOff:  focusDiv
+                    ? computeViewOffsetInDiv(focusDiv, this.editorEl, sel.focusNode!, sel.focusOffset)
+                    : 0,
+            };
+        }
+
+        // Compute proxy for the endpoint(s) in the div being removed
+        let proxyNode: Node;
+        let proxyOffset: number;
+        if (paraIdx === this.domEnd) {
+            // shrinkLeft removes domEnd: proxy = end of domEnd-1
+            const safeDiv = this.getWindowDiv(this.domEnd - 1);
+            if (!safeDiv) return;
+            const last = findLastBaseTextInElement(safeDiv, this.editorEl);
+            if (last) { proxyNode = last.node; proxyOffset = last.offset; }
+            else { proxyNode = safeDiv; proxyOffset = safeDiv.childNodes.length; }
+        } else if (paraIdx === this.domStart) {
+            // shrinkRight removes domStart: proxy = start of domStart+1
+            const safeDiv = this.getWindowDiv(this.domStart + 1);
+            if (!safeDiv) return;
+            proxyNode = safeDiv; proxyOffset = 0;
+        } else {
+            return;
+        }
+
+        let newAnchorNode: Node, newAnchorOffset: number;
+        let newFocusNode:  Node, newFocusOffset:  number;
+        if (anchorInDiv && focusInDiv) {
+            newAnchorNode = proxyNode; newAnchorOffset = proxyOffset;
+            newFocusNode  = proxyNode; newFocusOffset  = proxyOffset;
+        } else if (anchorInDiv) {
+            newAnchorNode = proxyNode;        newAnchorOffset = proxyOffset;
+            newFocusNode  = sel.focusNode!;   newFocusOffset  = sel.focusOffset;
+        } else {
+            newAnchorNode = sel.anchorNode!;  newAnchorOffset = sel.anchorOffset;
+            newFocusNode  = proxyNode;        newFocusOffset  = proxyOffset;
+        }
+        this.markProgrammaticSelection();
+        sel.setBaseAndExtent(newAnchorNode, newAnchorOffset, newFocusNode, newFocusOffset);
+    }
+
+    // Returns the direct paragraph div (non-spacer DIV child of editorEl) that contains node.
+    private findParaDiv(node: Node): HTMLElement | null {
+        let el: Node | null = node;
+        while (el && el !== this.editorEl) {
+            if (el instanceof HTMLElement
+                    && el.parentElement === this.editorEl
+                    && el.tagName === 'DIV'
+                    && !el.classList.contains(SPACER_CLASS)) {
+                return el;
+            }
+            el = el.parentElement;
+        }
+        return null;
+    }
+
+    // Returns the paragraphRecords index for the given in-window div, or -1 if not found.
+    private getParagraphIndex(div: HTMLElement): number {
+        const spacerOffset = this.rightSpacer ? 1 : 0;
+        const children = this.editorEl.children;
+        for (let k = spacerOffset; k < children.length; k++) {
+            if (children[k] === div) return this.domStart + (k - spacerOffset);
+        }
+        return -1;
     }
 
 }

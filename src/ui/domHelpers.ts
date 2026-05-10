@@ -185,6 +185,67 @@ export function computeDivViewLen(div: HTMLElement, rootEl: HTMLElement): number
     return count;
 }
 
+// Computes view offset (visible char count) from the start of div to (targetNode, targetOffset).
+// Applies the same rules as computeDivViewLen: excludes RT text and U+200B cursor anchors.
+export function computeViewOffsetInDiv(
+    div: HTMLElement, editorEl: HTMLElement,
+    targetNode: Node, targetOffset: number,
+): number {
+    let count = 0;
+    const walker = document.createTreeWalker(div, NodeFilter.SHOW_TEXT);
+    let node = walker.nextNode() as Text | null;
+    while (node) {
+        if (!isInsideRtNode(node, editorEl)) {
+            const isAnchor = !!findCursorAnchorAncestor(node, editorEl);
+            if (node === targetNode) {
+                count += isAnchor
+                    ? (node.textContent ?? '').slice(0, targetOffset).replace(/​/g, '').length
+                    : targetOffset;
+                return count;
+            }
+            count += isAnchor
+                ? (node.textContent ?? '').replace(/​/g, '').length
+                : node.length;
+        }
+        node = walker.nextNode() as Text | null;
+    }
+    return count;
+}
+
+// Computes the DOM position (node, offset) corresponding to viewOff within div.
+// Falls back to { node: div, offset: div.childNodes.length } when viewOff exceeds the div.
+export function computeDomPositionFromViewOff(
+    div: HTMLElement, editorEl: HTMLElement, viewOff: number,
+): { node: Node; offset: number } {
+    let remaining = viewOff;
+    const walker = document.createTreeWalker(div, NodeFilter.SHOW_TEXT);
+    let node = walker.nextNode() as Text | null;
+    while (node) {
+        if (!isInsideRtNode(node, editorEl)) {
+            const isAnchor = !!findCursorAnchorAncestor(node, editorEl);
+            const text = node.textContent ?? '';
+            if (isAnchor) {
+                const visLen = text.replace(/​/g, '').length;
+                if (remaining <= visLen) {
+                    let visible = 0;
+                    let actualOffset = text.length;
+                    for (let ci = 0; ci < text.length; ci++) {
+                        if (visible === remaining) { actualOffset = ci; break; }
+                        if (text[ci] !== '​') visible++;
+                    }
+                    return { node, offset: actualOffset };
+                }
+                remaining -= visLen;
+            } else {
+                if (remaining <= node.length) return { node, offset: remaining };
+                remaining -= node.length;
+            }
+        }
+        node = walker.nextNode() as Text | null;
+    }
+    return { node: div, offset: div.childNodes.length };
+}
+
 export function getExtraCharsFromAnnotation(rawText: string): string {
     const patterns = [
         /［＃「([^「」\n]+)」は縦中横］/,

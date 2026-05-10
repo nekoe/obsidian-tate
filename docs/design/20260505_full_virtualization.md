@@ -1,7 +1,7 @@
 # Full DOM Virtualization: Design Notes and Implementation History
 
 Created: 2026-05-05  
-Last updated: 2026-05-10
+Last updated: 2026-05-11
 
 ## Background
 
@@ -168,14 +168,32 @@ IO was removed in commit `4ce9438`. The following were deleted: `windowObserver`
 
 ## Technical Challenges and Fixes
 
-### 1. Drag selection spanning virtual boundaries
+### 1. Gap-spanning selection and scroll (Phase B — VirtualSelection)
 
-If the user starts a drag selection and scrolls so that the anchor end of the selection would
-leave the DOM window, the selection breaks (the browser cannot represent a range whose anchor is
-outside the DOM).
+If the user makes a selection that spans paragraphs outside the current DOM window (gap-spanning
+selection: Shift+Arrow past the window edge, Cmd-A, mouse drag with scroll), the browser cannot
+represent a Range whose endpoints are outside the DOM.
 
-**Solution**: track whether a drag is in progress (between `mousedown` and `mouseup`). Do not
-remove a div from the window if it contains `selection.anchorNode` or `selection.focusNode`.
+**Phase A solution** (earlier): block removal of a div if `selection.anchorNode` or
+`selection.focusNode` is inside it. This prevented scrolling from breaking the selection, but also
+prevented the window from shrinking, causing the window to "stall" at the selection boundary.
+
+**Phase B solution**: `VirtualSelection` interface + proxy-based DOM Range. When a non-collapsed
+selection endpoint is about to be evicted from the DOM window, `clampSelectionOnShrink()` saves the
+endpoint's true position in `virtualSelection` and moves the DOM Range endpoint to a proxy at the
+window boundary (start of `domStart` div for off-right; end of `domEnd` div for off-left). The
+removal proceeds. After all shrinks, `syncDomRangeToVirtual()` reconstructs the DOM Range from the
+current proxy positions, keeping native `::selection` coverage across all visible paragraphs.
+
+On `selectionchange` (Shift+Arrow), `tryUpdateFocusFromDom()` reads the new focus position from the
+DOM and updates `virtualSelection.focusViewOff`, then `syncDomRangeToVirtual()` re-syncs the anchor
+proxy. This allows Shift+Arrow to shrink the selection from the focus end even when the anchor is
+off-window.
+
+**Cycle prevention**: `markProgrammaticSelection()` increments `programmaticSelectionUpdates` before
+each `setBaseAndExtent()` call and schedules `setTimeout(() => count--, 0)`. The `selectionchange`
+event (macrotask) fires and sees `isSyncingSelection=true`, skipping the VS update. The setTimeout
+fires next, decrementing the counter.
 
 ### 2. Width of never-rendered paragraphs
 
@@ -369,7 +387,7 @@ The first Phase 2 implementation used IO watching the two boundary divs (`domSta
 (`187c93a` → `52dd7e4` → `c070bd2` → `38422af`) attempted to work around IO's initial-delivery
 problem. All failed. See "Why IntersectionObserver Was Abandoned" above.
 
-### Phase 2 — DOM window with scroll-event geometry (**current, DONE**)
+### Phase 2 — DOM window with scroll-event geometry (DONE)
 
 Replaced IO with an `onScroll` handler that computes expand/shrink from `scrollLeft`,
 `scrollWidth`, `clientWidth`, and stored spacer widths directly. IO and all its support
@@ -387,8 +405,6 @@ infrastructure were removed in `4ce9438`.
   points.
 - `expandRight()` / `shrinkRight()` / `expandLeft()` / `shrinkLeft()` window management methods.
 - `ensureInWindow(i)` for cursor restore (`setVisibleOffset`) and outline jump navigation.
-- `expandWindowToFull()` for Cmd-A select-all (rebuilds all paragraph divs in one
-  `replaceChildren` call, then defers native select-all to one `requestAnimationFrame`).
 - `resetWindow(lo, hi)` for repositioning the window with updated spacer widths.
 - `jumpWindowTo(center)` in `EditorElement` for teleporting the window to an off-window cursor.
 - `loadContent(content, initialViewOffset)` for file open: creates only the initial window of
@@ -397,25 +413,74 @@ infrastructure were removed in `4ce9438`.
 - `spliceRecords(lo, deleteCount, newLines)` with within-window detection to avoid stale-width
   spacer recomputation during Undo/Redo.
 - `paragraphChildIndex(i)` accounting for `rightSpacer` offset in `patchParagraphs`.
-- Drag-selection guard: `isDragging` flag set by `mousedown`/`mouseup`; `shrinkLeft()`/
-  `shrinkRight()` are no-ops when the target div contains `selection.anchorNode` or `.focusNode`.
 - `hasCleanDivStructure()` updated to subtract 2 (spacerCount) from `el.childNodes.length`.
 - `content-visibility: auto` and all related CSS removed from `.tate-editor > div` since the
   small DOM window makes it unnecessary.
 
-**Decision log:**
+**Phase 2 decision log:**
 
 | Question | Decision |
 |---|---|
 | Window management trigger | Scroll event (geometry), not IntersectionObserver (transitions) |
 | Remove `content-visibility: auto`? | Yes. DOM window (~100 divs) makes C-V:auto unnecessary. |
 | Width for never-rendered paragraphs | `estimateWidth(viewLen)` from font size and line height. |
-| Cmd-A behavior | `expandWindowToFull()` (single `replaceChildren`) then deferred native select-all via rAF. |
 | Initial window size | `INITIAL_WINDOW_HALF = 50` (100 total). Covers typical viewports plus expand buffer. |
 | Expand margin | 440 px (~10 paragraphs at default font). |
 | Shrink margin | 880 px (440 + 440 gap prevents oscillation). |
 | Spacer width on shrink | Use premeasured actual width (not estimate) to keep net scrollWidth change = 0. |
 | Spacer width on Undo/Redo splice within window | Skip recomputation; stored widths are correct since off-screen content is unchanged. |
+
+---
+
+### Phase B — VirtualSelection for gap-spanning selections (**current, DONE**)
+
+Gap-spanning selections (Cmd-A, Shift+Arrow past the window edge, mouse drag with scroll) require
+the DOM Range to remain valid even as the window shrinks. Phase B implements a lightweight
+`VirtualSelection` model that tracks true endpoint positions and re-synthesizes the DOM Range via
+proxy nodes at the window boundary.
+
+**What was built:**
+
+- `VirtualSelection` interface: `{ anchorParaIdx, anchorViewOff, focusParaIdx, focusViewOff }`.
+- `setVirtualSelectAll()`: replaces `expandWindowToFull()` for Cmd-A. Initializes VS to span the
+  entire document and calls `syncDomRangeToVirtual()`. No full DOM rebuild required.
+- `syncDomRangeToVirtual()`: computes proxy DOM positions for each VS endpoint (actual DOM position
+  if in-window; boundary proxy if off-window) and calls `sel.setBaseAndExtent()`.
+- `proxyForEndpoint(paraIdx, viewOff)`: maps a VS endpoint to a DOM `{node, offset}` pair.
+  Off-right → `{domStart_div, 0}`; off-left → last text node of `domEnd_div`; in-window →
+  `computeDomPositionFromViewOff()`.
+- `clampSelectionOnShrink(div, paraIdx)`: called from `shrinkLeft()`/`shrinkRight()` when a
+  non-collapsed selection endpoint is in the evicted div. Saves VS (if not yet active) and moves
+  the endpoint to a proxy in the adjacent safe div before removal.
+- `tryUpdateFocusFromDom(sel)`: reads `sel.focusNode` to update `VS.focusParaIdx/focusViewOff`.
+  Returns true if changed (caller calls `syncDomRangeToVirtual()`).
+- `markProgrammaticSelection()` / `isSyncingSelection`: counter + setTimeout pattern to suppress
+  selectionchange re-entry when `setBaseAndExtent()` is called programmatically.
+- `clearVirtualSelection()`: called on mousedown, non-Shift navigation keys, `detach()`.
+- `computeViewOffsetInDiv(div, editorEl, node, offset)` and
+  `computeDomPositionFromViewOff(div, editorEl, viewOff)` in `domHelpers.ts`: bidirectional
+  view-offset ↔ DOM position mapping within a paragraph div.
+- `deleteVirtualSelection(vs)` in `EditorElement`: reconstructs content from `paragraphRecords`
+  with the VS range removed, calls `loadContent()` + `setViewCursorOffset()`.
+- `sliceAozoraSrcByView(src, startViewOff, endViewOff?)` in `EditorElement`: slices Aozora source
+  by visible offsets using `buildSegmentMap` + `viewToSrc`.
+- `buildClipboardTextFromVirtual(vs)` in `EditorElement`: serializes VS range as Aozora text for
+  copy/cut clipboard.
+- `handleCopy` / `handleCut` / `handleSelectionDelete` in `EditorElement` now check for VS first.
+- `view.ts` event handlers: `selectionchange` runs VS tracking; `mousedown` clears VS; navigation
+  keys without Shift clear VS; `beforeinput` handles VS-insert (type over selection).
+
+**Phase B decision log:**
+
+| Question | Decision |
+|---|---|
+| VS visual feedback | Native DOM `::selection` via `setBaseAndExtent()` — no custom CSS |
+| Approach when anchor evicted | Proxy at window boundary (not ensureInWindow to avoid memory spike) |
+| Shift+Arrow after anchor evicted | `tryUpdateFocusFromDom` + `syncDomRangeToVirtual` in selectionchange; anchor proxy stays |
+| Scroll-following selection | `syncDomRangeToVirtual()` called at end of `adjustWindowOnScroll()` |
+| Cmd-A with virtual window | `setVirtualSelectAll()` + proxy range; no full DOM expansion |
+| selectionchange re-entry loop | `markProgrammaticSelection()` counter + `setTimeout(() => count--, 0)` |
+| VS delete implementation | `loadContent(newContent, cursorOffset)` — full window rebuild (acceptable for bulk delete) |
 
 ---
 

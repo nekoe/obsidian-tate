@@ -4,7 +4,7 @@ import { SyncCoordinator } from './sync/SyncCoordinator';
 import { EditorElement } from './ui/EditorElement';
 import { SearchPanel } from './ui/SearchPanel';
 import { ParagraphVirtualizer } from './ui/ParagraphVirtualizer';
-import type { ParagraphRecord } from './ui/ParagraphVirtualizer';
+import type { ParagraphRecord, VirtualSelection } from './ui/ParagraphVirtualizer';
 import { buildSegmentMap, viewToSrc } from './ui/SegmentMap';
 import { TatePluginSettings } from './settings';
 
@@ -158,6 +158,22 @@ export class VerticalWritingView extends ItemView {
         });
         this.registerDomEvent(editorEl.el, 'beforeinput', (e: InputEvent) => {
             if (!this.guardCm6(e)) return; // Block input if CM6 is unavailable (read-only)
+            // VS insert: when a gap-spanning virtual selection is active and the user types or
+            // presses Enter, delete the VS content first then perform the insertion.
+            if (!e.isComposing && e.inputType.startsWith('insert') && virtualizer.getVirtualSelection()) {
+                const vs = virtualizer.getVirtualSelection() as VirtualSelection;
+                e.preventDefault();
+                virtualizer.clearVirtualSelection();
+                editorEl.deleteVirtualSelection(vs);
+                if (e.inputType === 'insertText' && e.data) {
+                    document.execCommand('insertText', false, e.data);
+                } else if (e.inputType === 'insertParagraph') {
+                    document.execCommand('insertParagraph');
+                }
+                this.scheduleCommit();
+                this.searchPanel?.onContentChanged();
+                return;
+            }
             if (!e.isComposing && e.inputType === 'insertParagraph' && editorEl.isInlineExpanded()) {
                 e.preventDefault();
                 const contentChanged = editorEl.collapseForEnter();
@@ -241,6 +257,22 @@ export class VerticalWritingView extends ItemView {
             if (document.activeElement === editorEl.el) virtualizer.ensureWindowAroundCursor();
             const contentChanged = editorEl.handleSelectionChange();
             if (contentChanged) this.commitToCm6(); // Commit only if collapse changed content
+            // VS tracking: update focus when the user extends/shrinks a gap-spanning selection
+            // via Shift+Arrow or mouse drag. Skip programmatic updates to avoid re-entry loops.
+            if (document.activeElement === editorEl.el && !virtualizer.isSyncingSelection) {
+                const sel = window.getSelection();
+                if (sel) {
+                    const vs = virtualizer.getVirtualSelection();
+                    if (vs) {
+                        if (sel.isCollapsed) {
+                            virtualizer.clearVirtualSelection();
+                        } else {
+                            const changed = virtualizer.tryUpdateFocusFromDom(sel);
+                            if (changed) virtualizer.syncDomRangeToVirtual();
+                        }
+                    }
+                }
+            }
             // Track the cursor offset while the editor has focus so it can be restored after
             // focus() resets the caret on view re-activation.
             // Multiple selectionchange events can fire in a single frame (e.g. auto-indent inserts
@@ -258,6 +290,7 @@ export class VerticalWritingView extends ItemView {
         });
         this.registerDomEvent(editorEl.el, 'mousedown', () => {
             this.commitToCm6(); // Click ends a burst = commit point
+            virtualizer.clearVirtualSelection();
             editorEl.afterNavigation();
         });
         this.registerDomEvent(editorEl.el, 'keydown', (e: KeyboardEvent) => {
@@ -267,16 +300,12 @@ export class VerticalWritingView extends ItemView {
                 this.doUndoRedo(editorEl, e.shiftKey);
                 return;
             }
-            // Cmd-A / Ctrl-A: expand the DOM window to all paragraphs first, then let the
-            // browser perform the native select-all. Without expansion the selection would be
-            // limited to the ~50 divs currently in the DOM window.
+            // Cmd-A / Ctrl-A: initialize a VirtualSelection spanning the entire document.
+            // The DOM Range is set to proxy positions (window boundaries) so native ::selection
+            // highlights all in-window paragraphs; no full DOM expansion is required.
             if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.key === 'a') {
                 e.preventDefault();
-                virtualizer.expandWindowToFull();
-                requestAnimationFrame(() => {
-                    editorEl.el.focus();
-                    document.execCommand('selectAll');
-                });
+                if (virtualizer.paragraphRecords.length > 0) virtualizer.setVirtualSelectAll();
                 return;
             }
             // ArrowUp/ArrowDown inside a tcy span: move left/right within the horizontal text
@@ -295,6 +324,10 @@ export class VerticalWritingView extends ItemView {
             if (!e.isComposing && ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown',
                  'Home', 'End', 'PageUp', 'PageDown'].includes(e.key)) {
                 editorEl.notifyNavigationKey(e.key);
+                // Without Shift: the selection is being moved (not extended), so any
+                // gap-spanning VS is no longer relevant. Clear it so the next selectionchange
+                // does not try to re-sync the DOM Range to stale VS endpoints.
+                if (!e.shiftKey) virtualizer.clearVirtualSelection();
                 if (this.commitTimer !== null) this.commitToCm6();
                 editorEl.afterNavigation();
             }
