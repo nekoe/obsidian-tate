@@ -294,6 +294,25 @@ export class EditorElement {
                 ensureBrPlaceholder(endDiv);
             }
         }
+
+        // For cross-paragraph deletions the browser may leave a non-collapsed selection
+        // (anchorNode in startDiv, focusNode in endDiv) even after deleteContents().
+        // When the virtualizer later inserts new divs via expandRight/expandLeft the
+        // stale selection extent can make those divs appear highlighted. Explicitly
+        // collapse the selection to prevent this visual artifact.
+        if (startDiv !== endDiv) {
+            const sel = window.getSelection();
+            if (sel) {
+                const target = startDiv?.isConnected ? startDiv : endDiv?.isConnected ? endDiv : null;
+                if (target) {
+                    const r = document.createRange();
+                    r.selectNodeContents(target);
+                    r.collapse(true);
+                    sel.removeAllRanges();
+                    sel.addRange(r);
+                }
+            }
+        }
     }
 
     // Serializes the current selection to Aozora notation and writes it to text/plain.

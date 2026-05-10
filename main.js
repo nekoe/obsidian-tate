@@ -2585,6 +2585,19 @@ var EditorElement = class {
         ensureBrPlaceholder(endDiv);
       }
     }
+    if (startDiv !== endDiv) {
+      const sel = window.getSelection();
+      if (sel) {
+        const target = (startDiv == null ? void 0 : startDiv.isConnected) ? startDiv : (endDiv == null ? void 0 : endDiv.isConnected) ? endDiv : null;
+        if (target) {
+          const r = document.createRange();
+          r.selectNodeContents(target);
+          r.collapse(true);
+          sel.removeAllRanges();
+          sel.addRange(r);
+        }
+      }
+    }
   }
   // Serializes the current selection to Aozora notation and writes it to text/plain.
   // Returns the range on success (for cut to delete), or null if nothing to serialize.
@@ -3812,6 +3825,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
       if (!this.guardCm6(e)) return;
       editorEl.handleCut(e);
       this.commitToCm6();
+      virtualizer.adjustNow();
       (_a = this.searchPanel) == null ? void 0 : _a.onContentChanged();
     });
     this.registerDomEvent(editorEl.el, "paste", (e) => {
@@ -3833,6 +3847,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
       if (editorEl.handleSelectionDelete(e)) {
         e.preventDefault();
         editorEl.normalizeEmptyDom();
+        virtualizer.adjustNow();
         this.scheduleCommit();
         (_a = this.searchPanel) == null ? void 0 : _a.onContentChanged();
         return;

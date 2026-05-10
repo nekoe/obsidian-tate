@@ -146,7 +146,8 @@ export class VerticalWritingView extends ItemView {
         this.registerDomEvent(editorEl.el, 'cut', (e: ClipboardEvent) => {
             if (!this.guardCm6(e)) return; // Block cut if CM6 is unavailable
             editorEl.handleCut(e);
-            this.commitToCm6(); // Cut is an immediate commit point
+            this.commitToCm6(); // Cut is an immediate commit point (also runs syncWindowSrcs)
+            virtualizer.adjustNow(); // Repair layout: removing in-window divs shrinks scrollWidth
             this.searchPanel?.onContentChanged();
         });
         this.registerDomEvent(editorEl.el, 'paste', (e: ClipboardEvent) => {
@@ -171,6 +172,7 @@ export class VerticalWritingView extends ItemView {
             if (editorEl.handleSelectionDelete(e)) {
                 e.preventDefault();
                 editorEl.normalizeEmptyDom();
+                virtualizer.adjustNow(); // Repair layout: removing in-window divs shrinks scrollWidth
                 this.scheduleCommit();
                 this.searchPanel?.onContentChanged();
                 return;
