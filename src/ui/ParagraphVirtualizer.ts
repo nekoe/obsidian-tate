@@ -608,6 +608,17 @@ export class ParagraphVirtualizer {
         if (!vs) return false;
         const focusNode = sel.focusNode;
         if (!focusNode) return false;
+
+        // If the DOM focus is at the proxy position that syncDomRangeToVirtual would set,
+        // this selectionchange was triggered by our own setBaseAndExtent (not by the user).
+        // Updating VS from a proxy position would corrupt focusParaIdx to a boundary index.
+        // This check is timing-independent: Chrome fires setTimeout(0) before selectionchange,
+        // so the counter-based isSyncingSelection guard is unreliable for syncDomRangeToVirtual.
+        const expectedFocusProxy = this.proxyForEndpoint(vs.focusParaIdx, vs.focusViewOff);
+        if (sel.focusNode === expectedFocusProxy.node && sel.focusOffset === expectedFocusProxy.offset) {
+            return false;
+        }
+
         const focusDiv = this.findParaDiv(focusNode);
         if (!focusDiv) return false;
         const focusParaIdx = this.getParagraphIndex(focusDiv);

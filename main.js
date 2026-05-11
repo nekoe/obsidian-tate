@@ -2458,6 +2458,10 @@ var ParagraphVirtualizer = class {
     if (!vs) return false;
     const focusNode = sel.focusNode;
     if (!focusNode) return false;
+    const expectedFocusProxy = this.proxyForEndpoint(vs.focusParaIdx, vs.focusViewOff);
+    if (sel.focusNode === expectedFocusProxy.node && sel.focusOffset === expectedFocusProxy.offset) {
+      return false;
+    }
     const focusDiv = this.findParaDiv(focusNode);
     if (!focusDiv) return false;
     const focusParaIdx = this.getParagraphIndex(focusDiv);
