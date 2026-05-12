@@ -2674,7 +2674,7 @@ var EditorElement = class {
     let charCount = 0;
     for (let i = 0; i < N; i++) {
       const viewLen = virt ? virt.buildParagraphVisibleText(lines[i]).length : lines[i].length;
-      if (initialViewOffset <= charCount + viewLen) {
+      if (initialViewOffset < charCount + viewLen) {
         center = i;
         break;
       }
@@ -3463,13 +3463,27 @@ var EditorElement = class {
         idx--;
         continue;
       }
+      if (remaining === 0) {
+        const range2 = document.createRange();
+        const firstWalker = document.createTreeWalker(child, NodeFilter.SHOW_TEXT);
+        const firstNode = firstWalker.nextNode();
+        if (firstNode) {
+          range2.setStart(firstNode, 0);
+        } else {
+          range2.setStart(child, 0);
+        }
+        range2.collapse(true);
+        sel.removeAllRanges();
+        sel.addRange(range2);
+        return;
+      }
       const walker = document.createTreeWalker(child, NodeFilter.SHOW_TEXT);
       let node = walker.nextNode();
       while (node) {
         if (!isInsideRtNode(node, this.el)) {
           const isAnchor = !!findCursorAnchorAncestor(node, this.el);
           const visLen = isAnchor ? ((_a = node.textContent) != null ? _a : "").replace(/\u200B/g, "").length : node.length;
-          if (remaining <= visLen) {
+          if (remaining < visLen) {
             const range2 = document.createRange();
             let actualOffset;
             if (isAnchor) {

@@ -109,7 +109,9 @@ export class EditorElement {
         let charCount = 0;
         for (let i = 0; i < N; i++) {
             const viewLen = virt ? virt.buildParagraphVisibleText(lines[i]).length : lines[i].length;
-            if (initialViewOffset <= charCount + viewLen) { center = i; break; }
+            // Use strict < so that offset 0 within paragraph i is not ambiguously assigned
+            // to paragraph i-1 (whose end has the same cumulative offset value).
+            if (initialViewOffset < charCount + viewLen) { center = i; break; }
             charCount += viewLen;
         }
         const lo = Math.max(0, center - INITIAL_WINDOW_HALF);
@@ -1116,6 +1118,22 @@ export class EditorElement {
                 continue;
             }
 
+            // Offset 0 at the start of this paragraph: place cursor before the first
+            // character rather than at the end of the previous paragraph's last text node.
+            // Both positions are view-offset-equivalent, but placing at para-start is correct
+            // when deleteVirtualSelection produces a cursor at the beginning of a paragraph.
+            if (remaining === 0) {
+                const range = document.createRange();
+                const firstWalker = document.createTreeWalker(child, NodeFilter.SHOW_TEXT);
+                const firstNode = firstWalker.nextNode() as Text | null;
+                if (firstNode) { range.setStart(firstNode, 0); }
+                else            { range.setStart(child, 0); }
+                range.collapse(true);
+                sel.removeAllRanges();
+                sel.addRange(range);
+                return;
+            }
+
             // Walk text nodes of the in-window div.
             const walker = document.createTreeWalker(child, NodeFilter.SHOW_TEXT);
             let node = walker.nextNode() as Text | null;
@@ -1125,7 +1143,7 @@ export class EditorElement {
                     const visLen = isAnchor
                         ? (node.textContent ?? '').replace(/\u200B/g, '').length
                         : node.length;
-                    if (remaining <= visLen) {
+                    if (remaining < visLen) {
                         const range = document.createRange();
                         let actualOffset: number;
                         if (isAnchor) {
