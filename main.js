@@ -2674,7 +2674,7 @@ var EditorElement = class {
     let charCount = 0;
     for (let i = 0; i < N; i++) {
       const viewLen = virt ? virt.buildParagraphVisibleText(lines[i]).length : lines[i].length;
-      if (initialViewOffset < charCount + viewLen) {
+      if (initialViewOffset <= charCount + viewLen) {
         center = i;
         break;
       }
@@ -3182,6 +3182,24 @@ var EditorElement = class {
     cursorViewOffset += so;
     this.inlineEditor.reset();
     this.loadContent(newContent, cursorViewOffset);
+    if (so === 0) {
+      const targetDiv = virt.getWindowDiv(si);
+      if (targetDiv) {
+        const walker = document.createTreeWalker(targetDiv, NodeFilter.SHOW_TEXT);
+        const firstNode = walker.nextNode();
+        const range = document.createRange();
+        if (firstNode) {
+          range.setStart(firstNode, 0);
+        } else {
+          range.setStart(targetDiv, 0);
+        }
+        range.collapse(true);
+        const sel = window.getSelection();
+        sel == null ? void 0 : sel.removeAllRanges();
+        sel == null ? void 0 : sel.addRange(range);
+        return;
+      }
+    }
     this.setViewCursorOffset(cursorViewOffset);
   }
   // Slices an Aozora source string to the visible character range [startViewOff, endViewOff).
@@ -3483,7 +3501,7 @@ var EditorElement = class {
         if (!isInsideRtNode(node, this.el)) {
           const isAnchor = !!findCursorAnchorAncestor(node, this.el);
           const visLen = isAnchor ? ((_a = node.textContent) != null ? _a : "").replace(/\u200B/g, "").length : node.length;
-          if (remaining < visLen) {
+          if (remaining <= visLen) {
             const range2 = document.createRange();
             let actualOffset;
             if (isAnchor) {
