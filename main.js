@@ -4196,21 +4196,12 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
       (_a = this.searchPanel) == null ? void 0 : _a.onContentChanged();
     });
     this.registerDomEvent(editorEl.el, "beforeinput", (e) => {
-      var _a, _b;
+      var _a;
       if (!this.guardCm6(e)) return;
       if (!e.isComposing && e.inputType.startsWith("insert") && virtualizer.getVirtualSelection()) {
         const vs = virtualizer.getVirtualSelection();
-        e.preventDefault();
         virtualizer.clearVirtualSelection();
         editorEl.deleteVirtualSelection(vs);
-        if (e.inputType === "insertText" && e.data) {
-          document.execCommand("insertText", false, e.data);
-        } else if (e.inputType === "insertParagraph") {
-          document.execCommand("insertParagraph");
-        }
-        this.commitToCm6();
-        (_a = this.searchPanel) == null ? void 0 : _a.onContentChanged();
-        return;
       }
       if (!e.isComposing && e.inputType === "insertParagraph" && editorEl.isInlineExpanded()) {
         e.preventDefault();
@@ -4223,7 +4214,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
         editorEl.normalizeEmptyDom();
         virtualizer.adjustNow();
         this.scheduleCommit();
-        (_b = this.searchPanel) == null ? void 0 : _b.onContentChanged();
+        (_a = this.searchPanel) == null ? void 0 : _a.onContentChanged();
         return;
       }
       editorEl.onBeforeInput(e);

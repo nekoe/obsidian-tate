@@ -160,19 +160,16 @@ export class VerticalWritingView extends ItemView {
             if (!this.guardCm6(e)) return; // Block input if CM6 is unavailable (read-only)
             // VS insert: when a gap-spanning virtual selection is active and the user types or
             // presses Enter, delete the VS content first then perform the insertion.
+            // Do NOT preventDefault: after deleteVirtualSelection repositions the cursor to the
+            // deletion point, the browser processes the original insertText/insertParagraph event
+            // at the new cursor position. The subsequent input event handles commit and search
+            // panel update via the normal scheduling path.
             if (!e.isComposing && e.inputType.startsWith('insert') && virtualizer.getVirtualSelection()) {
                 const vs = virtualizer.getVirtualSelection() as VirtualSelection;
-                e.preventDefault();
                 virtualizer.clearVirtualSelection();
                 editorEl.deleteVirtualSelection(vs);
-                if (e.inputType === 'insertText' && e.data) {
-                    document.execCommand('insertText', false, e.data);
-                } else if (e.inputType === 'insertParagraph') {
-                    document.execCommand('insertParagraph');
-                }
-                this.commitToCm6(); // immediate commit (same as cut — bulk deletion + insertion)
-                this.searchPanel?.onContentChanged();
-                return;
+                // Fall through: browser inserts at new cursor, onBeforeInput (InputTransformer)
+                // runs normally, then input event fires to handle commit and search updates.
             }
             if (!e.isComposing && e.inputType === 'insertParagraph' && editorEl.isInlineExpanded()) {
                 e.preventDefault();
