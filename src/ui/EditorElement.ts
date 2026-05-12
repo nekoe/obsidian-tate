@@ -369,6 +369,16 @@ export class EditorElement {
         const text = (e.clipboardData?.getData('text/plain') ?? '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
         if (!text) return;
 
+        // If a gap-spanning VS is active, delete its content first so that off-window
+        // selected paragraphs are also removed before the paste is applied.
+        // paste fires before beforeinput(insertFromPaste) when e.preventDefault() is called,
+        // so the beforeinput VS handler never runs for paste.
+        const vs = this.virtualizer?.getVirtualSelection();
+        if (vs) {
+            this.virtualizer!.clearVirtualSelection();
+            this.deleteVirtualSelection(vs);
+        }
+
         const sel = window.getSelection();
         if (!sel || sel.rangeCount === 0) return;
 

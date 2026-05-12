@@ -239,6 +239,14 @@ export class VerticalWritingView extends ItemView {
         });
         this.registerDomEvent(editorEl.el, 'compositionstart', () => {
             if (!this.getCm6Editor()) return; // read-only mode, skip indent
+            // If a gap-spanning VS is active, delete its content before IME composition begins.
+            // compositionstart fires before the browser deletes the DOM proxy selection, so this
+            // ensures off-window paragraphs in the VS are also removed.
+            const vs = virtualizer.getVirtualSelection();
+            if (vs) {
+                virtualizer.clearVirtualSelection();
+                editorEl.deleteVirtualSelection(vs);
+            }
             editorEl.onCompositionStart();
         });
         this.registerDomEvent(editorEl.el, 'compositionend', (e: CompositionEvent) => {

@@ -2883,10 +2883,15 @@ var EditorElement = class {
   // Returns newly created off-screen divs that need a proactive layout cache refresh.
   // Single-line paste into a visible cursor div returns [] (cache updates naturally on-screen).
   handlePaste(e) {
-    var _a, _b;
+    var _a, _b, _c;
     e.preventDefault();
     const text = ((_b = (_a = e.clipboardData) == null ? void 0 : _a.getData("text/plain")) != null ? _b : "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
     if (!text) return;
+    const vs = (_c = this.virtualizer) == null ? void 0 : _c.getVirtualSelection();
+    if (vs) {
+      this.virtualizer.clearVirtualSelection();
+      this.deleteVirtualSelection(vs);
+    }
     const sel = window.getSelection();
     if (!sel || sel.rangeCount === 0) return;
     const range = sel.getRangeAt(0);
@@ -4222,6 +4227,11 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
     });
     this.registerDomEvent(editorEl.el, "compositionstart", () => {
       if (!this.getCm6Editor()) return;
+      const vs = virtualizer.getVirtualSelection();
+      if (vs) {
+        virtualizer.clearVirtualSelection();
+        editorEl.deleteVirtualSelection(vs);
+      }
       editorEl.onCompositionStart();
     });
     this.registerDomEvent(editorEl.el, "compositionend", (e) => {
