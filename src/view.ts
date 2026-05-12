@@ -197,6 +197,7 @@ export class VerticalWritingView extends ItemView {
             // When default is prevented the browser cancels the corresponding input event,
             // so scheduleCommit() would never be called. Schedule it here instead.
             if (e.defaultPrevented && e.inputType === 'insertText' && !e.isComposing) {
+                virtualizer.adjustNow(); // Repair layout after InputTransformer's direct DOM mutation
                 this.scheduleCommit();
             }
         });

@@ -1849,6 +1849,7 @@ var InputTransformer = class {
     const sel = window.getSelection();
     if (!sel || sel.rangeCount === 0) return;
     const range = sel.getRangeAt(0);
+    if (!range.collapsed) return;
     let char = e.data;
     if (this.settings.convertHalfWidthSpace && char === " ") {
       char = "\u3000";
@@ -4228,6 +4229,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
       }
       editorEl.onBeforeInput(e);
       if (e.defaultPrevented && e.inputType === "insertText" && !e.isComposing) {
+        virtualizer.adjustNow();
         this.scheduleCommit();
       }
     });

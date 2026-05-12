@@ -92,6 +92,13 @@ export class InputTransformer {
         if (!sel || sel.rangeCount === 0) return;
         const range = sel.getRangeAt(0);
 
+        // Do not intercept non-collapsed selections. The auto-indent and bracket de-indent
+        // logic assumes a collapsed cursor, and calling range.deleteContents() here on a
+        // cross-paragraph range skips the div-shell cleanup that deleteRangeContents()
+        // performs, corrupting the DOM. Let the browser handle the insertion; the
+        // subsequent input event will call adjustNow() and scheduleCommit() normally.
+        if (!range.collapsed) return;
+
         let char = e.data;
 
         if (this.settings.convertHalfWidthSpace && char === ' ') {
