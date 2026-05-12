@@ -304,6 +304,18 @@ export class VerticalWritingView extends ItemView {
             editorEl.afterNavigation();
         });
         this.registerDomEvent(editorEl.el, 'keydown', (e: KeyboardEvent) => {
+            // Delete VS content on printable key press before compositionstart fires.
+            // The browser establishes the IME anchor when it passes the key to the IME engine,
+            // which happens AFTER keydown handlers complete but BEFORE compositionstart fires.
+            // Deleting VS here (rather than in compositionstart) ensures the cursor is already
+            // at (si, so) when the IME records its anchor, so composition text lands correctly.
+            if (!e.isComposing && !e.metaKey && !e.ctrlKey && e.key.length === 1
+                    && virtualizer.getVirtualSelection()) {
+                const vs = virtualizer.getVirtualSelection() as VirtualSelection;
+                virtualizer.clearVirtualSelection();
+                editorEl.deleteVirtualSelection(vs);
+                // Fall through: let subsequent beforeinput/compositionstart proceed normally.
+            }
             // Ctrl+Z / Cmd+Z: Undo,  Ctrl+Shift+Z / Cmd+Shift+Z: Redo
             if ((e.metaKey || e.ctrlKey) && !e.altKey && e.key === 'z') {
                 e.preventDefault();

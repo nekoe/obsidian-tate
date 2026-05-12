@@ -2664,6 +2664,7 @@ var EditorElement = class {
   // paragraphs are represented by spacers sized from estimated widths (no DOM nodes needed).
   // Use instead of setValue() for file loads. setValue() is kept for undo/redo paths.
   loadContent(content, initialViewOffset) {
+    var _a;
     content = content.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
     this.inlineEditor.reset();
     if (this.getValue() === content && this.el.childNodes.length > 0) return;
@@ -2682,16 +2683,20 @@ var EditorElement = class {
     }
     const lo = Math.max(0, center - INITIAL_WINDOW_HALF);
     const hi = Math.min(N - 1, center + INITIAL_WINDOW_HALF);
-    const windowNodes = [];
-    for (let i = lo; i <= hi; i++) {
-      const div = document.createElement("div");
-      div.replaceChildren((0, import_obsidian4.sanitizeHTMLToDom)(parseInlineToHtml(lines[i]) || "<br>"));
-      windowNodes.push(div);
+    const newCount = hi - lo + 1;
+    const spacerOffset = (virt == null ? void 0 : virt.rightSpacer) ? 1 : 0;
+    const spacerCount = (virt == null ? void 0 : virt.rightSpacer) ? 2 : 0;
+    const existingCount = Math.max(0, this.el.children.length - spacerCount);
+    for (let i = existingCount - 1; i >= newCount; i--) {
+      this.el.children[i + spacerOffset].remove();
     }
-    if ((virt == null ? void 0 : virt.rightSpacer) && virt.leftSpacer) {
-      this.el.replaceChildren(virt.rightSpacer, ...windowNodes, virt.leftSpacer);
-    } else {
-      this.el.replaceChildren(...windowNodes);
+    const anchor = (_a = virt == null ? void 0 : virt.leftSpacer) != null ? _a : null;
+    for (let i = existingCount; i < newCount; i++) {
+      this.el.insertBefore(document.createElement("div"), anchor);
+    }
+    for (let i = 0; i < newCount; i++) {
+      const div = this.el.children[i + spacerOffset];
+      div.replaceChildren((0, import_obsidian4.sanitizeHTMLToDom)(parseInlineToHtml(lines[lo + i]) || "<br>"));
     }
     virt == null ? void 0 : virt.initRecords(lines, lo, hi);
   }
@@ -4308,6 +4313,11 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
       editorEl.afterNavigation();
     });
     this.registerDomEvent(editorEl.el, "keydown", (e) => {
+      if (!e.isComposing && !e.metaKey && !e.ctrlKey && e.key.length === 1 && virtualizer.getVirtualSelection()) {
+        const vs = virtualizer.getVirtualSelection();
+        virtualizer.clearVirtualSelection();
+        editorEl.deleteVirtualSelection(vs);
+      }
       if ((e.metaKey || e.ctrlKey) && !e.altKey && e.key === "z") {
         e.preventDefault();
         this.doUndoRedo(editorEl, e.shiftKey);

@@ -114,19 +114,30 @@ export class EditorElement {
         }
         const lo = Math.max(0, center - INITIAL_WINDOW_HALF);
         const hi = Math.min(N - 1, center + INITIAL_WINDOW_HALF);
+        const newCount = hi - lo + 1;
 
-        // Build only the window paragraph divs.
-        const windowNodes: Node[] = [];
-        for (let i = lo; i <= hi; i++) {
-            const div = document.createElement('div');
-            div.replaceChildren(sanitizeHTMLToDom(parseInlineToHtml(lines[i]) || '<br>'));
-            windowNodes.push(div);
+        // Reuse existing paragraph div elements and update only their contents.
+        // Avoids calling replaceChildren on the contenteditable root (this.el), which would
+        // destroy all direct children at once — a more disruptive mutation than in-place updates.
+        const spacerOffset  = virt?.rightSpacer ? 1 : 0;
+        const spacerCount   = virt?.rightSpacer ? 2 : 0;
+        const existingCount = Math.max(0, this.el.children.length - spacerCount);
+
+        // Remove surplus divs (iterate backwards to avoid index shift).
+        for (let i = existingCount - 1; i >= newCount; i--) {
+            (this.el.children[i + spacerOffset] as HTMLElement).remove();
         }
-        if (virt?.rightSpacer && virt.leftSpacer) {
-            this.el.replaceChildren(virt.rightSpacer, ...windowNodes, virt.leftSpacer);
-        } else {
-            this.el.replaceChildren(...windowNodes);
+        // Insert missing divs before leftSpacer (or append when no spacers).
+        const anchor = virt?.leftSpacer ?? null;
+        for (let i = existingCount; i < newCount; i++) {
+            this.el.insertBefore(document.createElement('div'), anchor);
         }
+        // Update each div's content in place.
+        for (let i = 0; i < newCount; i++) {
+            const div = this.el.children[i + spacerOffset] as HTMLElement;
+            div.replaceChildren(sanitizeHTMLToDom(parseInlineToHtml(lines[lo + i]) || '<br>'));
+        }
+
         // initRecords builds all records (estimated widths) then calls resetWindow to set [lo, hi].
         virt?.initRecords(lines, lo, hi);
     }
