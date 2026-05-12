@@ -47,6 +47,10 @@ export class VerticalWritingView extends ItemView {
     // ensures pushScope/popScope are always balanced regardless of call order.
     private escScopeActive = false;
     private searchPanel: SearchPanel | null = null;
+    // Set in compositionstart when IME begins over a non-collapsed (range) selection.
+    // Consumed on the first isComposing=true input event to call adjustNow() once,
+    // after the browser has deleted the range and inserted the composition text.
+    private needsLayoutRepairOnFirstComposingInput = false;
 
     constructor(leaf: WorkspaceLeaf, private readonly plugin: TatePlugin) {
         super(leaf);
@@ -206,6 +210,13 @@ export class VerticalWritingView extends ItemView {
             // Skip during IME composition: normalizeEmptyDom resets the cursor, which would
             // interrupt the ongoing composition and misplace the candidate text.
             if (!inputEvent.isComposing) editorEl.normalizeEmptyDom();
+            // Repair layout on the first composing input when IME started over a range selection.
+            // The browser deletes the range and inserts composition text in this event, potentially
+            // removing in-window divs; adjustNow restores the window to cover the viewport.
+            if (inputEvent.isComposing && this.needsLayoutRepairOnFirstComposingInput) {
+                virtualizer.adjustNow();
+                this.needsLayoutRepairOnFirstComposingInput = false;
+            }
             if (!inputEvent.isComposing) {
                 // Repair layout in case the browser deleted in-window divs before inserting
                 // (e.g. insertText or insertParagraph with a non-collapsed selection).
@@ -249,6 +260,13 @@ export class VerticalWritingView extends ItemView {
             if (vs) {
                 virtualizer.clearVirtualSelection();
                 editorEl.deleteVirtualSelection(vs);
+            } else {
+                // No VS: if a range selection exists, the browser will delete it and insert
+                // composition text in the first isComposing input event — AFTER compositionstart.
+                // Set a flag so that first input event calls adjustNow() to repair the layout.
+                // The VS branch already gets adjustNow via deleteVirtualSelection → scrollCursorIntoView.
+                const sel = window.getSelection();
+                this.needsLayoutRepairOnFirstComposingInput = !!sel && !sel.isCollapsed;
             }
             editorEl.onCompositionStart();
         });

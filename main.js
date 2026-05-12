@@ -4130,6 +4130,10 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
     // ensures pushScope/popScope are always balanced regardless of call order.
     this.escScopeActive = false;
     this.searchPanel = null;
+    // Set in compositionstart when IME begins over a non-collapsed (range) selection.
+    // Consumed on the first isComposing=true input event to call adjustNow() once,
+    // after the browser has deleted the range and inserted the composition text.
+    this.needsLayoutRepairOnFirstComposingInput = false;
     this.escScope = new import_obsidian6.Scope(this.app.scope);
   }
   getViewType() {
@@ -4237,6 +4241,10 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
       var _a, _b, _c, _d;
       const inputEvent = e;
       if (!inputEvent.isComposing) editorEl.normalizeEmptyDom();
+      if (inputEvent.isComposing && this.needsLayoutRepairOnFirstComposingInput) {
+        virtualizer.adjustNow();
+        this.needsLayoutRepairOnFirstComposingInput = false;
+      }
       if (!inputEvent.isComposing) {
         virtualizer.adjustNow();
         if (inputEvent.inputType === "insertParagraph") {
@@ -4266,6 +4274,9 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
       if (vs) {
         virtualizer.clearVirtualSelection();
         editorEl.deleteVirtualSelection(vs);
+      } else {
+        const sel = window.getSelection();
+        this.needsLayoutRepairOnFirstComposingInput = !!sel && !sel.isCollapsed;
       }
       editorEl.onCompositionStart();
     });
