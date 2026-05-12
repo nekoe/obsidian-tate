@@ -153,6 +153,7 @@ export class VerticalWritingView extends ItemView {
         this.registerDomEvent(editorEl.el, 'paste', (e: ClipboardEvent) => {
             if (!this.guardCm6(e)) return; // Block if CM6 is unavailable
             editorEl.handlePaste(e);
+            virtualizer.adjustNow(); // Repair layout: handlePaste may remove in-window divs
             this.commitToCm6(); // Paste is an immediate commit point
             this.searchPanel?.onContentChanged();
         });
@@ -205,6 +206,10 @@ export class VerticalWritingView extends ItemView {
             // interrupt the ongoing composition and misplace the candidate text.
             if (!inputEvent.isComposing) editorEl.normalizeEmptyDom();
             if (!inputEvent.isComposing) {
+                // Repair layout in case the browser deleted in-window divs before inserting
+                // (e.g. insertText or insertParagraph with a non-collapsed selection).
+                // This mirrors the adjustNow() call in handleSelectionDelete for deleteContent*.
+                virtualizer.adjustNow();
                 if (inputEvent.inputType === 'insertParagraph') {
                     editorEl.handleParagraphInsert();
                     this.commitToCm6(); // Enter is an immediate commit point

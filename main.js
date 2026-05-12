@@ -4195,6 +4195,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
       var _a;
       if (!this.guardCm6(e)) return;
       editorEl.handlePaste(e);
+      virtualizer.adjustNow();
       this.commitToCm6();
       (_a = this.searchPanel) == null ? void 0 : _a.onContentChanged();
     });
@@ -4230,6 +4231,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
       const inputEvent = e;
       if (!inputEvent.isComposing) editorEl.normalizeEmptyDom();
       if (!inputEvent.isComposing) {
+        virtualizer.adjustNow();
         if (inputEvent.inputType === "insertParagraph") {
           editorEl.handleParagraphInsert();
           this.commitToCm6();
