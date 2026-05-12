@@ -756,10 +756,15 @@ export class EditorElement {
                 const sel = window.getSelection();
                 sel?.removeAllRanges();
                 sel?.addRange(range);
-                return;
+            } else {
+                this.setViewCursorOffset(cursorViewOffset);
             }
+        } else {
+            this.setViewCursorOffset(cursorViewOffset);
         }
-        this.setViewCursorOffset(cursorViewOffset);
+        // loadContent rebuilds the DOM and may shift the scroll position due to spacer width
+        // changes. Scroll the cursor into view with minimal movement to keep it visible.
+        this.scrollCursorIntoView('nearest');
     }
 
     // Slices an Aozora source string to the visible character range [startViewOff, endViewOff).

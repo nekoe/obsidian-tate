@@ -3197,10 +3197,13 @@ var EditorElement = class {
         const sel = window.getSelection();
         sel == null ? void 0 : sel.removeAllRanges();
         sel == null ? void 0 : sel.addRange(range);
-        return;
+      } else {
+        this.setViewCursorOffset(cursorViewOffset);
       }
+    } else {
+      this.setViewCursorOffset(cursorViewOffset);
     }
-    this.setViewCursorOffset(cursorViewOffset);
+    this.scrollCursorIntoView("nearest");
   }
   // Slices an Aozora source string to the visible character range [startViewOff, endViewOff).
   sliceAozoraSrcByView(src, startViewOff, endViewOff) {
