@@ -2058,12 +2058,8 @@ var ParagraphVirtualizer = class {
     if (this.rightSpacer) return;
     const right = document.createElement("div");
     right.classList.add(SPACER_CLASS);
-    right.style.setProperty("pointer-events", "none");
-    right.style.setProperty("user-select", "none");
     const left = document.createElement("div");
     left.classList.add(SPACER_CLASS);
-    left.style.setProperty("pointer-events", "none");
-    left.style.setProperty("user-select", "none");
     this.editorEl.prepend(right);
     this.editorEl.append(left);
     this.rightSpacer = right;
