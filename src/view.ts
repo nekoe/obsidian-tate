@@ -308,8 +308,8 @@ export class VerticalWritingView extends ItemView {
             // text via insertText(), triggering one event per DOM mutation). Debounce with rAF so
             // only the final cursor position per frame is captured, avoiding redundant O(N) scans.
             if (activeDocument.activeElement === editorEl.el && !editorEl.isInlineExpanded()) {
-                if (this.selectionChangeRafId !== null) cancelAnimationFrame(this.selectionChangeRafId);
-                this.selectionChangeRafId = requestAnimationFrame(() => {
+                if (this.selectionChangeRafId !== null) window.cancelAnimationFrame(this.selectionChangeRafId);
+                this.selectionChangeRafId = window.requestAnimationFrame(() => {
                     this.selectionChangeRafId = null;
                     if (activeDocument.activeElement === editorEl.el && !editorEl.isInlineExpanded()) {
                         this.lastKnownViewOffset = editorEl.getViewCursorOffset();
@@ -562,14 +562,14 @@ export class VerticalWritingView extends ItemView {
             // resets the caret, the else-if branch will re-set it via lastKnownViewOffset.
             this.lastKnownViewOffset = savedOffset;
             const gen = this.scrollRestoringGeneration; // snapshot for rAF guard
-            requestAnimationFrame(() => {
+            window.requestAnimationFrame(() => {
                 if (this.scrollRestoringGeneration !== gen) return; // newer load superseded this one
                 // Hide spinner before scroll so it disappears at the same time content is revealed.
                 this.hideLoadingSpinner();
                 // Re-assert cursor in case focus() moved it between now and this frame.
                 el.setViewCursorOffset(savedOffset);
                 el.scrollCursorIntoView(); // tate-scroll-restoring still active → real sizes
-                requestAnimationFrame(() => {
+                window.requestAnimationFrame(() => {
                     if (this.scrollRestoringGeneration === gen) {
                         el.el.classList.remove('tate-scroll-restoring');
                     }
@@ -586,7 +586,7 @@ export class VerticalWritingView extends ItemView {
         this.searchPanel?.close();
         this.popEscScope();
         if (this.selectionChangeRafId !== null) {
-            cancelAnimationFrame(this.selectionChangeRafId);
+            window.cancelAnimationFrame(this.selectionChangeRafId);
             this.selectionChangeRafId = null;
         }
         // Flush any uncommitted changes to CM6 before closing
@@ -633,7 +633,7 @@ export class VerticalWritingView extends ItemView {
     /** Schedules a one-rAF cleanup for the scroll-restore cycle identified by gen.
      *  Used when no scroll is needed (no savedOffset or superseded load). */
     private scheduleScrollRestoringCleanup(gen: number): void {
-        requestAnimationFrame(() => {
+        window.requestAnimationFrame(() => {
             if (this.scrollRestoringGeneration === gen) {
                 this.editorEl?.el.classList.remove('tate-scroll-restoring');
                 this.hideLoadingSpinner();
@@ -684,14 +684,14 @@ export class VerticalWritingView extends ItemView {
                 this.pendingCursorOffset = null;
                 el.setViewCursorOffset(offset);
                 this.lastKnownViewOffset = offset; // sync update
-                requestAnimationFrame(() => {
+                window.requestAnimationFrame(() => {
                     if (this.scrollRestoringGeneration !== gen) return;
                     // Hide spinner before scroll so it disappears at the same time content is revealed.
                     this.hideLoadingSpinner();
                     // Re-assert cursor in case focus() moved it between now and this frame.
                     el.setViewCursorOffset(offset);
                     el.scrollCursorIntoView();
-                    requestAnimationFrame(() => {
+                    window.requestAnimationFrame(() => {
                         if (this.scrollRestoringGeneration === gen) {
                             el.el.classList.remove('tate-scroll-restoring');
                         }
@@ -912,11 +912,11 @@ export class VerticalWritingView extends ItemView {
             // active → content-visibility:visible → accurate sizes → cache written.
             // Class removed in rAF 2 (two-rAF pattern ensures Frame N's layout sees class).
             const gen = this.beginScrollRestoring();
-            requestAnimationFrame(() => {
+            window.requestAnimationFrame(() => {
                 if (this.scrollRestoringGeneration !== gen) return;
                 this.hideLoadingSpinner();
                 editorEl.scrollCursorIntoView(block, block);
-                requestAnimationFrame(() => {
+                window.requestAnimationFrame(() => {
                     if (this.scrollRestoringGeneration === gen) {
                         editorEl.el.classList.remove('tate-scroll-restoring');
                     }

@@ -3734,8 +3734,8 @@ var SearchPanel = class {
     // Bound scroll listener: rebuilds in-window match ranges and reapplies hit highlights after
     // adjustWindowOnScroll() has expanded the DOM window (Issue: newly scrolled-in paragraphs
     // were not highlighted because their matchEntries still had range=null).
-    // Uses requestAnimationFrame so it runs after ParagraphVirtualizer's synchronous scroll handler.
-    this.onScrollArea = () => requestAnimationFrame(() => this.refreshWindowRanges());
+    // Uses window.requestAnimationFrame so it runs after ParagraphVirtualizer's synchronous scroll handler.
+    this.onScrollArea = () => window.requestAnimationFrame(() => this.refreshWindowRanges());
     this.searchScope = new import_obsidian5.Scope(app.scope);
     editorElementRef.el.addEventListener("mousedown", () => {
       if (!this.isOpen) return;
@@ -4118,11 +4118,11 @@ var SearchPanel = class {
   }
   scrollRangeIntoView(range) {
     this.editorElementRef.scrollToRange(range);
-    requestAnimationFrame(() => {
+    window.requestAnimationFrame(() => {
       this.editorElementRef.el.classList.add("tate-search-repaint");
       this.refreshWindowRanges();
       this.applyFocusHighlight();
-      requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
         this.editorElementRef.el.classList.remove("tate-search-repaint");
       });
     });
@@ -4414,8 +4414,8 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
         }
       }
       if (activeDocument.activeElement === editorEl.el && !editorEl.isInlineExpanded()) {
-        if (this.selectionChangeRafId !== null) cancelAnimationFrame(this.selectionChangeRafId);
-        this.selectionChangeRafId = requestAnimationFrame(() => {
+        if (this.selectionChangeRafId !== null) window.cancelAnimationFrame(this.selectionChangeRafId);
+        this.selectionChangeRafId = window.requestAnimationFrame(() => {
           this.selectionChangeRafId = null;
           if (activeDocument.activeElement === editorEl.el && !editorEl.isInlineExpanded()) {
             this.lastKnownViewOffset = editorEl.getViewCursorOffset();
@@ -4628,12 +4628,12 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
       el.setViewCursorOffset(savedOffset);
       this.lastKnownViewOffset = savedOffset;
       const gen = this.scrollRestoringGeneration;
-      requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
         if (this.scrollRestoringGeneration !== gen) return;
         this.hideLoadingSpinner();
         el.setViewCursorOffset(savedOffset);
         el.scrollCursorIntoView();
-        requestAnimationFrame(() => {
+        window.requestAnimationFrame(() => {
           if (this.scrollRestoringGeneration === gen) {
             el.el.classList.remove("tate-scroll-restoring");
           }
@@ -4648,7 +4648,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
     (_a = this.searchPanel) == null ? void 0 : _a.close();
     this.popEscScope();
     if (this.selectionChangeRafId !== null) {
-      cancelAnimationFrame(this.selectionChangeRafId);
+      window.cancelAnimationFrame(this.selectionChangeRafId);
       this.selectionChangeRafId = null;
     }
     this.commitToCm6();
@@ -4691,7 +4691,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
   /** Schedules a one-rAF cleanup for the scroll-restore cycle identified by gen.
    *  Used when no scroll is needed (no savedOffset or superseded load). */
   scheduleScrollRestoringCleanup(gen) {
-    requestAnimationFrame(() => {
+    window.requestAnimationFrame(() => {
       var _a;
       if (this.scrollRestoringGeneration === gen) {
         (_a = this.editorEl) == null ? void 0 : _a.el.classList.remove("tate-scroll-restoring");
@@ -4736,12 +4736,12 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
         this.pendingCursorOffset = null;
         el.setViewCursorOffset(offset);
         this.lastKnownViewOffset = offset;
-        requestAnimationFrame(() => {
+        window.requestAnimationFrame(() => {
           if (this.scrollRestoringGeneration !== gen) return;
           this.hideLoadingSpinner();
           el.setViewCursorOffset(offset);
           el.scrollCursorIntoView();
-          requestAnimationFrame(() => {
+          window.requestAnimationFrame(() => {
             if (this.scrollRestoringGeneration === gen) {
               el.el.classList.remove("tate-scroll-restoring");
             }
@@ -4921,11 +4921,11 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
     const block = editorEl.cursorJumped ? "center" : "nearest";
     if (changedDivs === null) {
       const gen = this.beginScrollRestoring();
-      requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
         if (this.scrollRestoringGeneration !== gen) return;
         this.hideLoadingSpinner();
         editorEl.scrollCursorIntoView(block, block);
-        requestAnimationFrame(() => {
+        window.requestAnimationFrame(() => {
           if (this.scrollRestoringGeneration === gen) {
             editorEl.el.classList.remove("tate-scroll-restoring");
           }

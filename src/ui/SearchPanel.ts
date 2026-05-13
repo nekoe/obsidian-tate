@@ -196,8 +196,8 @@ export class SearchPanel {
     // Bound scroll listener: rebuilds in-window match ranges and reapplies hit highlights after
     // adjustWindowOnScroll() has expanded the DOM window (Issue: newly scrolled-in paragraphs
     // were not highlighted because their matchEntries still had range=null).
-    // Uses requestAnimationFrame so it runs after ParagraphVirtualizer's synchronous scroll handler.
-    private readonly onScrollArea = () => requestAnimationFrame(() => this.refreshWindowRanges());
+    // Uses window.requestAnimationFrame so it runs after ParagraphVirtualizer's synchronous scroll handler.
+    private readonly onScrollArea = () => window.requestAnimationFrame(() => this.refreshWindowRanges());
 
     constructor(
         private readonly editorElementRef: EditorElement,
@@ -715,11 +715,11 @@ export class SearchPanel {
         // cannot optimize away, so it forces a main-thread repaint that includes the
         // current CSS Custom Highlights. The outline is transparent and removed in the
         // next rAF, so it is never visible to the user.
-        requestAnimationFrame(() => {
+        window.requestAnimationFrame(() => {
             this.editorElementRef.el.classList.add('tate-search-repaint');
             this.refreshWindowRanges();
             this.applyFocusHighlight();
-            requestAnimationFrame(() => {
+            window.requestAnimationFrame(() => {
                 this.editorElementRef.el.classList.remove('tate-search-repaint');
             });
         });
