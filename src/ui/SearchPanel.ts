@@ -624,9 +624,18 @@ export class SearchPanel {
         this.editorFocused = false;
 
         // Resolve range: bring off-window paragraph into the DOM window if needed.
-        // A cached range is stale when the div has been evicted from the window (not connected).
-        // In that case, clear the cache and rebuild via teleport if the paragraph is off-window.
-        if (entry.range && !entry.range.startContainer.isConnected) {
+        // A cached range is stale in two cases:
+        //   1. startContainer is disconnected (node removed to a detached subtree).
+        //   2. startContainer is not a Text node — this happens when teleportWindowTo() calls
+        //      editorEl.replaceChildren(), removing the paragraph div. The DOM Range live-update
+        //      spec moves the boundary from the Text node up to tate-editor (the parent of the
+        //      removed div), which stays isConnected=true and defeats the disconnected check.
+        //      createRangeInParagraph() always produces Text-node boundaries, so a non-Text
+        //      startContainer is an unambiguous signal that the range has been corrupted.
+        if (entry.range && (
+            !entry.range.startContainer.isConnected ||
+            !(entry.range.startContainer instanceof Text)
+        )) {
             entry.div   = null;
             entry.range = null;
         }

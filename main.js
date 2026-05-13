@@ -4016,7 +4016,7 @@ var SearchPanel = class {
     const entry = this.matchEntries[index];
     if (!entry || !scroll) return;
     this.editorFocused = false;
-    if (entry.range && !entry.range.startContainer.isConnected) {
+    if (entry.range && (!entry.range.startContainer.isConnected || !(entry.range.startContainer instanceof Text))) {
       entry.div = null;
       entry.range = null;
     }
