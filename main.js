@@ -185,7 +185,7 @@ var TateSettingTab = class extends import_obsidian.PluginSettingTab {
       await this.plugin.saveSettings();
       this.plugin.applySettingsToAllViews();
     }));
-    new import_obsidian.Setting(containerEl).setName("Experimental settings").setHeading();
+    new import_obsidian.Setting(containerEl).setName("Experimental").setHeading();
     containerEl.createEl("p", {
       text: "\u30C7\u30D5\u30A9\u30EB\u30C8\u5024\u4EE5\u5916\u306B\u8A2D\u5B9A\u3059\u308B\u5834\u5408\u3001\u30AB\u30FC\u30BD\u30EB\u79FB\u52D5\u306E\u6319\u52D5\u304C\u4E0D\u5B89\u5B9A\u306B\u306A\u308B\u5834\u5408\u304C\u3042\u308A\u307E\u3059\u3002",
       cls: "setting-item-description"

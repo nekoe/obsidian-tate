@@ -130,7 +130,7 @@ export class TateSettingTab extends PluginSettingTab {
                     this.plugin.applySettingsToAllViews();
                 }));
 
-        new Setting(containerEl).setName('Experimental settings').setHeading();
+        new Setting(containerEl).setName('Experimental').setHeading();
 
         containerEl.createEl('p', {
             text: 'デフォルト値以外に設定する場合、カーソル移動の挙動が不安定になる場合があります。',
