@@ -1,6 +1,6 @@
 # TATE — 縦書きモード for Obsidian
 
-Obsidian 用の縦書きエディタプラグインです。`writing-mode: vertical-rl` による本格的な縦書き表示と編集に対応しています。
+Obsidian 用の縦書きエディタプラグインです。本格的な縦書き表示と編集に対応しており、100万文字クラスの大規模なファイルでもスムーズに編集できます。
 
 [![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/T6T71YGS7B)
 
