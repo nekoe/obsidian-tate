@@ -19,7 +19,7 @@ export class VerticalWritingView extends ItemView {
     // Passed to SyncCoordinator as getEditorValue() so onModify() and checkAndApplyExternalChange()
     // compare vault content against committed text, not getValue() which may contain uncommitted IME.
     private lastCommittedContent = '';
-    private commitTimer: ReturnType<typeof setTimeout> | null = null;
+    private commitTimer: number | null = null;
     private static readonly COMMIT_DEBOUNCE_MS = 500;
     // Deferred cursor offset: set when a file is loaded while the view is not active.
     // Applied (with scroll) on the next active-leaf-change for this view.
@@ -819,8 +819,8 @@ export class VerticalWritingView extends ItemView {
     /** Schedules a debounced commit. Resets the timer on each call so the commit fires
      *  COMMIT_DEBOUNCE_MS after the last qualifying input event. */
     private scheduleCommit(): void {
-        if (this.commitTimer !== null) clearTimeout(this.commitTimer);
-        this.commitTimer = setTimeout(() => {
+        if (this.commitTimer !== null) window.clearTimeout(this.commitTimer);
+        this.commitTimer = window.setTimeout(() => {
             this.commitTimer = null;
             this.commitToCm6();
         }, VerticalWritingView.COMMIT_DEBOUNCE_MS);
@@ -834,7 +834,7 @@ export class VerticalWritingView extends ItemView {
      *  Also cancels any pending debounce timer so immediate commit points preempt the timer. */
     private commitToCm6(): void {
         if (this.commitTimer !== null) {
-            clearTimeout(this.commitTimer);
+            window.clearTimeout(this.commitTimer);
             this.commitTimer = null;
         }
         const el = this.editorEl;

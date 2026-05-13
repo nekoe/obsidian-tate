@@ -692,7 +692,7 @@ export class ParagraphVirtualizer {
     // selectionchange event (macrotask) has had a chance to fire and be suppressed.
     private markProgrammaticSelection(): void {
         this.programmaticSelectionUpdates++;
-        setTimeout(() => { this.programmaticSelectionUpdates--; }, 0);
+        window.setTimeout(() => { this.programmaticSelectionUpdates--; }, 0);
     }
 
     // Saves the current selection into VS and moves DOM endpoints out of the div that is

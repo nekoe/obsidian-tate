@@ -2526,7 +2526,7 @@ var ParagraphVirtualizer = class {
   // selectionchange event (macrotask) has had a chance to fire and be suppressed.
   markProgrammaticSelection() {
     this.programmaticSelectionUpdates++;
-    setTimeout(() => {
+    window.setTimeout(() => {
       this.programmaticSelectionUpdates--;
     }, 0);
   }
@@ -4850,8 +4850,8 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
   /** Schedules a debounced commit. Resets the timer on each call so the commit fires
    *  COMMIT_DEBOUNCE_MS after the last qualifying input event. */
   scheduleCommit() {
-    if (this.commitTimer !== null) clearTimeout(this.commitTimer);
-    this.commitTimer = setTimeout(() => {
+    if (this.commitTimer !== null) window.clearTimeout(this.commitTimer);
+    this.commitTimer = window.setTimeout(() => {
       this.commitTimer = null;
       this.commitToCm6();
     }, _VerticalWritingView.COMMIT_DEBOUNCE_MS);
@@ -4865,7 +4865,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
   commitToCm6() {
     var _a, _b;
     if (this.commitTimer !== null) {
-      clearTimeout(this.commitTimer);
+      window.clearTimeout(this.commitTimer);
       this.commitTimer = null;
     }
     const el = this.editorEl;
