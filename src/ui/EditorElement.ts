@@ -137,14 +137,40 @@ export class EditorElement {
         // on initial load and must be populated with the paragraph div.
         if (this.getValue() === content && this.el.childNodes.length > 0) return;
 
-        if (preserveCursor && document.activeElement === this.el) {
-            const pos = this.getVisibleOffset();
-            this.replaceEditorContent(sanitizeHTMLToDom(parseToHtml(content)));
-            this.virtualizer?.initRecords(content.split('\n'));
-            this.setVisibleOffset(pos);
+        const shouldPreserveCursor = preserveCursor && document.activeElement === this.el;
+        const pos = shouldPreserveCursor ? this.getVisibleOffset() : -1;
+        const virt = this.virtualizer;
+
+        if (virt) {
+            // Windowed rebuild: only create DOM nodes for a window around the cursor/scroll
+            // position, matching loadContent behaviour. Avoids O(N) DOM insertion for large files.
+            const lines = content ? content.split('\n') : [''];
+            const N = lines.length;
+            let center: number;
+            if (pos >= 0) {
+                // Derive center paragraph from the preserved cursor view offset.
+                center = N - 1;
+                let charCount = 0;
+                for (let i = 0; i < N; i++) {
+                    const viewLen = virt.buildParagraphVisibleText(lines[i]).length;
+                    if (pos <= charCount + viewLen) { center = i; break; }
+                    charCount += viewLen;
+                }
+            } else if (virt.domEnd >= 0) {
+                // No cursor to preserve: keep the window near its current scroll position.
+                center = Math.min(Math.floor((virt.domStart + virt.domEnd) / 2), N - 1);
+            } else {
+                center = 0;
+            }
+            const lo = Math.max(0, center - INITIAL_WINDOW_HALF);
+            const hi = Math.min(N - 1, center + INITIAL_WINDOW_HALF);
+            virt.initWindowFromLines(lines, lo, hi);
         } else {
             this.replaceEditorContent(sanitizeHTMLToDom(parseToHtml(content)));
-            this.virtualizer?.initRecords(content.split('\n'));
+        }
+
+        if (shouldPreserveCursor) {
+            this.setVisibleOffset(pos);
         }
     }
 
@@ -391,6 +417,35 @@ export class EditorElement {
             this.insertParsedInline(range, lines[0]);
         } else {
             this.insertParsedParagraphs(range, lines);
+        }
+
+        // For multi-line paste with the virtualizer active, all pasted lines are now in the
+        // DOM as individual divs, which can spike memory for large pastes. Rebuild to a
+        // windowed DOM immediately: syncWindowSrcs brings domEnd in sync with the actual
+        // (temporarily full) DOM so that getVisibleOffset() can locate the cursor correctly,
+        // then initWindowFromLines replaces all inserted divs with a ~INITIAL_WINDOW_HALF
+        // window around the cursor.
+        {
+            const virt = this.virtualizer;
+            if (lines.length > 1 && virt && !this.inlineEditor.isExpanded()) {
+                const newContent = this.getValue();
+                const newLines = newContent.split('\n');
+                virt.syncWindowSrcs(newLines); // expand domEnd to full DOM
+                const cursorPos = this.getVisibleOffset();
+                const N = newLines.length;
+                let center = N - 1;
+                let charCount = 0;
+                for (let i = 0; i < N; i++) {
+                    const viewLen = virt.buildParagraphVisibleText(newLines[i]).length;
+                    if (cursorPos <= charCount + viewLen) { center = i; break; }
+                    charCount += viewLen;
+                }
+                const lo = Math.max(0, center - INITIAL_WINDOW_HALF);
+                const hi = Math.min(N - 1, center + INITIAL_WINDOW_HALF);
+                this.inlineEditor.reset();
+                virt.initWindowFromLines(newLines, lo, hi);
+                this.setVisibleOffset(cursorPos);
+            }
         }
 
         // beforeinput does not fire for paste, so set inBurst manually

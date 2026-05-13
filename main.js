@@ -2714,18 +2714,40 @@ var EditorElement = class {
     (_a = this.virtualizer) == null ? void 0 : _a.teleportWindowTo(center);
   }
   setValue(content, preserveCursor) {
-    var _a, _b;
     content = content.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
     this.inlineEditor.reset();
     if (this.getValue() === content && this.el.childNodes.length > 0) return;
-    if (preserveCursor && document.activeElement === this.el) {
-      const pos = this.getVisibleOffset();
-      this.replaceEditorContent((0, import_obsidian4.sanitizeHTMLToDom)(parseToHtml(content)));
-      (_a = this.virtualizer) == null ? void 0 : _a.initRecords(content.split("\n"));
-      this.setVisibleOffset(pos);
+    const shouldPreserveCursor = preserveCursor && document.activeElement === this.el;
+    const pos = shouldPreserveCursor ? this.getVisibleOffset() : -1;
+    const virt = this.virtualizer;
+    if (virt) {
+      const lines = content ? content.split("\n") : [""];
+      const N = lines.length;
+      let center;
+      if (pos >= 0) {
+        center = N - 1;
+        let charCount = 0;
+        for (let i = 0; i < N; i++) {
+          const viewLen = virt.buildParagraphVisibleText(lines[i]).length;
+          if (pos <= charCount + viewLen) {
+            center = i;
+            break;
+          }
+          charCount += viewLen;
+        }
+      } else if (virt.domEnd >= 0) {
+        center = Math.min(Math.floor((virt.domStart + virt.domEnd) / 2), N - 1);
+      } else {
+        center = 0;
+      }
+      const lo = Math.max(0, center - INITIAL_WINDOW_HALF);
+      const hi = Math.min(N - 1, center + INITIAL_WINDOW_HALF);
+      virt.initWindowFromLines(lines, lo, hi);
     } else {
       this.replaceEditorContent((0, import_obsidian4.sanitizeHTMLToDom)(parseToHtml(content)));
-      (_b = this.virtualizer) == null ? void 0 : _b.initRecords(content.split("\n"));
+    }
+    if (shouldPreserveCursor) {
+      this.setVisibleOffset(pos);
     }
   }
   // ---- Inline expand/collapse (call from selectionchange) ----
@@ -2912,6 +2934,31 @@ var EditorElement = class {
       this.insertParsedInline(range, lines[0]);
     } else {
       this.insertParsedParagraphs(range, lines);
+    }
+    {
+      const virt = this.virtualizer;
+      if (lines.length > 1 && virt && !this.inlineEditor.isExpanded()) {
+        const newContent = this.getValue();
+        const newLines = newContent.split("\n");
+        virt.syncWindowSrcs(newLines);
+        const cursorPos = this.getVisibleOffset();
+        const N = newLines.length;
+        let center = N - 1;
+        let charCount = 0;
+        for (let i = 0; i < N; i++) {
+          const viewLen = virt.buildParagraphVisibleText(newLines[i]).length;
+          if (cursorPos <= charCount + viewLen) {
+            center = i;
+            break;
+          }
+          charCount += viewLen;
+        }
+        const lo = Math.max(0, center - INITIAL_WINDOW_HALF);
+        const hi = Math.min(N - 1, center + INITIAL_WINDOW_HALF);
+        this.inlineEditor.reset();
+        virt.initWindowFromLines(newLines, lo, hi);
+        this.setVisibleOffset(cursorPos);
+      }
     }
     this.inlineEditor.onBeforeInput();
   }
