@@ -53,7 +53,10 @@ export class SyncCoordinator {
         this.selfWriteChecksums.add(fnv1a32(content));
         if (this.selfWriteChecksums.size > MAX_SELF_WRITES) {
             // Set iteration is insertion-ordered; delete the oldest entry
-            this.selfWriteChecksums.delete(this.selfWriteChecksums.values().next().value!);
+            for (const oldest of this.selfWriteChecksums) {
+                this.selfWriteChecksums.delete(oldest);
+                break;
+            }
         }
     }
 

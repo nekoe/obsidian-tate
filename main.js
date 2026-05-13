@@ -73,7 +73,10 @@ var SyncCoordinator = class {
   notifySelfWrite(content) {
     this.selfWriteChecksums.add(fnv1a32(content));
     if (this.selfWriteChecksums.size > MAX_SELF_WRITES) {
-      this.selfWriteChecksums.delete(this.selfWriteChecksums.values().next().value);
+      for (const oldest of this.selfWriteChecksums) {
+        this.selfWriteChecksums.delete(oldest);
+        break;
+      }
     }
   }
   // Handles vault.on('modify'): ignores self-writes (CM6 autosave), applies external changes
