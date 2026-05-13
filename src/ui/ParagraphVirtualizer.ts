@@ -299,6 +299,28 @@ export class ParagraphVirtualizer {
         this.correctSpacerAfterExpand(domStartBefore, domEndBefore);
     }
 
+    // Teleports the DOM window to be centered on paragraph `center` (± INITIAL_WINDOW_HALF).
+    // Rebuilds the DOM from paragraphRecords without traversing intermediate paragraphs.
+    // Used by EditorElement.jumpWindowTo() and SearchPanel navigation.
+    teleportWindowTo(center: number, windowHalf = 50): void {
+        const N = this.paragraphRecords.length;
+        if (N === 0) return;
+        const lo = Math.max(0, center - windowHalf);
+        const hi = Math.min(N - 1, center + windowHalf);
+        const windowNodes: Node[] = [];
+        for (let i = lo; i <= hi; i++) {
+            const div = document.createElement('div');
+            div.replaceChildren(sanitizeHTMLToDom(parseInlineToHtml(this.paragraphRecords[i].src) || '<br>'));
+            windowNodes.push(div);
+        }
+        if (this.rightSpacer && this.leftSpacer) {
+            this.editorEl.replaceChildren(this.rightSpacer, ...windowNodes, this.leftSpacer);
+        } else {
+            this.editorEl.replaceChildren(...windowNodes);
+        }
+        this.resetWindow(lo, hi);
+    }
+
     // Replaces all paragraph divs with the full document content (one div per record).
     // Used by Cmd-A (select-all) so the selection can span the entire document.
     // Performs a single replaceChildren call to minimise layout thrashing.

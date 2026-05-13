@@ -2188,6 +2188,27 @@ var ParagraphVirtualizer = class {
     }
     this.correctSpacerAfterExpand(domStartBefore, domEndBefore);
   }
+  // Teleports the DOM window to be centered on paragraph `center` (± INITIAL_WINDOW_HALF).
+  // Rebuilds the DOM from paragraphRecords without traversing intermediate paragraphs.
+  // Used by EditorElement.jumpWindowTo() and SearchPanel navigation.
+  teleportWindowTo(center, windowHalf = 50) {
+    const N = this.paragraphRecords.length;
+    if (N === 0) return;
+    const lo = Math.max(0, center - windowHalf);
+    const hi = Math.min(N - 1, center + windowHalf);
+    const windowNodes = [];
+    for (let i = lo; i <= hi; i++) {
+      const div = document.createElement("div");
+      div.replaceChildren((0, import_obsidian3.sanitizeHTMLToDom)(parseInlineToHtml(this.paragraphRecords[i].src) || "<br>"));
+      windowNodes.push(div);
+    }
+    if (this.rightSpacer && this.leftSpacer) {
+      this.editorEl.replaceChildren(this.rightSpacer, ...windowNodes, this.leftSpacer);
+    } else {
+      this.editorEl.replaceChildren(...windowNodes);
+    }
+    this.resetWindow(lo, hi);
+  }
   // Replaces all paragraph divs with the full document content (one div per record).
   // Used by Cmd-A (select-all) so the selection can span the entire document.
   // Performs a single replaceChildren call to minimise layout thrashing.
@@ -2703,25 +2724,10 @@ var EditorElement = class {
   }
   // Teleports the DOM window to be centered on paragraphRecords[center] without re-parsing the
   // full file. Used by setVisibleOffset() when the cursor lands in an off-window paragraph
-  // (e.g. outline panel jump). Builds divs from records' .src and calls virt.resetWindow().
+  // (e.g. outline panel jump). Delegates to ParagraphVirtualizer.teleportWindowTo().
   jumpWindowTo(center) {
-    const virt = this.virtualizer;
-    if (!virt || virt.paragraphRecords.length === 0) return;
-    const N = virt.paragraphRecords.length;
-    const lo = Math.max(0, center - INITIAL_WINDOW_HALF);
-    const hi = Math.min(N - 1, center + INITIAL_WINDOW_HALF);
-    const windowNodes = [];
-    for (let i = lo; i <= hi; i++) {
-      const div = document.createElement("div");
-      div.replaceChildren((0, import_obsidian4.sanitizeHTMLToDom)(parseInlineToHtml(virt.paragraphRecords[i].src) || "<br>"));
-      windowNodes.push(div);
-    }
-    if (virt.rightSpacer && virt.leftSpacer) {
-      this.el.replaceChildren(virt.rightSpacer, ...windowNodes, virt.leftSpacer);
-    } else {
-      this.el.replaceChildren(...windowNodes);
-    }
-    virt.resetWindow(lo, hi);
+    var _a;
+    (_a = this.virtualizer) == null ? void 0 : _a.teleportWindowTo(center);
   }
   setValue(content, preserveCursor) {
     var _a, _b;
@@ -4012,11 +4018,17 @@ var SearchPanel = class {
     const entry = this.matchEntries[index];
     if (!entry || !scroll) return;
     this.editorFocused = false;
+    if (entry.range && !entry.range.startContainer.isConnected) {
+      entry.div = null;
+      entry.range = null;
+    }
     let range;
     if (entry.range) {
       range = entry.range;
     } else {
-      this.virtualizer.ensureInWindow(entry.paragraphIndex);
+      if (!this.virtualizer.isInWindow(entry.paragraphIndex)) {
+        this.virtualizer.teleportWindowTo(entry.paragraphIndex);
+      }
       const div = this.virtualizer.getWindowDiv(entry.paragraphIndex);
       if (!div) return;
       const segments = extractSegmentsFromDiv(div, this.editorElementRef.el);

@@ -624,11 +624,19 @@ export class SearchPanel {
         this.editorFocused = false;
 
         // Resolve range: bring off-window paragraph into the DOM window if needed.
+        // A cached range is stale when the div has been evicted from the window (not connected).
+        // In that case, clear the cache and rebuild via teleport if the paragraph is off-window.
+        if (entry.range && !entry.range.startContainer.isConnected) {
+            entry.div   = null;
+            entry.range = null;
+        }
         let range: Range;
         if (entry.range) {
             range = entry.range;
         } else {
-            this.virtualizer.ensureInWindow(entry.paragraphIndex);
+            if (!this.virtualizer.isInWindow(entry.paragraphIndex)) {
+                this.virtualizer.teleportWindowTo(entry.paragraphIndex);
+            }
             const div = this.virtualizer.getWindowDiv(entry.paragraphIndex);
             if (!div) return;
             const segments = extractSegmentsFromDiv(div, this.editorElementRef.el);

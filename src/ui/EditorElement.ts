@@ -144,25 +144,9 @@ export class EditorElement {
 
     // Teleports the DOM window to be centered on paragraphRecords[center] without re-parsing the
     // full file. Used by setVisibleOffset() when the cursor lands in an off-window paragraph
-    // (e.g. outline panel jump). Builds divs from records' .src and calls virt.resetWindow().
+    // (e.g. outline panel jump). Delegates to ParagraphVirtualizer.teleportWindowTo().
     private jumpWindowTo(center: number): void {
-        const virt = this.virtualizer;
-        if (!virt || virt.paragraphRecords.length === 0) return;
-        const N = virt.paragraphRecords.length;
-        const lo = Math.max(0, center - INITIAL_WINDOW_HALF);
-        const hi = Math.min(N - 1, center + INITIAL_WINDOW_HALF);
-        const windowNodes: Node[] = [];
-        for (let i = lo; i <= hi; i++) {
-            const div = document.createElement('div');
-            div.replaceChildren(sanitizeHTMLToDom(parseInlineToHtml(virt.paragraphRecords[i].src) || '<br>'));
-            windowNodes.push(div);
-        }
-        if (virt.rightSpacer && virt.leftSpacer) {
-            this.el.replaceChildren(virt.rightSpacer, ...windowNodes, virt.leftSpacer);
-        } else {
-            this.el.replaceChildren(...windowNodes);
-        }
-        virt.resetWindow(lo, hi);
+        this.virtualizer?.teleportWindowTo(center);
     }
 
     setValue(content: string, preserveCursor: boolean): void {
