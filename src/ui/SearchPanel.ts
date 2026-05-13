@@ -193,6 +193,11 @@ export class SearchPanel {
     // When true: tate-search-focus is hidden, and close() skips cursor restore.
     private editorFocused = false;
     private commitCallback: (() => void) | null = null;
+    // Bound scroll listener: rebuilds in-window match ranges and reapplies hit highlights after
+    // adjustWindowOnScroll() has expanded the DOM window (Issue: newly scrolled-in paragraphs
+    // were not highlighted because their matchEntries still had range=null).
+    // Uses requestAnimationFrame so it runs after ParagraphVirtualizer's synchronous scroll handler.
+    private readonly onScrollArea = () => requestAnimationFrame(() => this.refreshWindowRanges());
 
     constructor(
         private readonly editorElementRef: EditorElement,
@@ -261,6 +266,7 @@ export class SearchPanel {
         this.currentIndex = -1;
         this.buildPanel(expandReplace);
         this.app.keymap.pushScope(this.searchScope);
+        this.editorElementRef.el.parentElement?.addEventListener('scroll', this.onScrollArea);
         this.inputEl?.focus();
     }
 
@@ -268,6 +274,7 @@ export class SearchPanel {
         if (!this.isOpen) return null;
 
         this.app.keymap.popScope(this.searchScope);
+        this.editorElementRef.el.parentElement?.removeEventListener('scroll', this.onScrollArea);
         this.clearHighlights();
 
         this.panelEl?.remove();
@@ -687,12 +694,38 @@ export class SearchPanel {
         // next rAF, so it is never visible to the user.
         requestAnimationFrame(() => {
             this.editorElementRef.el.classList.add('tate-search-repaint');
-            this.applyHitHighlights();
+            this.refreshWindowRanges();
             this.applyFocusHighlight();
             requestAnimationFrame(() => {
                 this.editorElementRef.el.classList.remove('tate-search-repaint');
             });
         });
+    }
+
+    // Clears stale cached ranges and builds ranges for entries newly in the DOM window.
+    // Called after any DOM window change: teleport (navigation to off-window hit) or
+    // scroll-driven expansion (adjustWindowOnScroll adds new paragraph divs).
+    // Ends with applyHitHighlights() so tate-search-hit covers all current in-window matches.
+    private refreshWindowRanges(): void {
+        let changed = false;
+        for (const entry of this.matchEntries) {
+            // Clear ranges corrupted by the DOM Range live-update spec: when a paragraph div is
+            // removed by replaceChildren(), the browser moves Range boundaries up to tate-editor.
+            if (entry.range && !(entry.range.startContainer instanceof Text)) {
+                entry.div   = null;
+                entry.range = null;
+                changed = true;
+            }
+            // Build range for entries that are now in-window but have no valid range yet.
+            if (!entry.range && this.virtualizer.isInWindow(entry.paragraphIndex)) {
+                const div = this.virtualizer.getWindowDiv(entry.paragraphIndex);
+                if (!div) continue;
+                const segments = extractSegmentsFromDiv(div, this.editorElementRef.el);
+                const r = createRangeInParagraph(segments, entry.localStart, entry.localEnd);
+                if (r) { entry.div = div; entry.range = r; changed = true; }
+            }
+        }
+        if (changed) this.applyHitHighlights();
     }
 
     private applyHitHighlights(): void {

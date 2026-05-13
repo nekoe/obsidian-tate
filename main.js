@@ -3678,6 +3678,11 @@ var SearchPanel = class {
     // When true: tate-search-focus is hidden, and close() skips cursor restore.
     this.editorFocused = false;
     this.commitCallback = null;
+    // Bound scroll listener: rebuilds in-window match ranges and reapplies hit highlights after
+    // adjustWindowOnScroll() has expanded the DOM window (Issue: newly scrolled-in paragraphs
+    // were not highlighted because their matchEntries still had range=null).
+    // Uses requestAnimationFrame so it runs after ParagraphVirtualizer's synchronous scroll handler.
+    this.onScrollArea = () => requestAnimationFrame(() => this.refreshWindowRanges());
     this.searchScope = new import_obsidian5.Scope(app.scope);
     editorElementRef.el.addEventListener("mousedown", () => {
       if (!this.isOpen) return;
@@ -3715,7 +3720,7 @@ var SearchPanel = class {
     return this.panelEl !== null;
   }
   open(initialOffset, expandReplace = false) {
-    var _a, _b, _c;
+    var _a, _b, _c, _d;
     if (this.isOpen) {
       if (expandReplace) {
         this.showReplaceRow();
@@ -3732,14 +3737,16 @@ var SearchPanel = class {
     this.currentIndex = -1;
     this.buildPanel(expandReplace);
     this.app.keymap.pushScope(this.searchScope);
-    (_c = this.inputEl) == null ? void 0 : _c.focus();
+    (_c = this.editorElementRef.el.parentElement) == null ? void 0 : _c.addEventListener("scroll", this.onScrollArea);
+    (_d = this.inputEl) == null ? void 0 : _d.focus();
   }
   close() {
-    var _a, _b;
+    var _a, _b, _c;
     if (!this.isOpen) return null;
     this.app.keymap.popScope(this.searchScope);
+    (_a = this.editorElementRef.el.parentElement) == null ? void 0 : _a.removeEventListener("scroll", this.onScrollArea);
     this.clearHighlights();
-    (_a = this.panelEl) == null ? void 0 : _a.remove();
+    (_b = this.panelEl) == null ? void 0 : _b.remove();
     this.panelEl = null;
     this.inputEl = null;
     this.countEl = null;
@@ -3749,7 +3756,7 @@ var SearchPanel = class {
     this.matchEntries = [];
     this.currentIndex = -1;
     const wasEditorFocused = this.editorFocused;
-    const restoreOffset = wasEditorFocused ? null : (_b = this.lastNavigatedOffset) != null ? _b : this.prSearchOffset;
+    const restoreOffset = wasEditorFocused ? null : (_c = this.lastNavigatedOffset) != null ? _c : this.prSearchOffset;
     this.prSearchOffset = null;
     this.lastNavigatedOffset = null;
     this.editorFocused = false;
@@ -4053,12 +4060,38 @@ var SearchPanel = class {
     this.editorElementRef.scrollToRange(range);
     requestAnimationFrame(() => {
       this.editorElementRef.el.classList.add("tate-search-repaint");
-      this.applyHitHighlights();
+      this.refreshWindowRanges();
       this.applyFocusHighlight();
       requestAnimationFrame(() => {
         this.editorElementRef.el.classList.remove("tate-search-repaint");
       });
     });
+  }
+  // Clears stale cached ranges and builds ranges for entries newly in the DOM window.
+  // Called after any DOM window change: teleport (navigation to off-window hit) or
+  // scroll-driven expansion (adjustWindowOnScroll adds new paragraph divs).
+  // Ends with applyHitHighlights() so tate-search-hit covers all current in-window matches.
+  refreshWindowRanges() {
+    let changed = false;
+    for (const entry of this.matchEntries) {
+      if (entry.range && !(entry.range.startContainer instanceof Text)) {
+        entry.div = null;
+        entry.range = null;
+        changed = true;
+      }
+      if (!entry.range && this.virtualizer.isInWindow(entry.paragraphIndex)) {
+        const div = this.virtualizer.getWindowDiv(entry.paragraphIndex);
+        if (!div) continue;
+        const segments = extractSegmentsFromDiv(div, this.editorElementRef.el);
+        const r = createRangeInParagraph(segments, entry.localStart, entry.localEnd);
+        if (r) {
+          entry.div = div;
+          entry.range = r;
+          changed = true;
+        }
+      }
+    }
+    if (changed) this.applyHitHighlights();
   }
   applyHitHighlights() {
     if (typeof CSS === "undefined" || !CSS.highlights) return;
