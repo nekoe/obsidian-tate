@@ -114,6 +114,15 @@ Additionally, `removeOneLeadingFullWidthSpace` and `getPrecedingParagraphLeading
 empty text nodes in their `TreeWalker` loops as a defensive measure against empty nodes arising from
 other sources (e.g. browser internals).
 
+## Non-collapsed Range Selection
+
+`handleBeforeInput` returns early without interception when the selection is non-collapsed. The
+auto-indent and bracket de-indent logic both call `range.deleteContents()` internally (via
+`insertText()`), but doing so on a cross-paragraph range bypasses the `<div>`-shell cleanup that
+`deleteRangeContents()` in `EditorElement` performs — leaving empty paragraph divs that corrupt
+subsequent serialization. For non-collapsed selections the browser handles the insertion natively,
+and `view.ts` calls `adjustNow()` + `scheduleCommit()` from the `input` event as usual.
+
 ## Settings and Initialization
 
 `InputTransformer` is initialized with `DEFAULT_SETTINGS` in the `EditorElement` constructor.

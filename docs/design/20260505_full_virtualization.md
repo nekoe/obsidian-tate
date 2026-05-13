@@ -1,7 +1,7 @@
 # Full DOM Virtualization: Design Notes and Implementation History
 
 Created: 2026-05-05  
-Last updated: 2026-05-11
+Last updated: 2026-05-13
 
 ## Background
 
@@ -282,10 +282,35 @@ Spacers are in the off-screen area. The user can only click on positions visible
 which are always within the DOM window. Clicks never land on a spacer. Spacers have
 `pointer-events: none` and `user-select: none` to prevent accidental selection.
 
-### 8. IME composition (non-issue)
+### 8. IME composition
 
-IME input occurs at the cursor position, which is always inside a visible paragraph div and
-therefore inside the DOM window.
+Two edge cases arise from the interaction between DOM window management and IME.
+
+#### VS active when IME starts
+
+When a gap-spanning VS is active and the user starts IME input, the VS content must be deleted
+**before** Chrome anchors its composition. Chrome records the IME anchor when it passes `keydown`
+to the IME engine — after `keydown` handlers complete but **before** `compositionstart` fires.
+Deleting the VS inside `compositionstart` is therefore too late: the anchor is already set to
+the stale position.
+
+**Solution** (`a3709e9`): the `keydown` handler in `view.ts` detects printable keys while VS is
+active (`!isComposing && key.length === 1 && getVirtualSelection()`) and calls
+`deleteVirtualSelection(vs)` synchronously. By the time Chrome passes control to the IME engine,
+the VS has been deleted and the cursor sits at the correct insertion point.
+
+#### Non-VS range selection when IME starts
+
+When a non-collapsed DOM Range selection exists (no VS) and IME begins, the browser deletes the
+selected text and inserts the composition string in the first `isComposing=true` `input` event —
+**after** `compositionstart` fires. Calling `adjustNow()` in `compositionstart` is therefore too
+early to repair the layout, because the in-window divs have not been removed yet.
+
+**Solution** (`eb86757`): at `compositionstart`, if no VS is active and the selection is
+non-collapsed, a flag `needsLayoutRepairOnFirstComposingInput` is set to `true`. The `input`
+event handler calls `adjustNow()` and clears the flag on the first `isComposing=true` event.
+Subsequent composition steps (candidate switching) do not call `adjustNow()`, avoiding both
+unnecessary DOM reads and any risk of interrupting the IME anchor.
 
 ---
 
@@ -468,7 +493,8 @@ proxy nodes at the window boundary.
   copy/cut clipboard.
 - `handleCopy` / `handleCut` / `handleSelectionDelete` in `EditorElement` now check for VS first.
 - `view.ts` event handlers: `selectionchange` runs VS tracking; `mousedown` clears VS; navigation
-  keys without Shift clear VS; `beforeinput` handles VS-insert (type over selection).
+  keys without Shift clear VS; `beforeinput` handles VS-insert (type over selection); `keydown`
+  deletes VS content on printable keys (before IME anchors — see challenge 8 above).
 
 **Phase B decision log:**
 
