@@ -37,8 +37,10 @@
     cursor: text;
 }
 
-/* Placeholder (shown when no file is selected) */
-.tate-editor:empty::before {
+/* Placeholder (shown when no file is selected).
+   :not(:has(> :not(.tate-spacer))) matches both a truly empty editor and one that
+   contains only the two spacer divs inserted by ParagraphVirtualizer.attach(). */
+.tate-editor:not(:has(> :not(.tate-spacer)))::before {
     content: attr(data-placeholder);
     color: var(--text-faint);
     pointer-events: none;
