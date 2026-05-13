@@ -15,7 +15,6 @@ declare global {
     }
 
     // Augment the built-in CSS namespace to include the Highlight Registry.
-    // eslint-disable-next-line @typescript-eslint/no-namespace
     namespace CSS {
         const highlights: HighlightRegistry;
     }
