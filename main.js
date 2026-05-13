@@ -2088,7 +2088,8 @@ var ParagraphVirtualizer = class {
   // domStart/domEnd define the initial DOM window; omitting them spans all records (full window).
   // All records receive estimated widths so spacer sizes are immediately accurate without
   // requiring every paragraph to be rendered first.
-  // Call from EditorElement.loadContent() (initial file load) and the patchParagraphs fallback.
+  // Does NOT touch the editor DOM — call initWindowFromLines() for the initial file-load path
+  // where the DOM window also needs to be built. Call from setValue() (DOM already built by caller).
   initRecords(lines, domStart = 0, domEnd = lines.length - 1) {
     this.paragraphRecords.length = 0;
     for (const line of lines) {
@@ -2096,6 +2097,29 @@ var ParagraphVirtualizer = class {
       this.paragraphRecords.push({ src: line, viewLen, width: this.estimateWidth(viewLen) });
     }
     this.resetWindow(domStart, domEnd);
+  }
+  // Reinitializes paragraphRecords from all content lines and builds the [lo, hi] DOM window.
+  // Used by EditorElement.loadContent() for the initial file-load path; replaces the old pattern
+  // of calling initRecords() + manually building divs in EditorElement.
+  initWindowFromLines(lines, lo, hi) {
+    this.initRecords(lines, lo, hi);
+    this.buildDomWindow(lo, hi, lines.slice(lo, hi + 1));
+  }
+  // Builds paragraph div elements from sources and replaces the editor window's children.
+  // Does NOT update spacer widths; callers must have already called resetWindow() (e.g. via
+  // initRecords() or resetWindow() directly) so spacer widths are correct.
+  buildDomWindow(lo, hi, sources) {
+    const windowNodes = [];
+    for (const src of sources) {
+      const div = document.createElement("div");
+      div.replaceChildren((0, import_obsidian3.sanitizeHTMLToDom)(parseInlineToHtml(src) || "<br>"));
+      windowNodes.push(div);
+    }
+    if (this.rightSpacer && this.leftSpacer) {
+      this.editorEl.replaceChildren(this.rightSpacer, ...windowNodes, this.leftSpacer);
+    } else {
+      this.editorEl.replaceChildren(...windowNodes);
+    }
   }
   // Repositions the DOM window to [lo, hi] and updates spacer widths from estimated record
   // widths. Does NOT rebuild paragraph div nodes — the caller is responsible for that.
@@ -2188,7 +2212,7 @@ var ParagraphVirtualizer = class {
     }
     this.correctSpacerAfterExpand(domStartBefore, domEndBefore);
   }
-  // Teleports the DOM window to be centered on paragraph `center` (± INITIAL_WINDOW_HALF).
+  // Teleports the DOM window to be centered on paragraph `center` (± windowHalf).
   // Rebuilds the DOM from paragraphRecords without traversing intermediate paragraphs.
   // Used by EditorElement.jumpWindowTo() and SearchPanel navigation.
   teleportWindowTo(center, windowHalf = 50) {
@@ -2196,17 +2220,7 @@ var ParagraphVirtualizer = class {
     if (N === 0) return;
     const lo = Math.max(0, center - windowHalf);
     const hi = Math.min(N - 1, center + windowHalf);
-    const windowNodes = [];
-    for (let i = lo; i <= hi; i++) {
-      const div = document.createElement("div");
-      div.replaceChildren((0, import_obsidian3.sanitizeHTMLToDom)(parseInlineToHtml(this.paragraphRecords[i].src) || "<br>"));
-      windowNodes.push(div);
-    }
-    if (this.rightSpacer && this.leftSpacer) {
-      this.editorEl.replaceChildren(this.rightSpacer, ...windowNodes, this.leftSpacer);
-    } else {
-      this.editorEl.replaceChildren(...windowNodes);
-    }
+    this.buildDomWindow(lo, hi, this.paragraphRecords.slice(lo, hi + 1).map((r) => r.src));
     this.resetWindow(lo, hi);
   }
   // Replaces all paragraph divs with the full document content (one div per record).
@@ -2686,7 +2700,6 @@ var EditorElement = class {
   // paragraphs are represented by spacers sized from estimated widths (no DOM nodes needed).
   // Use instead of setValue() for file loads. setValue() is kept for undo/redo paths.
   loadContent(content, initialViewOffset) {
-    var _a;
     content = content.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
     this.inlineEditor.reset();
     if (this.getValue() === content && this.el.childNodes.length > 0) return;
@@ -2705,22 +2718,7 @@ var EditorElement = class {
     }
     const lo = Math.max(0, center - INITIAL_WINDOW_HALF);
     const hi = Math.min(N - 1, center + INITIAL_WINDOW_HALF);
-    const newCount = hi - lo + 1;
-    const spacerOffset = (virt == null ? void 0 : virt.rightSpacer) ? 1 : 0;
-    const spacerCount = (virt == null ? void 0 : virt.rightSpacer) ? 2 : 0;
-    const existingCount = Math.max(0, this.el.children.length - spacerCount);
-    for (let i = existingCount - 1; i >= newCount; i--) {
-      this.el.children[i + spacerOffset].remove();
-    }
-    const anchor = (_a = virt == null ? void 0 : virt.leftSpacer) != null ? _a : null;
-    for (let i = existingCount; i < newCount; i++) {
-      this.el.insertBefore(document.createElement("div"), anchor);
-    }
-    for (let i = 0; i < newCount; i++) {
-      const div = this.el.children[i + spacerOffset];
-      div.replaceChildren((0, import_obsidian4.sanitizeHTMLToDom)(parseInlineToHtml(lines[lo + i]) || "<br>"));
-    }
-    virt == null ? void 0 : virt.initRecords(lines, lo, hi);
+    virt == null ? void 0 : virt.initWindowFromLines(lines, lo, hi);
   }
   // Teleports the DOM window to be centered on paragraphRecords[center] without re-parsing the
   // full file. Used by setVisibleOffset() when the cursor lands in an off-window paragraph

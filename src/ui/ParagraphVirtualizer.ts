@@ -162,7 +162,8 @@ export class ParagraphVirtualizer {
     // domStart/domEnd define the initial DOM window; omitting them spans all records (full window).
     // All records receive estimated widths so spacer sizes are immediately accurate without
     // requiring every paragraph to be rendered first.
-    // Call from EditorElement.loadContent() (initial file load) and the patchParagraphs fallback.
+    // Does NOT touch the editor DOM — call initWindowFromLines() for the initial file-load path
+    // where the DOM window also needs to be built. Call from setValue() (DOM already built by caller).
     initRecords(lines: string[], domStart = 0, domEnd = lines.length - 1): void {
         this.paragraphRecords.length = 0;
         for (const line of lines) {
@@ -170,6 +171,31 @@ export class ParagraphVirtualizer {
             this.paragraphRecords.push({ src: line, viewLen, width: this.estimateWidth(viewLen) });
         }
         this.resetWindow(domStart, domEnd);
+    }
+
+    // Reinitializes paragraphRecords from all content lines and builds the [lo, hi] DOM window.
+    // Used by EditorElement.loadContent() for the initial file-load path; replaces the old pattern
+    // of calling initRecords() + manually building divs in EditorElement.
+    initWindowFromLines(lines: string[], lo: number, hi: number): void {
+        this.initRecords(lines, lo, hi);
+        this.buildDomWindow(lo, hi, lines.slice(lo, hi + 1));
+    }
+
+    // Builds paragraph div elements from sources and replaces the editor window's children.
+    // Does NOT update spacer widths; callers must have already called resetWindow() (e.g. via
+    // initRecords() or resetWindow() directly) so spacer widths are correct.
+    private buildDomWindow(lo: number, hi: number, sources: string[]): void {
+        const windowNodes: Node[] = [];
+        for (const src of sources) {
+            const div = document.createElement('div');
+            div.replaceChildren(sanitizeHTMLToDom(parseInlineToHtml(src) || '<br>'));
+            windowNodes.push(div);
+        }
+        if (this.rightSpacer && this.leftSpacer) {
+            this.editorEl.replaceChildren(this.rightSpacer, ...windowNodes, this.leftSpacer);
+        } else {
+            this.editorEl.replaceChildren(...windowNodes);
+        }
     }
 
     // Repositions the DOM window to [lo, hi] and updates spacer widths from estimated record
@@ -299,7 +325,7 @@ export class ParagraphVirtualizer {
         this.correctSpacerAfterExpand(domStartBefore, domEndBefore);
     }
 
-    // Teleports the DOM window to be centered on paragraph `center` (± INITIAL_WINDOW_HALF).
+    // Teleports the DOM window to be centered on paragraph `center` (± windowHalf).
     // Rebuilds the DOM from paragraphRecords without traversing intermediate paragraphs.
     // Used by EditorElement.jumpWindowTo() and SearchPanel navigation.
     teleportWindowTo(center: number, windowHalf = 50): void {
@@ -307,17 +333,7 @@ export class ParagraphVirtualizer {
         if (N === 0) return;
         const lo = Math.max(0, center - windowHalf);
         const hi = Math.min(N - 1, center + windowHalf);
-        const windowNodes: Node[] = [];
-        for (let i = lo; i <= hi; i++) {
-            const div = document.createElement('div');
-            div.replaceChildren(sanitizeHTMLToDom(parseInlineToHtml(this.paragraphRecords[i].src) || '<br>'));
-            windowNodes.push(div);
-        }
-        if (this.rightSpacer && this.leftSpacer) {
-            this.editorEl.replaceChildren(this.rightSpacer, ...windowNodes, this.leftSpacer);
-        } else {
-            this.editorEl.replaceChildren(...windowNodes);
-        }
+        this.buildDomWindow(lo, hi, this.paragraphRecords.slice(lo, hi + 1).map(r => r.src));
         this.resetWindow(lo, hi);
     }
 
