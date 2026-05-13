@@ -137,7 +137,7 @@ export class EditorElement {
         // on initial load and must be populated with the paragraph div.
         if (this.getValue() === content && this.el.childNodes.length > 0) return;
 
-        const shouldPreserveCursor = preserveCursor && document.activeElement === this.el;
+        const shouldPreserveCursor = preserveCursor && activeDocument.activeElement === this.el;
         const pos = shouldPreserveCursor ? this.getVisibleOffset() : -1;
         const virt = this.virtualizer;
 
@@ -326,7 +326,7 @@ export class EditorElement {
             if (sel) {
                 const target = startDiv?.isConnected ? startDiv : endDiv?.isConnected ? endDiv : null;
                 if (target) {
-                    const r = document.createRange();
+                    const r = activeDocument.createRange();
                     r.selectNodeContents(target);
                     r.collapse(true);
                     sel.removeAllRanges();
@@ -481,13 +481,13 @@ export class EditorElement {
             const refNode = this.el.childNodes[range.startOffset] ?? this.virtualizer?.leftSpacer ?? null;
             let lastDiv: HTMLDivElement | null = null;
             for (const line of lines) {
-                const div = document.createElement('div');
+                const div = activeDocument.createElement('div');
                 div.replaceChildren(sanitizeHTMLToDom(parseInlineToHtml(line) || '<br>'));
                 this.el.insertBefore(div, refNode);
                 lastDiv = div;
             }
             if (lastDiv) {
-                const r = document.createRange();
+                const r = activeDocument.createRange();
                 r.selectNodeContents(lastDiv);
                 r.collapse(false);
                 sel.removeAllRanges();
@@ -501,7 +501,7 @@ export class EditorElement {
             // Used when an inline element is expanded (splitting the div would corrupt the tate-editing span).
             for (let i = 0; i < lines.length; i++) {
                 if (i > 0) {
-                    const br = document.createElement('br');
+                    const br = activeDocument.createElement('br');
                     range.insertNode(br);
                     range.setStartAfter(br);
                     range.collapse(true);
@@ -521,7 +521,7 @@ export class EditorElement {
         }
 
         // Extract content from cursor to end of paragraph
-        const afterRange = document.createRange();
+        const afterRange = activeDocument.createRange();
         afterRange.selectNodeContents(paragraphDiv);
         afterRange.setStart(range.startContainer, range.startOffset);
         const afterFragment = afterRange.extractContents();
@@ -549,7 +549,7 @@ export class EditorElement {
         let lastPastedNode: Node | null = null;
 
         for (let i = 1; i < lines.length; i++) {
-            const div = document.createElement('div');
+            const div = activeDocument.createElement('div');
             const lineFrag = sanitizeHTMLToDom(parseInlineToHtml(lines[i]));
             const lineNodes = Array.from(lineFrag.childNodes);
             div.append(...lineNodes);
@@ -566,7 +566,7 @@ export class EditorElement {
         }
 
         // Position cursor at end of pasted content (before the after-cursor content)
-        const newRange = document.createRange();
+        const newRange = activeDocument.createRange();
         if (lastPastedNode) {
             newRange.setStartAfter(lastPastedNode);
         } else {
@@ -594,13 +594,13 @@ export class EditorElement {
         // Count paragraph divs (exclude spacers). If any exist, nothing to normalize.
         const spacerCount = this.virtualizer?.rightSpacer ? 2 : 0;
         if (this.el.childNodes.length > spacerCount) return;
-        const div = document.createElement('div');
-        div.appendChild(document.createElement('br'));
+        const div = activeDocument.createElement('div');
+        div.appendChild(activeDocument.createElement('br'));
         // Insert before leftSpacer so the div ends up in the paragraph area.
         const leftSpacer = this.virtualizer?.leftSpacer;
         if (leftSpacer) this.el.insertBefore(div, leftSpacer);
         else this.el.appendChild(div);
-        const range = document.createRange();
+        const range = activeDocument.createRange();
         range.setStart(div, 0);
         range.collapse(true);
         const sel = window.getSelection();
@@ -687,7 +687,7 @@ export class EditorElement {
         const div = this.findParagraphDiv(range.startContainer);
         if (!div) return;
 
-        const walker = document.createTreeWalker(div, NodeFilter.SHOW_TEXT);
+        const walker = activeDocument.createTreeWalker(div, NodeFilter.SHOW_TEXT);
         let first = walker.nextNode() as Text | null;
         while (first && first.data.length === 0) first = walker.nextNode() as Text | null;
         if (!first || first.data[0] !== '\xa0') return;
@@ -700,7 +700,7 @@ export class EditorElement {
         first.deleteData(0, count);
 
         if (cursorOffset > 0) {
-            const r = document.createRange();
+            const r = activeDocument.createRange();
             r.setStart(first, Math.max(0, cursorOffset - count));
             r.collapse(true);
             sel.removeAllRanges();
@@ -774,9 +774,9 @@ export class EditorElement {
         if (so === 0) {
             const targetDiv = virt.getWindowDiv(si);
             if (targetDiv) {
-                const walker = document.createTreeWalker(targetDiv, NodeFilter.SHOW_TEXT);
+                const walker = activeDocument.createTreeWalker(targetDiv, NodeFilter.SHOW_TEXT);
                 const firstNode = walker.nextNode() as Text | null;
-                const range = document.createRange();
+                const range = activeDocument.createRange();
                 if (firstNode) { range.setStart(firstNode, 0); }
                 else           { range.setStart(targetDiv, 0); }
                 range.collapse(true);
@@ -880,7 +880,7 @@ export class EditorElement {
                 const hi = Math.min(virt.domEnd, nextLines.length - 1);
                 const windowNodes: Node[] = [];
                 for (let i = lo; i <= hi; i++) {
-                    const div = document.createElement('div');
+                    const div = activeDocument.createElement('div');
                     div.replaceChildren(sanitizeHTMLToDom(parseInlineToHtml(nextLines[i]) || '<br>'));
                     windowNodes.push(div);
                 }
@@ -933,7 +933,7 @@ export class EditorElement {
                 const windowNodes: Node[] = [];
                 for (let i = winLo; i <= winHi; i++) {
                     const src = virt.paragraphRecords[i]?.src ?? '';
-                    const div = document.createElement('div');
+                    const div = activeDocument.createElement('div');
                     div.replaceChildren(sanitizeHTMLToDom(parseInlineToHtml(src) || '<br>'));
                     windowNodes.push(div);
                 }
@@ -956,7 +956,7 @@ export class EditorElement {
         const insertCount = hiNext - hiPrev;
         if (insertCount > 0) {
             for (let i = 0; i < insertCount; i++)
-                el.insertBefore(document.createElement('div'), suffixAnchor);
+                el.insertBefore(activeDocument.createElement('div'), suffixAnchor);
         } else {
             for (let i = 0; i < -insertCount; i++)
                 el.removeChild(el.children[this.paragraphChildIndex(lo)]);
@@ -1144,7 +1144,7 @@ export class EditorElement {
         if (!cursorDiv) return count;
 
         // Walk text nodes inside the cursor div to find the exact offset.
-        const walker = document.createTreeWalker(cursorDiv, NodeFilter.SHOW_TEXT);
+        const walker = activeDocument.createTreeWalker(cursorDiv, NodeFilter.SHOW_TEXT);
         let textNode = walker.nextNode() as Text | null;
         while (textNode) {
             if (textNode === range.startContainer) {
@@ -1201,8 +1201,8 @@ export class EditorElement {
             // Both positions are view-offset-equivalent, but placing at para-start is correct
             // when deleteVirtualSelection produces a cursor at the beginning of a paragraph.
             if (remaining === 0) {
-                const range = document.createRange();
-                const firstWalker = document.createTreeWalker(child, NodeFilter.SHOW_TEXT);
+                const range = activeDocument.createRange();
+                const firstWalker = activeDocument.createTreeWalker(child, NodeFilter.SHOW_TEXT);
                 const firstNode = firstWalker.nextNode() as Text | null;
                 if (firstNode) { range.setStart(firstNode, 0); }
                 else            { range.setStart(child, 0); }
@@ -1213,7 +1213,7 @@ export class EditorElement {
             }
 
             // Walk text nodes of the in-window div.
-            const walker = document.createTreeWalker(child, NodeFilter.SHOW_TEXT);
+            const walker = activeDocument.createTreeWalker(child, NodeFilter.SHOW_TEXT);
             let node = walker.nextNode() as Text | null;
             while (node) {
                 if (!isInsideRtNode(node, this.el)) {
@@ -1222,7 +1222,7 @@ export class EditorElement {
                         ? (node.textContent ?? '').replace(/\u200B/g, '').length
                         : node.length;
                     if (remaining <= visLen) {
-                        const range = document.createRange();
+                        const range = activeDocument.createRange();
                         let actualOffset: number;
                         if (isAnchor) {
                             const text = node.textContent ?? '';
@@ -1248,7 +1248,7 @@ export class EditorElement {
             }
         }
 
-        const range = document.createRange();
+        const range = activeDocument.createRange();
         range.selectNodeContents(this.el);
         range.collapse(false);
         sel.removeAllRanges();

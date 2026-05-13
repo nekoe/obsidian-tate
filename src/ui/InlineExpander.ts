@@ -35,7 +35,7 @@ export class InlineExpander {
         const rawText = serializeNode(target, this.el);
         const cursorOffset = rawOffsetForExpand(target, range.startContainer, range.startOffset);
 
-        const span = document.createElement('span');
+        const span = activeDocument.createElement('span');
         span.className = 'tate-editing';
         span.textContent = rawText;
 
@@ -45,7 +45,7 @@ export class InlineExpander {
         if (textNode) {
             const sel = window.getSelection();
             if (sel) {
-                const r = document.createRange();
+                const r = activeDocument.createRange();
                 r.setStart(textNode, Math.min(cursorOffset, textNode.length));
                 r.collapse(true);
                 sel.removeAllRanges();

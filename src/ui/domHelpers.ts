@@ -1,17 +1,17 @@
 // ---- Element factories ----
 
 export function createRubyEl(base: string, rt: string, explicit: boolean): HTMLElement {
-    const rubyEl = document.createElement('ruby');
+    const rubyEl = activeDocument.createElement('ruby');
     rubyEl.setAttribute('data-ruby-explicit', String(explicit));
-    rubyEl.appendChild(document.createTextNode(base));
-    const rtEl = document.createElement('rt');
+    rubyEl.appendChild(activeDocument.createTextNode(base));
+    const rtEl = activeDocument.createElement('rt');
     rtEl.textContent = rt;
     rubyEl.appendChild(rtEl);
     return rubyEl;
 }
 
 export function createTcyEl(content: string): HTMLElement {
-    const span = document.createElement('span');
+    const span = activeDocument.createElement('span');
     span.setAttribute('data-tcy', 'explicit');
     span.className = 'tcy';
     span.textContent = content;
@@ -19,7 +19,7 @@ export function createTcyEl(content: string): HTMLElement {
 }
 
 export function createBoutenEl(content: string): HTMLElement {
-    const span = document.createElement('span');
+    const span = activeDocument.createElement('span');
     span.setAttribute('data-bouten', 'sesame');
     span.className = 'bouten';
     span.textContent = content;
@@ -27,7 +27,7 @@ export function createBoutenEl(content: string): HTMLElement {
 }
 
 export function createHeadingEl(content: string, level: 'large' | 'mid' | 'small'): HTMLElement {
-    const span = document.createElement('span');
+    const span = activeDocument.createElement('span');
     span.setAttribute('data-heading', level);
     span.className = `tate-heading tate-heading-${level}`;
     span.textContent = content;
@@ -35,9 +35,9 @@ export function createHeadingEl(content: string, level: 'large' | 'mid' | 'small
 }
 
 export function createCursorAnchor(): HTMLSpanElement {
-    const anchor = document.createElement('span');
+    const anchor = activeDocument.createElement('span');
     anchor.className = 'tate-cursor-anchor';
-    anchor.appendChild(document.createTextNode('\u200B'));
+    anchor.appendChild(activeDocument.createTextNode('\u200B'));
     return anchor;
 }
 
@@ -54,16 +54,16 @@ export function insertAnnotationElement(
     const followingText = textNode.data.slice(matchEnd);
     const next = textNode.nextSibling;
     parentEl.removeChild(textNode);
-    if (precedingText) parentEl.insertBefore(document.createTextNode(precedingText), next);
+    if (precedingText) parentEl.insertBefore(activeDocument.createTextNode(precedingText), next);
     parentEl.insertBefore(element, next);
-    if (followingText) parentEl.insertBefore(document.createTextNode(followingText), next);
+    if (followingText) parentEl.insertBefore(activeDocument.createTextNode(followingText), next);
     return element;
 }
 
 export function setCursorAfter(node: Node): void {
     const sel = window.getSelection();
     if (!sel) return;
-    const r = document.createRange();
+    const r = activeDocument.createRange();
     r.setStartAfter(node);
     r.collapse(true);
     sel.removeAllRanges();
@@ -113,7 +113,7 @@ export function findLastBaseTextInElement(
     el: HTMLElement,
     rootEl: HTMLElement,
 ): { node: Text; offset: number } | null {
-    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+    const walker = activeDocument.createTreeWalker(el, NodeFilter.SHOW_TEXT);
     let lastText: Text | null = null;
     let node = walker.nextNode() as Text | null;
     while (node) {
@@ -144,7 +144,7 @@ export function clearChildren(el: HTMLElement): void {
 export function ensureBrPlaceholder(el: HTMLElement): void {
     if (!isEffectivelyEmpty(el)) return;
     clearChildren(el);
-    el.appendChild(document.createElement('br'));
+    el.appendChild(activeDocument.createElement('br'));
 }
 
 // ---- Pure computation ----
@@ -172,7 +172,7 @@ export function rawOffsetForExpand(el: HTMLElement, node: Node, offset: number):
 // Used by EditorElement and ParagraphVirtualizer to compute per-div viewLen consistently.
 export function computeDivViewLen(div: HTMLElement, rootEl: HTMLElement): number {
     let count = 0;
-    const walker = document.createTreeWalker(div, NodeFilter.SHOW_TEXT);
+    const walker = activeDocument.createTreeWalker(div, NodeFilter.SHOW_TEXT);
     let node = walker.nextNode() as Text | null;
     while (node) {
         if (!isInsideRtNode(node, rootEl)) {
@@ -192,7 +192,7 @@ export function computeViewOffsetInDiv(
     targetNode: Node, targetOffset: number,
 ): number {
     let count = 0;
-    const walker = document.createTreeWalker(div, NodeFilter.SHOW_TEXT);
+    const walker = activeDocument.createTreeWalker(div, NodeFilter.SHOW_TEXT);
     let node = walker.nextNode() as Text | null;
     while (node) {
         if (!isInsideRtNode(node, editorEl)) {
@@ -218,7 +218,7 @@ export function computeDomPositionFromViewOff(
     div: HTMLElement, editorEl: HTMLElement, viewOff: number,
 ): { node: Node; offset: number } {
     let remaining = viewOff;
-    const walker = document.createTreeWalker(div, NodeFilter.SHOW_TEXT);
+    const walker = activeDocument.createTreeWalker(div, NodeFilter.SHOW_TEXT);
     let node = walker.nextNode() as Text | null;
     while (node) {
         if (!isInsideRtNode(node, editorEl)) {

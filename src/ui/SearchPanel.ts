@@ -49,7 +49,7 @@ function visibleToRawOffset(node: Text, visibleOffset: number): number {
 function extractSegmentsFromDiv(div: HTMLElement, editorEl: HTMLElement): LocalSegment[] {
     const segments: LocalSegment[] = [];
     let localOffset = 0;
-    const walker = document.createTreeWalker(div, NodeFilter.SHOW_TEXT);
+    const walker = activeDocument.createTreeWalker(div, NodeFilter.SHOW_TEXT);
     let node = walker.nextNode() as Text | null;
     while (node) {
         if (!isInsideRtNode(node, editorEl)) {
@@ -114,7 +114,7 @@ function createRangeInParagraph(
         }
     }
     if (!startNode || !endNode) return null;
-    const range = document.createRange();
+    const range = activeDocument.createRange();
     range.setStart(startNode, startOffset);
     range.setEnd(endNode, endOffset);
     return range;
@@ -218,7 +218,7 @@ export class SearchPanel {
         this.searchScope.register([], 'Enter', (evt) => {
             if (evt.isComposing) return;
             if (this.editorFocused) return; // pass through to editor
-            if (document.activeElement === this.replaceInputEl) {
+            if (activeDocument.activeElement === this.replaceInputEl) {
                 this.replaceCurrentMatch();
             } else {
                 this.navigate(1);
@@ -228,7 +228,7 @@ export class SearchPanel {
         this.searchScope.register(['Shift'], 'Enter', (evt) => {
             if (evt.isComposing) return;
             if (this.editorFocused) return; // pass through to editor
-            if (document.activeElement !== this.replaceInputEl) {
+            if (activeDocument.activeElement !== this.replaceInputEl) {
                 this.navigate(-1);
             }
             return false; // Shift+Enter in replace input: no-op
@@ -332,7 +332,7 @@ export class SearchPanel {
     }
 
     private buildPanel(expandReplace: boolean): void {
-        const panel = document.createElement('div');
+        const panel = activeDocument.createElement('div');
         panel.className = 'tate-search-panel';
 
         // When focus is on a panel element other than the text inputs (e.g., the replace-all button),
@@ -352,10 +352,10 @@ export class SearchPanel {
             }
         });
 
-        const searchRow = document.createElement('div');
+        const searchRow = activeDocument.createElement('div');
         searchRow.className = 'tate-search-row';
 
-        const toggleBtn = document.createElement('button');
+        const toggleBtn = activeDocument.createElement('button');
         toggleBtn.className = 'tate-search-toggle';
         toggleBtn.tabIndex = -1;
         setIcon(toggleBtn, expandReplace ? 'chevron-down' : 'chevron-right');
@@ -363,7 +363,7 @@ export class SearchPanel {
         toggleBtn.addEventListener('click', () => this.toggleReplaceRow());
         this.toggleBtnEl = toggleBtn;
 
-        const input = document.createElement('input');
+        const input = activeDocument.createElement('input');
         input.type = 'text';
         input.className = 'tate-search-input';
         input.setAttribute('placeholder', '検索');
@@ -390,26 +390,26 @@ export class SearchPanel {
         });
         this.inputEl = input;
 
-        const count = document.createElement('span');
+        const count = activeDocument.createElement('span');
         count.className = 'tate-search-count';
         count.textContent = '';
         this.countEl = count;
 
-        const nextBtn = document.createElement('button');
+        const nextBtn = activeDocument.createElement('button');
         nextBtn.className = 'tate-search-btn';
         nextBtn.tabIndex = -1;
         nextBtn.setAttribute('aria-label', '次へ');
         setIcon(nextBtn, 'arrow-down');
         nextBtn.addEventListener('click', () => this.navigate(1));
 
-        const prevBtn = document.createElement('button');
+        const prevBtn = activeDocument.createElement('button');
         prevBtn.className = 'tate-search-btn';
         prevBtn.tabIndex = -1;
         prevBtn.setAttribute('aria-label', '前へ');
         setIcon(prevBtn, 'arrow-up');
         prevBtn.addEventListener('click', () => this.navigate(-1));
 
-        const closeBtn = document.createElement('button');
+        const closeBtn = activeDocument.createElement('button');
         closeBtn.className = 'tate-search-btn';
         closeBtn.tabIndex = -1;
         closeBtn.setAttribute('aria-label', '閉じる');
@@ -418,12 +418,12 @@ export class SearchPanel {
 
         searchRow.append(toggleBtn, input, count, nextBtn, prevBtn, closeBtn);
 
-        const replaceRow = document.createElement('div');
+        const replaceRow = activeDocument.createElement('div');
         replaceRow.className = 'tate-replace-row';
         if (expandReplace) replaceRow.classList.add('tate-replace-visible');
         this.replaceRowEl = replaceRow;
 
-        const replaceInput = document.createElement('input');
+        const replaceInput = activeDocument.createElement('input');
         replaceInput.type = 'text';
         replaceInput.className = 'tate-replace-input';
         replaceInput.setAttribute('placeholder', '置換');
@@ -434,21 +434,21 @@ export class SearchPanel {
         });
         this.replaceInputEl = replaceInput;
 
-        const replaceBtn = document.createElement('button');
+        const replaceBtn = activeDocument.createElement('button');
         replaceBtn.className = 'tate-search-btn';
         replaceBtn.tabIndex = -1;
         replaceBtn.setAttribute('aria-label', '置換');
         setIcon(replaceBtn, 'replace');
         replaceBtn.addEventListener('click', () => this.replaceCurrentMatch());
 
-        const replaceAllBtn = document.createElement('button');
+        const replaceAllBtn = activeDocument.createElement('button');
         replaceAllBtn.className = 'tate-search-btn';
         replaceAllBtn.tabIndex = -1;
         replaceAllBtn.setAttribute('aria-label', '全置換');
         setIcon(replaceAllBtn, 'replace-all');
         replaceAllBtn.addEventListener('click', () => this.replaceAllMatches());
 
-        const replaceBtnGroup = document.createElement('div');
+        const replaceBtnGroup = activeDocument.createElement('div');
         replaceBtnGroup.className = 'tate-replace-btn-group';
         replaceBtnGroup.append(replaceBtn, replaceAllBtn);
 
@@ -692,7 +692,7 @@ export class SearchPanel {
         // sel.addRange() on a contenteditable node steals browser focus.
         const sel = window.getSelection();
         if (sel) {
-            const cursorRange = document.createRange();
+            const cursorRange = activeDocument.createRange();
             cursorRange.setStart(range.startContainer, range.startOffset);
             cursorRange.collapse(true);
             sel.removeAllRanges();

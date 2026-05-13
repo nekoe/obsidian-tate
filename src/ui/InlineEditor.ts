@@ -142,7 +142,7 @@ export class InlineEditor {
                         const maxOffset = savedNode.nodeType === Node.TEXT_NODE
                             ? (savedNode as Text).length
                             : savedNode.childNodes.length;
-                        const r = document.createRange();
+                        const r = activeDocument.createRange();
                         r.setStart(savedNode, Math.min(savedOffset, maxOffset));
                         r.collapse(true);
                         sel.removeAllRanges();
@@ -256,7 +256,7 @@ export class InlineEditor {
         if (!selectedText) return false;
 
         const rawText = `｜${selectedText}《》`;
-        const span = document.createElement('span');
+        const span = activeDocument.createElement('span');
         span.className = 'tate-editing';
         span.textContent = rawText;
 
@@ -269,9 +269,9 @@ export class InlineEditor {
             const followingText = textNode.data.slice(endOffset);
             const next = textNode.nextSibling;
             parentEl.removeChild(textNode);
-            if (precedingText) parentEl.insertBefore(document.createTextNode(precedingText), next);
+            if (precedingText) parentEl.insertBefore(activeDocument.createTextNode(precedingText), next);
             parentEl.insertBefore(span, next);
-            if (followingText) parentEl.insertBefore(document.createTextNode(followingText), next);
+            if (followingText) parentEl.insertBefore(activeDocument.createTextNode(followingText), next);
 
             this.expandedEl = span;
             this.expandedElOriginalText = rawText;
@@ -280,7 +280,7 @@ export class InlineEditor {
             const spanText = span.firstChild as Text | null;
             if (spanText) {
                 const sel = window.getSelection()!;
-                const r = document.createRange();
+                const r = activeDocument.createRange();
                 r.setStart(spanText, rawText.length - 1);
                 r.collapse(true);
                 sel.removeAllRanges();
@@ -324,7 +324,7 @@ export class InlineEditor {
 
         const moveLeft = key === 'ArrowUp';
         const textNode = tcySpan.firstChild instanceof Text ? tcySpan.firstChild as Text : null;
-        const r = document.createRange();
+        const r = activeDocument.createRange();
 
         if (!textNode) {
             if (moveLeft) r.setStartBefore(tcySpan); else r.setStartAfter(tcySpan);

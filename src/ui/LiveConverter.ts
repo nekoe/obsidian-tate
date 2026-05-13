@@ -48,7 +48,7 @@ export class LiveConverter {
         // When the user types the ruby text and moves the cursor away, collapseEditing() collapses it to a <ruby>.
         if (rt === '') {
             const rawText = explicit ? `｜${base}《》` : `${base}《》`;
-            const span = document.createElement('span');
+            const span = activeDocument.createElement('span');
             span.className = 'tate-editing';
             span.textContent = rawText;
 
@@ -57,7 +57,7 @@ export class LiveConverter {
             // Place cursor between 《 and 》 (rawText.length - 1 = just before 》)
             const spanText = span.firstChild as Text | null;
             if (spanText) {
-                const r = document.createRange();
+                const r = activeDocument.createRange();
                 r.setStart(spanText, rawText.length - 1);
                 r.collapse(true);
                 const s = window.getSelection()!;

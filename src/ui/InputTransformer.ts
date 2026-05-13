@@ -72,7 +72,7 @@ export class InputTransformer {
         if (compositionStart < 0) return;
 
         // Build a collapsed range just before the composition to get text preceding it.
-        const bracketRange = document.createRange();
+        const bracketRange = activeDocument.createRange();
         bracketRange.setStart(textNode, compositionStart);
         bracketRange.collapse(true);
         const textBeforeBracket = this.getTextBeforeCursorInParagraph(bracketRange);
@@ -150,7 +150,7 @@ export class InputTransformer {
         const div = this.getContainingParagraphDiv(range.startContainer);
         if (!div) return '';
         try {
-            const lineRange = document.createRange();
+            const lineRange = activeDocument.createRange();
             lineRange.setStart(div, 0);
             lineRange.setEnd(range.startContainer, range.startOffset);
             return lineRange.toString();
@@ -198,7 +198,7 @@ export class InputTransformer {
 
         if (!prevDiv || prevDiv.tagName !== 'DIV') return 0;
 
-        const walker = document.createTreeWalker(prevDiv, NodeFilter.SHOW_TEXT);
+        const walker = activeDocument.createTreeWalker(prevDiv, NodeFilter.SHOW_TEXT);
         // Skip empty text nodes (can arise from Range.insertNode splitting at offset 0)
         let firstText = walker.nextNode() as Text | null;
         while (firstText && firstText.data.length === 0) firstText = walker.nextNode() as Text | null;
@@ -210,7 +210,7 @@ export class InputTransformer {
 
     private removeOneLeadingFullWidthSpace(cursorRange: Range): void {
         const div = this.getContainingParagraphDiv(cursorRange.startContainer) ?? this.el;
-        const walker = document.createTreeWalker(div, NodeFilter.SHOW_TEXT);
+        const walker = activeDocument.createTreeWalker(div, NodeFilter.SHOW_TEXT);
         // Skip empty text nodes (can arise from Range.insertNode splitting at offset 0)
         let firstText = walker.nextNode() as Text | null;
         while (firstText && firstText.data.length === 0) firstText = walker.nextNode() as Text | null;
@@ -227,7 +227,7 @@ export class InputTransformer {
 
         if (offsetBeforeDelete > 0) {
             const newOffset = offsetBeforeDelete - 1;
-            const r = document.createRange();
+            const r = activeDocument.createRange();
             r.setStart(firstText, newOffset);
             r.collapse(true);
             const sel = window.getSelection();
@@ -246,13 +246,13 @@ export class InputTransformer {
             const node = range.startContainer as Text;
             const insertOffset = range.startOffset;
             node.insertData(insertOffset, text);
-            const r = document.createRange();
+            const r = activeDocument.createRange();
             r.setStart(node, insertOffset + text.length);
             r.collapse(true);
             const sel = window.getSelection();
             if (sel) { sel.removeAllRanges(); sel.addRange(r); }
         } else {
-            const textNode = document.createTextNode(text);
+            const textNode = activeDocument.createTextNode(text);
             range.insertNode(textNode);
             // Place cursor inside the text node rather than at the element-level position
             // {<div>, 1} that setStartAfter would produce.  An element-level cursor adjacent

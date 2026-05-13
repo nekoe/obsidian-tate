@@ -74,7 +74,7 @@ export class BoutenGuard {
         if (next instanceof HTMLElement && next.classList.contains('tate-cursor-anchor')
                 && next.firstChild?.nodeType === Node.TEXT_NODE) {
             // End-of-line: new text node between bouten and anchor preserves anchor for future navigation
-            const textNode = document.createTextNode(chars);
+            const textNode = activeDocument.createTextNode(chars);
             bouten.parentNode!.insertBefore(textNode, next);
             targetNode = textNode;
             targetOffset = chars.length;
@@ -85,7 +85,7 @@ export class BoutenGuard {
             targetNode = textNode;
             targetOffset = chars.length;
         } else {
-            const textNode = document.createTextNode(chars);
+            const textNode = activeDocument.createTextNode(chars);
             bouten.parentNode!.insertBefore(textNode, next ?? null);
             targetNode = textNode;
             targetOffset = chars.length;
@@ -93,7 +93,7 @@ export class BoutenGuard {
 
         const sel = window.getSelection();
         if (sel) {
-            const r = document.createRange();
+            const r = activeDocument.createRange();
             r.setStart(targetNode, targetOffset);
             r.collapse(true);
             sel.removeAllRanges();
@@ -139,7 +139,7 @@ export class BoutenGuard {
     // Mid-line: redirects to the start of the following text node, a true text-level stable position.
     redirectCursorOutOfCollapsedBouten(bouten: HTMLElement, sel: Selection): void {
         const next = bouten.nextSibling;
-        const r = document.createRange();
+        const r = activeDocument.createRange();
         if (next instanceof HTMLElement && next.classList.contains('tate-cursor-anchor')
                 && next.firstChild?.nodeType === Node.TEXT_NODE) {
             // Place cursor at the END of the anchor text (after U+200B) rather than the start,

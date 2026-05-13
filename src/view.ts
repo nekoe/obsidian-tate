@@ -283,12 +283,12 @@ export class VerticalWritingView extends ItemView {
         });
         this.registerDomEvent(document, 'selectionchange', () => {
             // Ensure the cursor paragraph and its neighbors are in the DOM window / thawed.
-            if (document.activeElement === editorEl.el) virtualizer.ensureWindowAroundCursor();
+            if (activeDocument.activeElement === editorEl.el) virtualizer.ensureWindowAroundCursor();
             const contentChanged = editorEl.handleSelectionChange();
             if (contentChanged) this.commitToCm6(); // Commit only if collapse changed content
             // VS tracking: update focus when the user extends/shrinks a gap-spanning selection
             // via Shift+Arrow or mouse drag. Skip programmatic updates to avoid re-entry loops.
-            if (document.activeElement === editorEl.el && !virtualizer.isSyncingSelection) {
+            if (activeDocument.activeElement === editorEl.el && !virtualizer.isSyncingSelection) {
                 const sel = window.getSelection();
                 if (sel) {
                     const vs = virtualizer.getVirtualSelection();
@@ -307,11 +307,11 @@ export class VerticalWritingView extends ItemView {
             // Multiple selectionchange events can fire in a single frame (e.g. auto-indent inserts
             // text via insertText(), triggering one event per DOM mutation). Debounce with rAF so
             // only the final cursor position per frame is captured, avoiding redundant O(N) scans.
-            if (document.activeElement === editorEl.el && !editorEl.isInlineExpanded()) {
+            if (activeDocument.activeElement === editorEl.el && !editorEl.isInlineExpanded()) {
                 if (this.selectionChangeRafId !== null) cancelAnimationFrame(this.selectionChangeRafId);
                 this.selectionChangeRafId = requestAnimationFrame(() => {
                     this.selectionChangeRafId = null;
-                    if (document.activeElement === editorEl.el && !editorEl.isInlineExpanded()) {
+                    if (activeDocument.activeElement === editorEl.el && !editorEl.isInlineExpanded()) {
                         this.lastKnownViewOffset = editorEl.getViewCursorOffset();
                     }
                 });
@@ -341,7 +341,7 @@ export class VerticalWritingView extends ItemView {
                 this.doUndoRedo(editorEl, e.shiftKey);
                 return;
             }
-            // Cmd-A / Ctrl-A: initialize a VirtualSelection spanning the entire document.
+            // Cmd-A / Ctrl-A: initialize a VirtualSelection spanning the entire activeDocument.
             // The DOM Range is set to proxy positions (window boundaries) so native ::selection
             // highlights all in-window paragraphs; no full DOM expansion is required.
             if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.key === 'a') {
@@ -537,7 +537,7 @@ export class VerticalWritingView extends ItemView {
         // When inline expanded, getViewCursorOffset() would return an offset inside the raw
         // editing span, which does not map to a valid collapsed view offset. Fall back to
         // lastKnownViewOffset (captured just before the expansion triggered) in that case.
-        const offset = (el && document.activeElement === el.el && !el.isInlineExpanded())
+        const offset = (el && activeDocument.activeElement === el.el && !el.isInlineExpanded())
             ? el.getViewCursorOffset()
             : this.lastKnownViewOffset;
         if (offset === null) return null;

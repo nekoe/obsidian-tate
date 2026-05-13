@@ -129,9 +129,9 @@ export class ParagraphVirtualizer {
     // Inserts rightSpacer and leftSpacer into editorEl.
     private initSpacers(): void {
         if (this.rightSpacer) return; // already initialised
-        const right = document.createElement('div');
+        const right = activeDocument.createElement('div');
         right.classList.add(SPACER_CLASS);
-        const left = document.createElement('div');
+        const left = activeDocument.createElement('div');
         left.classList.add(SPACER_CLASS);
         this.editorEl.prepend(right);
         this.editorEl.append(left);
@@ -183,7 +183,7 @@ export class ParagraphVirtualizer {
     private buildDomWindow(sources: string[]): void {
         const windowNodes: Node[] = [];
         for (const src of sources) {
-            const div = document.createElement('div');
+            const div = activeDocument.createElement('div');
             div.replaceChildren(sanitizeHTMLToDom(parseInlineToHtml(src) || '<br>'));
             windowNodes.push(div);
         }
@@ -325,12 +325,12 @@ export class ParagraphVirtualizer {
     }
 
     // Replaces all paragraph divs with the full document content (one div per record).
-    // Used by Cmd-A (select-all) so the selection can span the entire document.
+    // Used by Cmd-A (select-all) so the selection can span the entire activeDocument.
     // Performs a single replaceChildren call to minimise layout thrashing.
     expandWindowToFull(): void {
-        const frag = document.createDocumentFragment();
+        const frag = activeDocument.createDocumentFragment();
         for (const rec of this.paragraphRecords) {
-            const div = document.createElement('div');
+            const div = activeDocument.createElement('div');
             div.replaceChildren(sanitizeHTMLToDom(parseInlineToHtml(rec.src) || '<br>'));
             frag.appendChild(div);
         }
@@ -397,7 +397,7 @@ export class ParagraphVirtualizer {
         if (this.domStart <= 0) return;
         const i = this.domStart - 1;
         const rec = this.paragraphRecords[i];
-        const div = document.createElement('div');
+        const div = activeDocument.createElement('div');
         div.replaceChildren(sanitizeHTMLToDom(parseInlineToHtml(rec.src) || '<br>'));
         // Insert after rightSpacer (children[0]) → before the current first paragraph.
         const firstPara = this.rightSpacer
@@ -415,7 +415,7 @@ export class ParagraphVirtualizer {
         if (this.domEnd >= this.paragraphRecords.length - 1) return;
         const i = this.domEnd + 1;
         const rec = this.paragraphRecords[i];
-        const div = document.createElement('div');
+        const div = activeDocument.createElement('div');
         div.replaceChildren(sanitizeHTMLToDom(parseInlineToHtml(rec.src) || '<br>'));
         // Insert before leftSpacer (last child) → after the current last paragraph.
         this.editorEl.insertBefore(div, this.leftSpacer ?? null);

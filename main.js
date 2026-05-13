@@ -640,39 +640,39 @@ function serializeNode(node, rootEl) {
 
 // src/ui/domHelpers.ts
 function createRubyEl(base, rt, explicit) {
-  const rubyEl = document.createElement("ruby");
+  const rubyEl = activeDocument.createElement("ruby");
   rubyEl.setAttribute("data-ruby-explicit", String(explicit));
-  rubyEl.appendChild(document.createTextNode(base));
-  const rtEl = document.createElement("rt");
+  rubyEl.appendChild(activeDocument.createTextNode(base));
+  const rtEl = activeDocument.createElement("rt");
   rtEl.textContent = rt;
   rubyEl.appendChild(rtEl);
   return rubyEl;
 }
 function createTcyEl(content) {
-  const span = document.createElement("span");
+  const span = activeDocument.createElement("span");
   span.setAttribute("data-tcy", "explicit");
   span.className = "tcy";
   span.textContent = content;
   return span;
 }
 function createBoutenEl(content) {
-  const span = document.createElement("span");
+  const span = activeDocument.createElement("span");
   span.setAttribute("data-bouten", "sesame");
   span.className = "bouten";
   span.textContent = content;
   return span;
 }
 function createHeadingEl(content, level) {
-  const span = document.createElement("span");
+  const span = activeDocument.createElement("span");
   span.setAttribute("data-heading", level);
   span.className = `tate-heading tate-heading-${level}`;
   span.textContent = content;
   return span;
 }
 function createCursorAnchor() {
-  const anchor = document.createElement("span");
+  const anchor = activeDocument.createElement("span");
   anchor.className = "tate-cursor-anchor";
-  anchor.appendChild(document.createTextNode("\u200B"));
+  anchor.appendChild(activeDocument.createTextNode("\u200B"));
   return anchor;
 }
 function insertAnnotationElement(textNode, matchStart, matchEnd, element) {
@@ -681,15 +681,15 @@ function insertAnnotationElement(textNode, matchStart, matchEnd, element) {
   const followingText = textNode.data.slice(matchEnd);
   const next = textNode.nextSibling;
   parentEl.removeChild(textNode);
-  if (precedingText) parentEl.insertBefore(document.createTextNode(precedingText), next);
+  if (precedingText) parentEl.insertBefore(activeDocument.createTextNode(precedingText), next);
   parentEl.insertBefore(element, next);
-  if (followingText) parentEl.insertBefore(document.createTextNode(followingText), next);
+  if (followingText) parentEl.insertBefore(activeDocument.createTextNode(followingText), next);
   return element;
 }
 function setCursorAfter(node) {
   const sel = window.getSelection();
   if (!sel) return;
-  const r = document.createRange();
+  const r = activeDocument.createRange();
   r.setStartAfter(node);
   r.collapse(true);
   sel.removeAllRanges();
@@ -720,7 +720,7 @@ function isInsideRtNode(node, rootEl) {
   return findAncestor((_a = node.parentElement) != null ? _a : node, (el) => el.tagName === "RT", rootEl) !== null;
 }
 function findLastBaseTextInElement(el, rootEl) {
-  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+  const walker = activeDocument.createTreeWalker(el, NodeFilter.SHOW_TEXT);
   let lastText = null;
   let node = walker.nextNode();
   while (node) {
@@ -739,7 +739,7 @@ function clearChildren(el) {
 function ensureBrPlaceholder(el) {
   if (!isEffectivelyEmpty(el)) return;
   clearChildren(el);
-  el.appendChild(document.createElement("br"));
+  el.appendChild(activeDocument.createElement("br"));
 }
 function rawOffsetForExpand(el, node, offset) {
   if (el.tagName === "RUBY") {
@@ -762,7 +762,7 @@ function rawOffsetForExpand(el, node, offset) {
 function computeDivViewLen(div, rootEl) {
   var _a;
   let count = 0;
-  const walker = document.createTreeWalker(div, NodeFilter.SHOW_TEXT);
+  const walker = activeDocument.createTreeWalker(div, NodeFilter.SHOW_TEXT);
   let node = walker.nextNode();
   while (node) {
     if (!isInsideRtNode(node, rootEl)) {
@@ -775,7 +775,7 @@ function computeDivViewLen(div, rootEl) {
 function computeViewOffsetInDiv(div, editorEl, targetNode, targetOffset) {
   var _a, _b;
   let count = 0;
-  const walker = document.createTreeWalker(div, NodeFilter.SHOW_TEXT);
+  const walker = activeDocument.createTreeWalker(div, NodeFilter.SHOW_TEXT);
   let node = walker.nextNode();
   while (node) {
     if (!isInsideRtNode(node, editorEl)) {
@@ -793,7 +793,7 @@ function computeViewOffsetInDiv(div, editorEl, targetNode, targetOffset) {
 function computeDomPositionFromViewOff(div, editorEl, viewOff) {
   var _a;
   let remaining = viewOff;
-  const walker = document.createTreeWalker(div, NodeFilter.SHOW_TEXT);
+  const walker = activeDocument.createTreeWalker(div, NodeFilter.SHOW_TEXT);
   let node = walker.nextNode();
   while (node) {
     if (!isInsideRtNode(node, editorEl)) {
@@ -897,7 +897,7 @@ var BoutenGuard = class {
     let targetNode;
     let targetOffset;
     if (next instanceof HTMLElement && next.classList.contains("tate-cursor-anchor") && ((_a = next.firstChild) == null ? void 0 : _a.nodeType) === Node.TEXT_NODE) {
-      const textNode = document.createTextNode(chars);
+      const textNode = activeDocument.createTextNode(chars);
       bouten.parentNode.insertBefore(textNode, next);
       targetNode = textNode;
       targetOffset = chars.length;
@@ -907,14 +907,14 @@ var BoutenGuard = class {
       targetNode = textNode;
       targetOffset = chars.length;
     } else {
-      const textNode = document.createTextNode(chars);
+      const textNode = activeDocument.createTextNode(chars);
       bouten.parentNode.insertBefore(textNode, next != null ? next : null);
       targetNode = textNode;
       targetOffset = chars.length;
     }
     const sel = window.getSelection();
     if (sel) {
-      const r = document.createRange();
+      const r = activeDocument.createRange();
       r.setStart(targetNode, targetOffset);
       r.collapse(true);
       sel.removeAllRanges();
@@ -951,7 +951,7 @@ var BoutenGuard = class {
   redirectCursorOutOfCollapsedBouten(bouten, sel) {
     var _a;
     const next = bouten.nextSibling;
-    const r = document.createRange();
+    const r = activeDocument.createRange();
     if (next instanceof HTMLElement && next.classList.contains("tate-cursor-anchor") && ((_a = next.firstChild) == null ? void 0 : _a.nodeType) === Node.TEXT_NODE) {
       const anchorText = next.firstChild;
       r.setStart(anchorText, anchorText.length);
@@ -1004,7 +1004,7 @@ var CursorAnchorManager = class {
     const text = (_a = anchorSpan.textContent) != null ? _a : "";
     if ((text === "\u200B" || text === "") && savedSkip !== null) {
       try {
-        const r = document.createRange();
+        const r = activeDocument.createRange();
         if (savedSkip === "forward") {
           const pos = this.findPositionAfterAnchor(anchorSpan);
           if (pos) r.setStart(pos.node, pos.offset);
@@ -1028,7 +1028,7 @@ var CursorAnchorManager = class {
   placeCursorAfterCollapse(nextSib, parentEl, sel) {
     var _a;
     try {
-      const r = document.createRange();
+      const r = activeDocument.createRange();
       let placedAnchor = null;
       if (nextSib && nextSib.isConnected) {
         if (nextSib instanceof HTMLElement && nextSib.classList.contains("tate-cursor-anchor") && ((_a = nextSib.firstChild) == null ? void 0 : _a.nodeType) === Node.TEXT_NODE) {
@@ -1074,9 +1074,9 @@ var CursorAnchorManager = class {
     if (!anchor) return;
     const text = (_a = anchor.textContent) != null ? _a : "";
     if (text === "") {
-      const zws = document.createTextNode("\u200B");
+      const zws = activeDocument.createTextNode("\u200B");
       anchor.replaceChildren(zws);
-      const r = document.createRange();
+      const r = activeDocument.createRange();
       r.setStart(zws, 0);
       r.collapse(true);
       sel.removeAllRanges();
@@ -1088,7 +1088,7 @@ var CursorAnchorManager = class {
         const prevOffset = range.startContainer === textNode ? range.startOffset : cleaned.length;
         textNode.textContent = cleaned;
         const adjustedOffset = text.slice(0, prevOffset).replace(/\u200B/g, "").length;
-        const r = document.createRange();
+        const r = activeDocument.createRange();
         r.setStart(textNode, Math.min(adjustedOffset, cleaned.length));
         r.collapse(true);
         sel.removeAllRanges();
@@ -1105,7 +1105,7 @@ var CursorAnchorManager = class {
         const t = sibling;
         if (!isInsideRtNode(t, this.el)) return { node: t, offset: 0 };
       } else if (sibling.nodeType === Node.ELEMENT_NODE) {
-        const walker = document.createTreeWalker(sibling, NodeFilter.SHOW_TEXT);
+        const walker = activeDocument.createTreeWalker(sibling, NodeFilter.SHOW_TEXT);
         let node = walker.nextNode();
         while (node) {
           if (!isInsideRtNode(node, this.el)) return { node, offset: 0 };
@@ -1122,7 +1122,7 @@ var CursorAnchorManager = class {
         next = next.nextSibling;
         continue;
       }
-      const walker = document.createTreeWalker(next, NodeFilter.SHOW_TEXT);
+      const walker = activeDocument.createTreeWalker(next, NodeFilter.SHOW_TEXT);
       let node = walker.nextNode();
       while (node) {
         if (!isInsideRtNode(node, this.el)) return { node, offset: 0 };
@@ -1156,7 +1156,7 @@ var CursorAnchorManager = class {
         prevDiv = prevDiv.previousSibling;
         continue;
       }
-      const walker = document.createTreeWalker(prevDiv, NodeFilter.SHOW_TEXT);
+      const walker = activeDocument.createTreeWalker(prevDiv, NodeFilter.SHOW_TEXT);
       let lastText = null;
       let node = walker.nextNode();
       while (node) {
@@ -1200,13 +1200,13 @@ var LiveConverter = class {
     const matchStart = range.startOffset - match[0].length;
     if (rt === "") {
       const rawText = explicit ? `\uFF5C${base}\u300A\u300B` : `${base}\u300A\u300B`;
-      const span = document.createElement("span");
+      const span = activeDocument.createElement("span");
       span.className = "tate-editing";
       span.textContent = rawText;
       insertAnnotationElement(textNode, matchStart, range.startOffset, span);
       const spanText = span.firstChild;
       if (spanText) {
-        const r = document.createRange();
+        const r = activeDocument.createRange();
         r.setStart(spanText, rawText.length - 1);
         r.collapse(true);
         const s = window.getSelection();
@@ -1288,7 +1288,7 @@ var InlineExpander = class {
   expandForEditing(target, range) {
     const rawText = serializeNode(target, this.el);
     const cursorOffset = rawOffsetForExpand(target, range.startContainer, range.startOffset);
-    const span = document.createElement("span");
+    const span = activeDocument.createElement("span");
     span.className = "tate-editing";
     span.textContent = rawText;
     target.parentNode.replaceChild(span, target);
@@ -1296,7 +1296,7 @@ var InlineExpander = class {
     if (textNode) {
       const sel = window.getSelection();
       if (sel) {
-        const r = document.createRange();
+        const r = activeDocument.createRange();
         r.setStart(textNode, Math.min(cursorOffset, textNode.length));
         r.collapse(true);
         sel.removeAllRanges();
@@ -1443,7 +1443,7 @@ var InlineEditor = class {
         if (savedNode.isConnected && this.el.contains(savedNode)) {
           try {
             const maxOffset = savedNode.nodeType === Node.TEXT_NODE ? savedNode.length : savedNode.childNodes.length;
-            const r = document.createRange();
+            const r = activeDocument.createRange();
             r.setStart(savedNode, Math.min(savedOffset, maxOffset));
             r.collapse(true);
             sel.removeAllRanges();
@@ -1536,7 +1536,7 @@ var InlineEditor = class {
     const selectedText = textNode.data.slice(startOffset, endOffset);
     if (!selectedText) return false;
     const rawText = `\uFF5C${selectedText}\u300A\u300B`;
-    const span = document.createElement("span");
+    const span = activeDocument.createElement("span");
     span.className = "tate-editing";
     span.textContent = rawText;
     const parentEl = textNode.parentNode;
@@ -1546,15 +1546,15 @@ var InlineEditor = class {
       const followingText = textNode.data.slice(endOffset);
       const next = textNode.nextSibling;
       parentEl.removeChild(textNode);
-      if (precedingText) parentEl.insertBefore(document.createTextNode(precedingText), next);
+      if (precedingText) parentEl.insertBefore(activeDocument.createTextNode(precedingText), next);
       parentEl.insertBefore(span, next);
-      if (followingText) parentEl.insertBefore(document.createTextNode(followingText), next);
+      if (followingText) parentEl.insertBefore(activeDocument.createTextNode(followingText), next);
       this.expandedEl = span;
       this.expandedElOriginalText = rawText;
       const spanText = span.firstChild;
       if (spanText) {
         const sel = window.getSelection();
-        const r = document.createRange();
+        const r = activeDocument.createRange();
         r.setStart(spanText, rawText.length - 1);
         r.collapse(true);
         sel.removeAllRanges();
@@ -1591,7 +1591,7 @@ var InlineEditor = class {
     if (!tcySpan) return false;
     const moveLeft = key === "ArrowUp";
     const textNode = tcySpan.firstChild instanceof Text ? tcySpan.firstChild : null;
-    const r = document.createRange();
+    const r = activeDocument.createRange();
     if (!textNode) {
       if (moveLeft) r.setStartBefore(tcySpan);
       else r.setStartAfter(tcySpan);
@@ -1834,7 +1834,7 @@ var InputTransformer = class {
     const textNode = startContainer;
     const compositionStart = startOffset - e.data.length;
     if (compositionStart < 0) return;
-    const bracketRange = document.createRange();
+    const bracketRange = activeDocument.createRange();
     bracketRange.setStart(textNode, compositionStart);
     bracketRange.collapse(true);
     const textBeforeBracket = this.getTextBeforeCursorInParagraph(bracketRange);
@@ -1887,7 +1887,7 @@ var InputTransformer = class {
     const div = this.getContainingParagraphDiv(range.startContainer);
     if (!div) return "";
     try {
-      const lineRange = document.createRange();
+      const lineRange = activeDocument.createRange();
       lineRange.setStart(div, 0);
       lineRange.setEnd(range.startContainer, range.startOffset);
       return lineRange.toString();
@@ -1922,7 +1922,7 @@ var InputTransformer = class {
     const currentDiv = this.getContainingParagraphDiv(range.startContainer);
     const prevDiv = currentDiv ? currentDiv.previousElementSibling : this.el.lastElementChild;
     if (!prevDiv || prevDiv.tagName !== "DIV") return 0;
-    const walker = document.createTreeWalker(prevDiv, NodeFilter.SHOW_TEXT);
+    const walker = activeDocument.createTreeWalker(prevDiv, NodeFilter.SHOW_TEXT);
     let firstText = walker.nextNode();
     while (firstText && firstText.data.length === 0) firstText = walker.nextNode();
     const text = (_a = firstText == null ? void 0 : firstText.data) != null ? _a : "";
@@ -1933,7 +1933,7 @@ var InputTransformer = class {
   removeOneLeadingFullWidthSpace(cursorRange) {
     var _a;
     const div = (_a = this.getContainingParagraphDiv(cursorRange.startContainer)) != null ? _a : this.el;
-    const walker = document.createTreeWalker(div, NodeFilter.SHOW_TEXT);
+    const walker = activeDocument.createTreeWalker(div, NodeFilter.SHOW_TEXT);
     let firstText = walker.nextNode();
     while (firstText && firstText.data.length === 0) firstText = walker.nextNode();
     if (!firstText || firstText.data[0] !== "\u3000") return;
@@ -1941,7 +1941,7 @@ var InputTransformer = class {
     firstText.deleteData(0, 1);
     if (offsetBeforeDelete > 0) {
       const newOffset = offsetBeforeDelete - 1;
-      const r = document.createRange();
+      const r = activeDocument.createRange();
       r.setStart(firstText, newOffset);
       r.collapse(true);
       const sel = window.getSelection();
@@ -1957,7 +1957,7 @@ var InputTransformer = class {
       const node = range.startContainer;
       const insertOffset = range.startOffset;
       node.insertData(insertOffset, text);
-      const r = document.createRange();
+      const r = activeDocument.createRange();
       r.setStart(node, insertOffset + text.length);
       r.collapse(true);
       const sel = window.getSelection();
@@ -1966,7 +1966,7 @@ var InputTransformer = class {
         sel.addRange(r);
       }
     } else {
-      const textNode = document.createTextNode(text);
+      const textNode = activeDocument.createTextNode(text);
       range.insertNode(textNode);
       range.setStart(textNode, textNode.length);
       range.collapse(true);
@@ -2056,9 +2056,9 @@ var ParagraphVirtualizer = class {
   // Inserts rightSpacer and leftSpacer into editorEl.
   initSpacers() {
     if (this.rightSpacer) return;
-    const right = document.createElement("div");
+    const right = activeDocument.createElement("div");
     right.classList.add(SPACER_CLASS);
-    const left = document.createElement("div");
+    const left = activeDocument.createElement("div");
     left.classList.add(SPACER_CLASS);
     this.editorEl.prepend(right);
     this.editorEl.append(left);
@@ -2107,7 +2107,7 @@ var ParagraphVirtualizer = class {
   buildDomWindow(sources) {
     const windowNodes = [];
     for (const src of sources) {
-      const div = document.createElement("div");
+      const div = activeDocument.createElement("div");
       div.replaceChildren((0, import_obsidian3.sanitizeHTMLToDom)(parseInlineToHtml(src) || "<br>"));
       windowNodes.push(div);
     }
@@ -2210,12 +2210,12 @@ var ParagraphVirtualizer = class {
     this.resetWindow(lo, hi);
   }
   // Replaces all paragraph divs with the full document content (one div per record).
-  // Used by Cmd-A (select-all) so the selection can span the entire document.
+  // Used by Cmd-A (select-all) so the selection can span the entire activeDocument.
   // Performs a single replaceChildren call to minimise layout thrashing.
   expandWindowToFull() {
-    const frag = document.createDocumentFragment();
+    const frag = activeDocument.createDocumentFragment();
     for (const rec of this.paragraphRecords) {
-      const div = document.createElement("div");
+      const div = activeDocument.createElement("div");
       div.replaceChildren((0, import_obsidian3.sanitizeHTMLToDom)(parseInlineToHtml(rec.src) || "<br>"));
       frag.appendChild(div);
     }
@@ -2279,7 +2279,7 @@ var ParagraphVirtualizer = class {
     if (this.domStart <= 0) return;
     const i = this.domStart - 1;
     const rec = this.paragraphRecords[i];
-    const div = document.createElement("div");
+    const div = activeDocument.createElement("div");
     div.replaceChildren((0, import_obsidian3.sanitizeHTMLToDom)(parseInlineToHtml(rec.src) || "<br>"));
     const firstPara = this.rightSpacer ? this.editorEl.children[1] : this.editorEl.firstChild;
     this.editorEl.insertBefore(div, firstPara != null ? firstPara : null);
@@ -2293,7 +2293,7 @@ var ParagraphVirtualizer = class {
     if (this.domEnd >= this.paragraphRecords.length - 1) return;
     const i = this.domEnd + 1;
     const rec = this.paragraphRecords[i];
-    const div = document.createElement("div");
+    const div = activeDocument.createElement("div");
     div.replaceChildren((0, import_obsidian3.sanitizeHTMLToDom)(parseInlineToHtml(rec.src) || "<br>"));
     this.editorEl.insertBefore(div, (_a = this.leftSpacer) != null ? _a : null);
     const w = rec.width > 0 ? rec.width : this.estimateWidth(rec.viewLen);
@@ -2715,7 +2715,7 @@ var EditorElement = class {
     content = content.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
     this.inlineEditor.reset();
     if (this.getValue() === content && this.el.childNodes.length > 0) return;
-    const shouldPreserveCursor = preserveCursor && document.activeElement === this.el;
+    const shouldPreserveCursor = preserveCursor && activeDocument.activeElement === this.el;
     const pos = shouldPreserveCursor ? this.getVisibleOffset() : -1;
     const virt = this.virtualizer;
     if (virt) {
@@ -2870,7 +2870,7 @@ var EditorElement = class {
       if (sel) {
         const target = (startDiv == null ? void 0 : startDiv.isConnected) ? startDiv : (endDiv == null ? void 0 : endDiv.isConnected) ? endDiv : null;
         if (target) {
-          const r = document.createRange();
+          const r = activeDocument.createRange();
           r.selectNodeContents(target);
           r.collapse(true);
           sel.removeAllRanges();
@@ -2986,13 +2986,13 @@ var EditorElement = class {
       const refNode = (_c = (_b = this.el.childNodes[range.startOffset]) != null ? _b : (_a = this.virtualizer) == null ? void 0 : _a.leftSpacer) != null ? _c : null;
       let lastDiv = null;
       for (const line of lines) {
-        const div = document.createElement("div");
+        const div = activeDocument.createElement("div");
         div.replaceChildren((0, import_obsidian4.sanitizeHTMLToDom)(parseInlineToHtml(line) || "<br>"));
         this.el.insertBefore(div, refNode);
         lastDiv = div;
       }
       if (lastDiv) {
-        const r = document.createRange();
+        const r = activeDocument.createRange();
         r.selectNodeContents(lastDiv);
         r.collapse(false);
         sel.removeAllRanges();
@@ -3003,7 +3003,7 @@ var EditorElement = class {
     if (!paragraphDiv || this.inlineEditor.isExpanded()) {
       for (let i = 0; i < lines.length; i++) {
         if (i > 0) {
-          const br = document.createElement("br");
+          const br = activeDocument.createElement("br");
           range.insertNode(br);
           range.setStartAfter(br);
           range.collapse(true);
@@ -3021,7 +3021,7 @@ var EditorElement = class {
       sel.addRange(range);
       return;
     }
-    const afterRange = document.createRange();
+    const afterRange = activeDocument.createRange();
     afterRange.selectNodeContents(paragraphDiv);
     afterRange.setStart(range.startContainer, range.startOffset);
     const afterFragment = afterRange.extractContents();
@@ -3037,7 +3037,7 @@ var EditorElement = class {
     let insertAfter = paragraphDiv;
     let lastPastedNode = null;
     for (let i = 1; i < lines.length; i++) {
-      const div = document.createElement("div");
+      const div = activeDocument.createElement("div");
       const lineFrag = (0, import_obsidian4.sanitizeHTMLToDom)(parseInlineToHtml(lines[i]));
       const lineNodes = Array.from(lineFrag.childNodes);
       div.append(...lineNodes);
@@ -3049,7 +3049,7 @@ var EditorElement = class {
       insertAfter.after(div);
       insertAfter = div;
     }
-    const newRange = document.createRange();
+    const newRange = activeDocument.createRange();
     if (lastPastedNode) {
       newRange.setStartAfter(lastPastedNode);
     } else {
@@ -3075,12 +3075,12 @@ var EditorElement = class {
     var _a, _b;
     const spacerCount = ((_a = this.virtualizer) == null ? void 0 : _a.rightSpacer) ? 2 : 0;
     if (this.el.childNodes.length > spacerCount) return;
-    const div = document.createElement("div");
-    div.appendChild(document.createElement("br"));
+    const div = activeDocument.createElement("div");
+    div.appendChild(activeDocument.createElement("br"));
     const leftSpacer = (_b = this.virtualizer) == null ? void 0 : _b.leftSpacer;
     if (leftSpacer) this.el.insertBefore(div, leftSpacer);
     else this.el.appendChild(div);
-    const range = document.createRange();
+    const range = activeDocument.createRange();
     range.setStart(div, 0);
     range.collapse(true);
     const sel = window.getSelection();
@@ -3160,7 +3160,7 @@ var EditorElement = class {
     const range = sel.getRangeAt(0);
     const div = this.findParagraphDiv(range.startContainer);
     if (!div) return;
-    const walker = document.createTreeWalker(div, NodeFilter.SHOW_TEXT);
+    const walker = activeDocument.createTreeWalker(div, NodeFilter.SHOW_TEXT);
     let first = walker.nextNode();
     while (first && first.data.length === 0) first = walker.nextNode();
     if (!first || first.data[0] !== "\xA0") return;
@@ -3169,7 +3169,7 @@ var EditorElement = class {
     const cursorOffset = range.startContainer === first ? range.startOffset : -1;
     first.deleteData(0, count);
     if (cursorOffset > 0) {
-      const r = document.createRange();
+      const r = activeDocument.createRange();
       r.setStart(first, Math.max(0, cursorOffset - count));
       r.collapse(true);
       sel.removeAllRanges();
@@ -3226,9 +3226,9 @@ var EditorElement = class {
     if (so === 0) {
       const targetDiv = virt.getWindowDiv(si);
       if (targetDiv) {
-        const walker = document.createTreeWalker(targetDiv, NodeFilter.SHOW_TEXT);
+        const walker = activeDocument.createTreeWalker(targetDiv, NodeFilter.SHOW_TEXT);
         const firstNode = walker.nextNode();
-        const range = document.createRange();
+        const range = activeDocument.createRange();
         if (firstNode) {
           range.setStart(firstNode, 0);
         } else {
@@ -3313,7 +3313,7 @@ var EditorElement = class {
         const hi = Math.min(virt.domEnd, nextLines.length - 1);
         const windowNodes = [];
         for (let i = lo2; i <= hi; i++) {
-          const div = document.createElement("div");
+          const div = activeDocument.createElement("div");
           div.replaceChildren((0, import_obsidian4.sanitizeHTMLToDom)(parseInlineToHtml(nextLines[i]) || "<br>"));
           windowNodes.push(div);
         }
@@ -3351,7 +3351,7 @@ var EditorElement = class {
         const windowNodes = [];
         for (let i = winLo; i <= winHi; i++) {
           const src = (_b = (_a = virt.paragraphRecords[i]) == null ? void 0 : _a.src) != null ? _b : "";
-          const div = document.createElement("div");
+          const div = activeDocument.createElement("div");
           div.replaceChildren((0, import_obsidian4.sanitizeHTMLToDom)(parseInlineToHtml(src) || "<br>"));
           windowNodes.push(div);
         }
@@ -3367,7 +3367,7 @@ var EditorElement = class {
     const insertCount = hiNext - hiPrev;
     if (insertCount > 0) {
       for (let i = 0; i < insertCount; i++)
-        el.insertBefore(document.createElement("div"), suffixAnchor);
+        el.insertBefore(activeDocument.createElement("div"), suffixAnchor);
     } else {
       for (let i = 0; i < -insertCount; i++)
         el.removeChild(el.children[this.paragraphChildIndex(lo)]);
@@ -3508,7 +3508,7 @@ var EditorElement = class {
       }
     }
     if (!cursorDiv) return count;
-    const walker = document.createTreeWalker(cursorDiv, NodeFilter.SHOW_TEXT);
+    const walker = activeDocument.createTreeWalker(cursorDiv, NodeFilter.SHOW_TEXT);
     let textNode = walker.nextNode();
     while (textNode) {
       if (textNode === range.startContainer) {
@@ -3548,8 +3548,8 @@ var EditorElement = class {
         continue;
       }
       if (remaining === 0) {
-        const range2 = document.createRange();
-        const firstWalker = document.createTreeWalker(child, NodeFilter.SHOW_TEXT);
+        const range2 = activeDocument.createRange();
+        const firstWalker = activeDocument.createTreeWalker(child, NodeFilter.SHOW_TEXT);
         const firstNode = firstWalker.nextNode();
         if (firstNode) {
           range2.setStart(firstNode, 0);
@@ -3561,14 +3561,14 @@ var EditorElement = class {
         sel.addRange(range2);
         return;
       }
-      const walker = document.createTreeWalker(child, NodeFilter.SHOW_TEXT);
+      const walker = activeDocument.createTreeWalker(child, NodeFilter.SHOW_TEXT);
       let node = walker.nextNode();
       while (node) {
         if (!isInsideRtNode(node, this.el)) {
           const isAnchor = !!findCursorAnchorAncestor(node, this.el);
           const visLen = isAnchor ? ((_a = node.textContent) != null ? _a : "").replace(/\u200B/g, "").length : node.length;
           if (remaining <= visLen) {
-            const range2 = document.createRange();
+            const range2 = activeDocument.createRange();
             let actualOffset;
             if (isAnchor) {
               const text = (_b = node.textContent) != null ? _b : "";
@@ -3596,7 +3596,7 @@ var EditorElement = class {
         node = walker.nextNode();
       }
     }
-    const range = document.createRange();
+    const range = activeDocument.createRange();
     range.selectNodeContents(this.el);
     range.collapse(false);
     sel.removeAllRanges();
@@ -3620,7 +3620,7 @@ function extractSegmentsFromDiv(div, editorEl) {
   var _a;
   const segments = [];
   let localOffset = 0;
-  const walker = document.createTreeWalker(div, NodeFilter.SHOW_TEXT);
+  const walker = activeDocument.createTreeWalker(div, NodeFilter.SHOW_TEXT);
   let node = walker.nextNode();
   while (node) {
     if (!isInsideRtNode(node, editorEl)) {
@@ -3674,7 +3674,7 @@ function createRangeInParagraph(segments, localStart, localEnd) {
     }
   }
   if (!startNode || !endNode) return null;
-  const range = document.createRange();
+  const range = activeDocument.createRange();
   range.setStart(startNode, startOffset);
   range.setEnd(endNode, endOffset);
   return range;
@@ -3745,7 +3745,7 @@ var SearchPanel = class {
     this.searchScope.register([], "Enter", (evt) => {
       if (evt.isComposing) return;
       if (this.editorFocused) return;
-      if (document.activeElement === this.replaceInputEl) {
+      if (activeDocument.activeElement === this.replaceInputEl) {
         this.replaceCurrentMatch();
       } else {
         this.navigate(1);
@@ -3755,7 +3755,7 @@ var SearchPanel = class {
     this.searchScope.register(["Shift"], "Enter", (evt) => {
       if (evt.isComposing) return;
       if (this.editorFocused) return;
-      if (document.activeElement !== this.replaceInputEl) {
+      if (activeDocument.activeElement !== this.replaceInputEl) {
         this.navigate(-1);
       }
       return false;
@@ -3844,7 +3844,7 @@ var SearchPanel = class {
     }
   }
   buildPanel(expandReplace) {
-    const panel = document.createElement("div");
+    const panel = activeDocument.createElement("div");
     panel.className = "tate-search-panel";
     panel.addEventListener("keydown", (e) => {
       if (e.target === this.inputEl || e.target === this.replaceInputEl) return;
@@ -3864,16 +3864,16 @@ var SearchPanel = class {
         );
       }
     });
-    const searchRow = document.createElement("div");
+    const searchRow = activeDocument.createElement("div");
     searchRow.className = "tate-search-row";
-    const toggleBtn = document.createElement("button");
+    const toggleBtn = activeDocument.createElement("button");
     toggleBtn.className = "tate-search-toggle";
     toggleBtn.tabIndex = -1;
     (0, import_obsidian5.setIcon)(toggleBtn, expandReplace ? "chevron-down" : "chevron-right");
     toggleBtn.setAttribute("aria-label", "\u7F6E\u63DB\u6B04\u3092\u8868\u793A");
     toggleBtn.addEventListener("click", () => this.toggleReplaceRow());
     this.toggleBtnEl = toggleBtn;
-    const input = document.createElement("input");
+    const input = activeDocument.createElement("input");
     input.type = "text";
     input.className = "tate-search-input";
     input.setAttribute("placeholder", "\u691C\u7D22");
@@ -3892,34 +3892,34 @@ var SearchPanel = class {
       if (e.key !== "Escape") e.stopPropagation();
     });
     this.inputEl = input;
-    const count = document.createElement("span");
+    const count = activeDocument.createElement("span");
     count.className = "tate-search-count";
     count.textContent = "";
     this.countEl = count;
-    const nextBtn = document.createElement("button");
+    const nextBtn = activeDocument.createElement("button");
     nextBtn.className = "tate-search-btn";
     nextBtn.tabIndex = -1;
     nextBtn.setAttribute("aria-label", "\u6B21\u3078");
     (0, import_obsidian5.setIcon)(nextBtn, "arrow-down");
     nextBtn.addEventListener("click", () => this.navigate(1));
-    const prevBtn = document.createElement("button");
+    const prevBtn = activeDocument.createElement("button");
     prevBtn.className = "tate-search-btn";
     prevBtn.tabIndex = -1;
     prevBtn.setAttribute("aria-label", "\u524D\u3078");
     (0, import_obsidian5.setIcon)(prevBtn, "arrow-up");
     prevBtn.addEventListener("click", () => this.navigate(-1));
-    const closeBtn = document.createElement("button");
+    const closeBtn = activeDocument.createElement("button");
     closeBtn.className = "tate-search-btn";
     closeBtn.tabIndex = -1;
     closeBtn.setAttribute("aria-label", "\u9589\u3058\u308B");
     (0, import_obsidian5.setIcon)(closeBtn, "x");
     closeBtn.addEventListener("click", () => this.close());
     searchRow.append(toggleBtn, input, count, nextBtn, prevBtn, closeBtn);
-    const replaceRow = document.createElement("div");
+    const replaceRow = activeDocument.createElement("div");
     replaceRow.className = "tate-replace-row";
     if (expandReplace) replaceRow.classList.add("tate-replace-visible");
     this.replaceRowEl = replaceRow;
-    const replaceInput = document.createElement("input");
+    const replaceInput = activeDocument.createElement("input");
     replaceInput.type = "text";
     replaceInput.className = "tate-replace-input";
     replaceInput.setAttribute("placeholder", "\u7F6E\u63DB");
@@ -3927,19 +3927,19 @@ var SearchPanel = class {
       if (e.key !== "Escape") e.stopPropagation();
     });
     this.replaceInputEl = replaceInput;
-    const replaceBtn = document.createElement("button");
+    const replaceBtn = activeDocument.createElement("button");
     replaceBtn.className = "tate-search-btn";
     replaceBtn.tabIndex = -1;
     replaceBtn.setAttribute("aria-label", "\u7F6E\u63DB");
     (0, import_obsidian5.setIcon)(replaceBtn, "replace");
     replaceBtn.addEventListener("click", () => this.replaceCurrentMatch());
-    const replaceAllBtn = document.createElement("button");
+    const replaceAllBtn = activeDocument.createElement("button");
     replaceAllBtn.className = "tate-search-btn";
     replaceAllBtn.tabIndex = -1;
     replaceAllBtn.setAttribute("aria-label", "\u5168\u7F6E\u63DB");
     (0, import_obsidian5.setIcon)(replaceAllBtn, "replace-all");
     replaceAllBtn.addEventListener("click", () => this.replaceAllMatches());
-    const replaceBtnGroup = document.createElement("div");
+    const replaceBtnGroup = activeDocument.createElement("div");
     replaceBtnGroup.className = "tate-replace-btn-group";
     replaceBtnGroup.append(replaceBtn, replaceAllBtn);
     replaceRow.append(replaceInput, replaceBtnGroup);
@@ -4106,7 +4106,7 @@ var SearchPanel = class {
     this.applyFocusHighlight();
     const sel = window.getSelection();
     if (sel) {
-      const cursorRange = document.createRange();
+      const cursorRange = activeDocument.createRange();
       cursorRange.setStart(range.startContainer, range.startOffset);
       cursorRange.collapse(true);
       sel.removeAllRanges();
@@ -4396,10 +4396,10 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
       (_a = this.searchPanel) == null ? void 0 : _a.onContentChanged();
     });
     this.registerDomEvent(document, "selectionchange", () => {
-      if (document.activeElement === editorEl.el) virtualizer.ensureWindowAroundCursor();
+      if (activeDocument.activeElement === editorEl.el) virtualizer.ensureWindowAroundCursor();
       const contentChanged = editorEl.handleSelectionChange();
       if (contentChanged) this.commitToCm6();
-      if (document.activeElement === editorEl.el && !virtualizer.isSyncingSelection) {
+      if (activeDocument.activeElement === editorEl.el && !virtualizer.isSyncingSelection) {
         const sel = window.getSelection();
         if (sel) {
           const vs = virtualizer.getVirtualSelection();
@@ -4413,11 +4413,11 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
           }
         }
       }
-      if (document.activeElement === editorEl.el && !editorEl.isInlineExpanded()) {
+      if (activeDocument.activeElement === editorEl.el && !editorEl.isInlineExpanded()) {
         if (this.selectionChangeRafId !== null) cancelAnimationFrame(this.selectionChangeRafId);
         this.selectionChangeRafId = requestAnimationFrame(() => {
           this.selectionChangeRafId = null;
-          if (document.activeElement === editorEl.el && !editorEl.isInlineExpanded()) {
+          if (activeDocument.activeElement === editorEl.el && !editorEl.isInlineExpanded()) {
             this.lastKnownViewOffset = editorEl.getViewCursorOffset();
           }
         });
@@ -4608,7 +4608,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
     const file = (_a = this.syncCoordinator) == null ? void 0 : _a.currentFile;
     const el = this.editorEl;
     if (!file) return null;
-    const offset = el && document.activeElement === el.el && !el.isInlineExpanded() ? el.getViewCursorOffset() : this.lastKnownViewOffset;
+    const offset = el && activeDocument.activeElement === el.el && !el.isInlineExpanded() ? el.getViewCursorOffset() : this.lastKnownViewOffset;
     if (offset === null) return null;
     return this.plugin.saveCursorPosition(file.path, offset);
   }

@@ -46,7 +46,7 @@ export class CursorAnchorManager {
         const text = anchorSpan.textContent ?? '';
         if ((text === '\u200B' || text === '') && savedSkip !== null) {
             try {
-                const r = document.createRange();
+                const r = activeDocument.createRange();
                 if (savedSkip === 'forward') {
                     const pos = this.findPositionAfterAnchor(anchorSpan);
                     if (pos) r.setStart(pos.node, pos.offset);
@@ -69,7 +69,7 @@ export class CursorAnchorManager {
     // Caller is responsible for the boutenGuard.set() call that follows.
     placeCursorAfterCollapse(nextSib: Node | null, parentEl: HTMLElement, sel: Selection): void {
         try {
-            const r = document.createRange();
+            const r = activeDocument.createRange();
             let placedAnchor: HTMLElement | null = null;
             if (nextSib && nextSib.isConnected) {
                 if (nextSib instanceof HTMLElement
@@ -127,9 +127,9 @@ export class CursorAnchorManager {
         const text = anchor.textContent ?? '';
         if (text === '') {
             // Span emptied by deletion: restore U+200B placeholder
-            const zws = document.createTextNode('\u200B');
+            const zws = activeDocument.createTextNode('\u200B');
             anchor.replaceChildren(zws);
-            const r = document.createRange();
+            const r = activeDocument.createRange();
             r.setStart(zws, 0);
             r.collapse(true);
             sel.removeAllRanges();
@@ -142,7 +142,7 @@ export class CursorAnchorManager {
                 const prevOffset = range.startContainer === textNode ? range.startOffset : cleaned.length;
                 textNode.textContent = cleaned;
                 const adjustedOffset = text.slice(0, prevOffset).replace(/\u200B/g, '').length;
-                const r = document.createRange();
+                const r = activeDocument.createRange();
                 r.setStart(textNode, Math.min(adjustedOffset, cleaned.length));
                 r.collapse(true);
                 sel.removeAllRanges();
@@ -160,7 +160,7 @@ export class CursorAnchorManager {
                 const t = sibling as Text;
                 if (!isInsideRtNode(t, this.el)) return { node: t, offset: 0 };
             } else if (sibling.nodeType === Node.ELEMENT_NODE) {
-                const walker = document.createTreeWalker(sibling, NodeFilter.SHOW_TEXT);
+                const walker = activeDocument.createTreeWalker(sibling, NodeFilter.SHOW_TEXT);
                 let node = walker.nextNode() as Text | null;
                 while (node) {
                     if (!isInsideRtNode(node, this.el)) return { node, offset: 0 };
@@ -175,7 +175,7 @@ export class CursorAnchorManager {
         let next = parentDiv.nextSibling;
         while (next) {
             if (!(next instanceof HTMLElement)) { next = next.nextSibling; continue; }
-            const walker = document.createTreeWalker(next, NodeFilter.SHOW_TEXT);
+            const walker = activeDocument.createTreeWalker(next, NodeFilter.SHOW_TEXT);
             let node = walker.nextNode() as Text | null;
             while (node) {
                 if (!isInsideRtNode(node, this.el)) return { node, offset: 0 };
@@ -208,7 +208,7 @@ export class CursorAnchorManager {
         let prevDiv = parentDiv.previousSibling;
         while (prevDiv) {
             if (!(prevDiv instanceof HTMLElement)) { prevDiv = prevDiv.previousSibling; continue; }
-            const walker = document.createTreeWalker(prevDiv, NodeFilter.SHOW_TEXT);
+            const walker = activeDocument.createTreeWalker(prevDiv, NodeFilter.SHOW_TEXT);
             let lastText: Text | null = null;
             let node = walker.nextNode() as Text | null;
             while (node) {
