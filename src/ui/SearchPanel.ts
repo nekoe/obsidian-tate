@@ -504,23 +504,38 @@ export class SearchPanel {
 
         // Apply replacements right-to-left within each paragraph so earlier view offsets
         // remain valid after each successive replacement shifts the source string.
-        for (const [, entries] of byParagraph) {
+        for (const [paragraphIndex, entries] of byParagraph) {
             entries.sort((a, b) => b.localStart - a.localStart);
-            // Ensure the paragraph div is in the DOM window before modifying.
-            const firstEntry = entries[0];
-            this.virtualizer.ensureInWindow(firstEntry.paragraphIndex);
-            const div = this.virtualizer.getWindowDiv(firstEntry.paragraphIndex);
-            if (!div) continue;
-            // Update the entry reference so replaceCurrentMatch callers see the resolved div.
-            for (const e of entries) e.div = div;
-            let srcLine = Array.from(div.childNodes)
-                .map(n => serializeNode(n, this.editorElementRef.el))
-                .join('');
-            for (const entry of entries) {
-                const segs = buildSegmentMap(srcLine);
-                srcLine = buildReplacedSrc(srcLine, segs, entry.localStart, entry.localEnd, replacement);
+
+            if (this.virtualizer.isInWindow(paragraphIndex)) {
+                // In-window: modify the DOM div directly.
+                // getValue() reads from the DOM for in-window paragraphs, so the change is
+                // picked up by the subsequent commitToCm6() call without any record update.
+                const div = this.virtualizer.getWindowDiv(paragraphIndex);
+                if (!div) continue;
+                let srcLine = Array.from(div.childNodes)
+                    .map(n => serializeNode(n, this.editorElementRef.el))
+                    .join('');
+                for (const entry of entries) {
+                    const segs = buildSegmentMap(srcLine);
+                    srcLine = buildReplacedSrc(srcLine, segs, entry.localStart, entry.localEnd, replacement);
+                }
+                div.replaceChildren(sanitizeHTMLToDom(parseInlineToHtml(srcLine) || '<br>'));
+            } else {
+                // Off-window: modify paragraphRecords[i].src directly — no DOM needed.
+                // getValue() reads paragraphRecords[i].src for off-window paragraphs, so
+                // commitToCm6() picks up the change. syncWindowSrcs() (called inside commitToCm6)
+                // then confirms src and viewLen from the new content.
+                const rec = this.virtualizer.paragraphRecords[paragraphIndex];
+                if (!rec) continue;
+                let srcLine = rec.src;
+                for (const entry of entries) {
+                    const segs = buildSegmentMap(srcLine);
+                    srcLine = buildReplacedSrc(srcLine, segs, entry.localStart, entry.localEnd, replacement);
+                }
+                rec.src     = srcLine;
+                rec.viewLen = this.virtualizer.buildParagraphVisibleText(srcLine).length;
             }
-            div.replaceChildren(sanitizeHTMLToDom(parseInlineToHtml(srcLine) || '<br>'));
         }
 
         // Commit all changes as one transaction (syncWindowSrcs is called inside commitToCm6).

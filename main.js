@@ -3922,19 +3922,28 @@ var SearchPanel = class {
       arr.push(entry);
       byParagraph.set(entry.paragraphIndex, arr);
     }
-    for (const [, entries] of byParagraph) {
+    for (const [paragraphIndex, entries] of byParagraph) {
       entries.sort((a, b) => b.localStart - a.localStart);
-      const firstEntry = entries[0];
-      this.virtualizer.ensureInWindow(firstEntry.paragraphIndex);
-      const div = this.virtualizer.getWindowDiv(firstEntry.paragraphIndex);
-      if (!div) continue;
-      for (const e of entries) e.div = div;
-      let srcLine = Array.from(div.childNodes).map((n) => serializeNode(n, this.editorElementRef.el)).join("");
-      for (const entry of entries) {
-        const segs = buildSegmentMap(srcLine);
-        srcLine = buildReplacedSrc(srcLine, segs, entry.localStart, entry.localEnd, replacement);
+      if (this.virtualizer.isInWindow(paragraphIndex)) {
+        const div = this.virtualizer.getWindowDiv(paragraphIndex);
+        if (!div) continue;
+        let srcLine = Array.from(div.childNodes).map((n) => serializeNode(n, this.editorElementRef.el)).join("");
+        for (const entry of entries) {
+          const segs = buildSegmentMap(srcLine);
+          srcLine = buildReplacedSrc(srcLine, segs, entry.localStart, entry.localEnd, replacement);
+        }
+        div.replaceChildren((0, import_obsidian5.sanitizeHTMLToDom)(parseInlineToHtml(srcLine) || "<br>"));
+      } else {
+        const rec = this.virtualizer.paragraphRecords[paragraphIndex];
+        if (!rec) continue;
+        let srcLine = rec.src;
+        for (const entry of entries) {
+          const segs = buildSegmentMap(srcLine);
+          srcLine = buildReplacedSrc(srcLine, segs, entry.localStart, entry.localEnd, replacement);
+        }
+        rec.src = srcLine;
+        rec.viewLen = this.virtualizer.buildParagraphVisibleText(srcLine).length;
       }
-      div.replaceChildren((0, import_obsidian5.sanitizeHTMLToDom)(parseInlineToHtml(srcLine) || "<br>"));
     }
     (_d = this.commitCallback) == null ? void 0 : _d.call(this);
     this.runSearch(false);
