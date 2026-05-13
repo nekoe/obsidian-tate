@@ -323,7 +323,7 @@ export class InlineEditor {
         if (!tcySpan) return false;
 
         const moveLeft = key === 'ArrowUp';
-        const textNode = tcySpan.firstChild instanceof Text ? tcySpan.firstChild as Text : null;
+        const textNode = tcySpan.firstChild instanceof Text ? tcySpan.firstChild : null;
         const r = activeDocument.createRange();
 
         if (!textNode) {

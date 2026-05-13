@@ -96,7 +96,7 @@ export class ParagraphVirtualizer {
     // Formula: numColumns × columnWidth, where columnWidth = fontSizePx × lineHeight.
     private estimateWidth(viewLen: number): number {
         const colWidthPx = this.fontSizePx * VERTICAL_LINE_HEIGHT;
-        const editorH = (this.editorEl as HTMLElement).clientHeight;
+        const editorH = this.editorEl.clientHeight;
         if (editorH <= 0 || this.fontSizePx <= 0) return colWidthPx;
         const charsPerCol = Math.max(1, Math.floor(editorH / this.fontSizePx));
         const cols = Math.max(1, Math.ceil(Math.max(1, viewLen) / charsPerCol));
@@ -230,7 +230,7 @@ export class ParagraphVirtualizer {
         // Guard: only when spacers are present (attach() has been called); without spacers
         // the editorEl.children count is unreliable for virtualization purposes.
         if (this.domEnd >= 0 && this.rightSpacer) {
-            const actualDivCount = (this.editorEl as HTMLElement).children.length - 2; // -2 for spacers
+            const actualDivCount = this.editorEl.children.length - 2; // -2 for spacers
             const windowDivCount = this.domEnd - this.domStart + 1;
             if (actualDivCount !== windowDivCount) {
                 this.domEnd = Math.min(this.domStart + actualDivCount - 1, n - 1);
