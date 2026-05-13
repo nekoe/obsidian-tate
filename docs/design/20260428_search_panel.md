@@ -36,34 +36,58 @@ VerticalWritingView
 └── searchPanel: SearchPanel        created in onOpen(), alive until onClose()
     ├── panelEl: HTMLElement | null  non-null ↔ panel is visible
     ├── searchScope: Scope           created once; pushed/popped on open/close
-    ├── matches: Range[]             CSS Highlight ranges, rebuilt on each runSearch()
-    ├── matchStarts: number[]        visible-text start offset for each match (parallel to matches[])
+    ├── matchEntries: MatchEntry[]   unified match store (paragraphIndex, div, localStart, localEnd, range, viewStart)
     ├── currentIndex: number         focused hit index; preserved across content-change re-searches
     ├── prSearchOffset               cursor offset at open(); restored if no navigation happened
-    └── lastNavigatedOffset          cursor offset of the last setFocus(isNavigation=true); restored on close
+    ├── lastNavigatedOffset          cursor offset of the last setFocus(scroll=true); restored on close
+    └── onScrollArea                 bound scroll listener; calls refreshWindowRanges() in rAF
+```
+
+`MatchEntry` holds everything needed for one match:
+
+```typescript
+interface MatchEntry {
+    paragraphIndex: number;   // index into paragraphRecords[]
+    div:   HTMLElement | null; // null = off-window; populated lazily on navigation
+    localStart: number;        // visible offset within this paragraph (match start)
+    localEnd:   number;        // visible offset within this paragraph (match end)
+    range: Range | null;       // null until div is in-window; may become stale (see below)
+    viewStart: number;         // global visible-text offset; used for initial-focus positioning
+}
 ```
 
 ### Visible text extraction
 
-Search operates on the visible text — the text the user reads, without Aozora source notation or
-`<rt>` ruby readings. `extractVisibleText()` walks all `Text` nodes inside the editor element
-using `TreeWalker`, skips nodes inside `<RT>` elements (via `isInsideRtNode` from `domHelpers`),
-and strips U+200B cursor-anchor placeholders. The result is a flat `{ text: string, segments }` pair
-where each segment maps a `Text` node to its start offset and visible character count in the
-extracted string.
+Search targets the visible text — the text the user reads, excluding Aozora notation markers and
+`<rt>` ruby readings. Extraction uses `extractHybridText(editorEl, virtualizer)`:
 
-This representation is intentionally simple: the segments array is rebuilt from scratch on every
-`runSearch()` call rather than cached, because the DOM can be mutated between calls (user is
-editing with the panel open). Re-walking the DOM per search is O(N) in the number of text nodes
-but fast in practice because TreeWalker is a native operation and text nodes in a contenteditable
-div are compact.
+- **In-window paragraphs**: `extractSegmentsFromDiv(div, editorEl)` walks `Text` nodes with
+  `TreeWalker`, skips nodes inside `<RT>`, strips U+200B cursor-anchor placeholders, and returns
+  a `LocalSegment[]` array (each entry: `{ node, start, length }` in local visible offset space).
+- **Off-window paragraphs**: `virtualizer.buildParagraphVisibleText(src)` computes the visible
+  text from `paragraphRecords[i].src` via `buildSegmentMap()` — no DOM access required.
+
+The result is `{ text: string, paragraphs: ParagraphTextData[] }` where each `ParagraphTextData`
+records the paragraph's global start offset, visible text, and (for in-window) its `LocalSegment[]`.
+
+The combined text is rebuilt from scratch on every `runSearch()` call (never cached) because the
+DOM can be mutated while the panel is open.
 
 ### Range building
 
-For each regex match at `[matchStart, matchEnd]` in the extracted visible text, `createRangeForMatch()`
-scans the segment array to find the `Text` nodes that contain those positions and converts visible
-offsets to raw DOM offsets via `visibleToRawOffset()` (which skips U+200B characters within a node).
-The resulting `Range` objects are passed directly to the CSS Custom Highlight API.
+For each regex match `[matchStart, matchEnd]` in the combined visible text, the owning paragraph
+is located by its `globalStart` and the match's position relative to it yields `localStart` /
+`localEnd` (local visible offsets).
+
+- **In-window paragraphs**: `createRangeInParagraph(segments, localStart, localEnd)` maps local
+  visible offsets to raw DOM offsets via `visibleToRawOffset()` (skipping U+200B) and constructs
+  a `Range` with Text-node boundaries. The range is stored in `entry.range` immediately.
+- **Off-window paragraphs**: no DOM nodes exist, so `entry.range = null`. The range is built
+  lazily in `setFocus()` when the user navigates to the match (see "DOM Virtualization Integration"
+  below).
+
+Cross-paragraph matches (where `matchEnd > para.globalStart + para.text.length`) are skipped,
+since CSS Custom Highlight ranges must be within a single paragraph.
 
 ### CSS Custom Highlight API
 
@@ -195,11 +219,16 @@ Two operations risk stealing focus from the input:
    ```typescript
    close(): number | null {
        // ...cleanup...
-       if (restoreOffset !== null) editorElementRef.setViewCursorOffset(restoreOffset);
-       editorElementRef.el.focus();
+       if (!wasEditorFocused) {
+           if (restoreOffset !== null) editorElementRef.setViewCursorOffset(restoreOffset);
+           editorElementRef.el.focus();
+       }
        return restoreOffset; // caller (closeSearch) uses this only to update lastKnownViewOffset
    }
    ```
+
+   If the user clicked the editor before closing (`editorFocused === true`), cursor restore is
+   skipped — the cursor is already at the click position and the editor already has focus.
 
    `VerticalWritingView.closeSearch()` (called on file-open) also invokes `close()`, so the
    focus restore is consistent across all close paths.
@@ -308,24 +337,24 @@ nearest match at or after `prSearchOffset` (the cursor position when the panel w
 rather than always jumping to the first match in the document. This matches standard editor
 search UX (VSCode, Sublime Text, etc.).
 
-`matchStarts[]` (parallel to `matches[]`) records each match's visible-text start offset so
+`matchEntries[i].viewStart` records each match's global visible-text start offset so
 `findFirstIndexAtOrAfter()` can locate the target without an additional DOM traversal:
 
 ```typescript
 // In runSearch(): first search — focus nearest hit at or after the cursor.
-this.setFocus(this.findFirstIndexAtOrAfter(this.prSearchOffset ?? 0), false, scroll);
+this.setFocus(this.findFirstIndexAtOrAfter(this.prSearchOffset ?? 0), scroll);
 
 private findFirstIndexAtOrAfter(offset: number): number {
-    for (let i = 0; i < this.matchStarts.length; i++) {
-        if (this.matchStarts[i] >= offset) return i;
+    for (let i = 0; i < this.matchEntries.length; i++) {
+        if (this.matchEntries[i].viewStart >= offset) return i;
     }
     return 0; // wrap: cursor is past all matches → go to first
 }
 ```
 
 The offset space of `prSearchOffset` (from `EditorElement.getViewCursorOffset()`) and
-`matchStarts[i]` (from `m.index` in `extractVisibleText`) are identical: both walk all `Text`
-nodes excluding `<RT>` and U+200B, in document order.
+`entry.viewStart` (from `m.index` in `extractHybridText`) are identical: both count visible
+characters across all paragraphs in document order, excluding `<RT>` content and U+200B.
 
 ### `currentIndex` preservation across content changes
 
@@ -336,13 +365,13 @@ new match count is still sufficient:
 
 ```typescript
 const prevIndex = this.currentIndex;
-this.matches = [];
+this.matchEntries = [];
 this.currentIndex = -1;
-// ... rebuild matches ...
-if (prevIndex >= 0 && prevIndex < this.matches.length) {
-    this.setFocus(prevIndex, false, scroll);  // isNavigation=false: do not move DOM cursor
+// ... rebuild matchEntries ...
+if (prevIndex >= 0 && prevIndex < this.matchEntries.length) {
+    this.setFocus(prevIndex, scroll);  // scroll=false: highlight only, no navigation
 } else {
-    this.setFocus(this.findFirstIndexAtOrAfter(this.prSearchOffset ?? 0), false, scroll);
+    this.setFocus(this.findFirstIndexAtOrAfter(this.prSearchOffset ?? 0), scroll);
 }
 ```
 
@@ -371,11 +400,161 @@ return restoreOffset;
 `VerticalWritingView.closeSearch()` uses the returned offset only to update `lastKnownViewOffset`
 so that subsequent tab-switch restore uses the post-search position.
 
+### DOM Virtualization Integration
+
+When `ParagraphVirtualizer` is active, only a window of ~100 paragraph divs exists in the DOM at
+any given time. Off-window paragraphs have no `HTMLElement`; they are stored as `paragraphRecords[i].src`.
+`SearchPanel` manages this through lazy range resolution, stale range detection, and a scroll
+listener.
+
+**Off-window match lazy resolution**
+
+For off-window paragraphs, `MatchEntry.div` and `MatchEntry.range` are both `null`. When the user
+navigates to such an entry (via Enter / ↓ / ↑), `setFocus()` resolves it:
+
+```typescript
+if (!this.virtualizer.isInWindow(entry.paragraphIndex)) {
+    this.virtualizer.teleportWindowTo(entry.paragraphIndex);
+}
+const div = this.virtualizer.getWindowDiv(entry.paragraphIndex);
+const segments = extractSegmentsFromDiv(div, this.editorElementRef.el);
+const r = createRangeInParagraph(segments, entry.localStart, entry.localEnd);
+entry.div   = div;
+entry.range = r;
+```
+
+`teleportWindowTo(center)` rebuilds the window (`[center-50, center+50]`) in a single
+`replaceChildren()` call, bringing the target paragraph into the DOM. The resolved `div` and
+`range` are cached on the `MatchEntry` so subsequent navigation reuses them.
+
+**Stale range detection**
+
+After `teleportWindowTo()`, the previous window's paragraph divs are removed by `replaceChildren()`.
+The DOM Range live-update spec (WHATWG) moves Range boundaries that were inside a removed node up to
+the nearest connected ancestor — in this case `tate-editor`, which stays `isConnected === true`.
+This defeats the standard `!isConnected` check.
+
+`createRangeInParagraph()` always creates Text-node boundaries (`range.startContainer instanceof
+Text`). After a `replaceChildren()`, the boundary is on `tate-editor` (an `HTMLDivElement`), not a
+`Text` node. This is an unambiguous stale signal:
+
+```typescript
+if (entry.range && (
+    !entry.range.startContainer.isConnected ||
+    !(entry.range.startContainer instanceof Text)
+)) {
+    entry.div   = null;
+    entry.range = null;
+}
+```
+
+**`refreshWindowRanges()`**
+
+Called after any DOM window change to synchronize `matchEntries` with the current DOM window:
+
+1. Clears non-Text boundaries corrupted by the live-update spec.
+2. Builds ranges for entries that are now in-window but have `range === null` (newly scrolled in,
+   or just teleported to).
+3. Calls `applyHitHighlights()` only when at least one entry changed, to avoid a spurious
+   `CSS.highlights.set()` call on every scroll tick.
+
+**`onScrollArea` scroll listener**
+
+Registered on `el.parentElement` (the `.tate-scroll-area`) in `open()` and deregistered in
+`close()`. Uses `requestAnimationFrame` so it fires after `adjustWindowOnScroll()` has already
+expanded the DOM window with newly visible paragraphs:
+
+```typescript
+private readonly onScrollArea = () =>
+    requestAnimationFrame(() => this.refreshWindowRanges());
+```
+
+Without this listener, paragraphs that scroll into the window would be highlighted by
+`content-visibility: auto` paint but would not appear in `CSS.highlights.set('tate-search-hit')`
+because their `matchEntries` still had `range === null`.
+
+`scrollRangeIntoView` also calls `refreshWindowRanges()` inside its inner rAF (the one that forces
+the main-thread repaint), because a teleport that immediately precedes a scroll leaves the newly
+built window partially un-ranged.
+
+### Find & Replace
+
+**`buildReplacedSrc()` — source-level replacement**
+
+Replacing in view space requires mapping view offsets back to source positions. A match
+`[viewStart, viewEnd)` may span or partially overlap Aozora annotations (ruby, tcy, bouten).
+`buildReplacedSrc()` handles partial overlap:
+
+- Match starts mid-annotation: strips the annotation, prepends the unmatched base-text prefix as
+  plain text before the replacement string.
+- Match ends mid-annotation: strips the annotation, appends the unmatched base-text suffix as
+  plain text after the replacement string.
+- Match fully covers an annotation: the whole annotation (including `《…》`, `｜`, `［＃…］`) is
+  replaced by the replacement string.
+
+```typescript
+function buildReplacedSrc(
+    srcLine: string, segs: readonly Segment[],
+    viewStart: number, viewEnd: number, replacement: string,
+): string { ... }
+```
+
+The function calls `viewToSrc()` to translate `viewStart`/`viewEnd` to source positions, then
+iterates segments to detect partial overlap and compute `prefix`/`suffix` remainders.
+
+**`replaceCurrentMatch()` — single replace**
+
+Precondition: `setFocus()` with `scroll=true` has already been called, so `entry.div` is
+non-null (the paragraph is in-window). The current paragraph source is reconstructed by
+serializing the div's child nodes:
+
+```typescript
+const srcLine = Array.from(entry.div.childNodes)
+    .map(n => serializeNode(n, this.editorElementRef.el)).join('');
+const segs = buildSegmentMap(srcLine);
+const newSrc = buildReplacedSrc(srcLine, segs, entry.localStart, entry.localEnd, replacement);
+entry.div.replaceChildren(sanitizeHTMLToDom(parseInlineToHtml(newSrc) || '<br>'));
+this.commitCallback?.();
+```
+
+After the commit, `runSearch(false)` rebuilds the match list (the replaced entry disappears), and
+focus is restored to the replace input (not the search input, which `setFocus()` would normally
+select).
+
+**`replaceAllMatches()` — bulk replace**
+
+All matches are grouped by `paragraphIndex` so multiple matches within one paragraph are applied
+together. Within each paragraph they are processed right-to-left (descending `localStart`) so that
+earlier view offsets remain valid after each replacement shifts the source string.
+
+Two paths depending on whether the paragraph is currently in the DOM window:
+
+| Path | Implementation | Why |
+|---|---|---|
+| In-window | Reads `srcLine` from `div.childNodes`, applies replacements, writes back via `parseInlineToHtml` | `getValue()` reads in-window divs from DOM; the DOM change is picked up by the subsequent `commitCallback()` call |
+| Off-window | Modifies `paragraphRecords[i].src` and `rec.viewLen` directly (no DOM) | `getValue()` reads off-window paragraphs from `paragraphRecords[i].src`; `syncWindowSrcs()` inside `commitToCm6()` confirms the new content |
+
+All modifications are committed in a single `commitCallback()` call so the CM6 transaction
+contains the entire bulk replace as one Undo step.
+
+```typescript
+// Off-window path:
+const rec = this.virtualizer.paragraphRecords[paragraphIndex];
+let srcLine = rec.src;
+for (const entry of entries) {
+    const segs = buildSegmentMap(srcLine);
+    srcLine = buildReplacedSrc(srcLine, segs, entry.localStart, entry.localEnd, replacement);
+}
+rec.src     = srcLine;
+rec.viewLen = this.virtualizer.buildParagraphVisibleText(srcLine).length;
+```
+
 ## Files
 
 | File | Role |
 |---|---|
-| `src/ui/SearchPanel.ts` | SearchPanel class, visible text extraction, Range building |
+| `src/ui/SearchPanel.ts` | SearchPanel class; constructor receives `virtualizer: ParagraphVirtualizer` as 4th parameter |
+| `src/ui/ParagraphVirtualizer.ts` | Window management (`teleportWindowTo`, `isInWindow`, `getWindowDiv`, `buildParagraphVisibleText`) used by SearchPanel |
 | `src/css-highlight.d.ts` | TypeScript type declarations for CSS Custom Highlight API (including `Highlight.priority`) |
 | `src/view.ts` | Creates SearchPanel in `onOpen()`; calls `openSearch()`, `closeSearch()`, `onContentChanged()` |
 | `src/main.ts` | Registers `tate-search` command (no default hotkey) |

@@ -244,9 +244,8 @@ inserting a div. If the rendered div had a different actual width, `scrollWidth`
 expansion, causing a visible jump or bounce.
 
 **Solution** (`5298248`): `correctSpacerAfterExpand(domStartBefore, domEndBefore)` is called after
-all DOM mutations in `adjustWindowOnScroll()` and `ensureInWindow()`. It batch-reads actual widths
-for newly added divs and adjusts the spacer by the cumulative actual-vs-estimated difference in a
-single layout flush.
+all DOM mutations in `adjustWindowOnScroll()`. It batch-reads actual widths for newly added divs
+and adjusts the spacer by the cumulative actual-vs-estimated difference in a single layout flush.
 
 ### 6. Undo/Redo cursor slide proportional to Enter count
 
@@ -312,6 +311,40 @@ event handler calls `adjustNow()` and clears the flag on the first `isComposing=
 Subsequent composition steps (candidate switching) do not call `adjustNow()`, avoiding both
 unnecessary DOM reads and any risk of interrupting the IME anchor.
 
+### 9. SearchPanel Range staleness after replaceChildren
+
+`teleportWindowTo()` calls `editorEl.replaceChildren()`, which removes old paragraph divs.
+The DOM Range live-update spec moves any Range boundary that was inside a removed node to the
+nearest living ancestor — in this case `tate-editor`. Since `tate-editor` stays
+`isConnected === true`, checking `!range.startContainer.isConnected` is insufficient to detect
+these stale ranges.
+
+`createRangeInParagraph()` always produces Text-node boundaries (never element boundaries). After
+`replaceChildren`, the corrupted Range has `startContainer === tate-editor` (an `HTMLElement`).
+Therefore `!(range.startContainer instanceof Text)` unambiguously identifies a stale Range.
+
+`setFocus()` checks both conditions before using a cached Range. `refreshWindowRanges()` applies
+the same check across all match entries. On detection, `entry.div` and `entry.range` are set to
+null, triggering fresh resolution at the next navigation or window refresh.
+
+### 10. Large paste memory spike
+
+`insertParsedParagraphs()` inserts all pasted lines as individual divs before `commitToCm6()`
+can consolidate them. For thousands of pasted lines this creates a proportionally large DOM that
+consumes significant memory.
+
+**Solution** (`2ba0ee7`): After `insertParsedParagraphs` completes (only for `lines.length > 1`
+and non-expanded inline state):
+
+1. `virt.syncWindowSrcs(newLines)` — expands `domEnd` to match the actual DOM child count
+   (old_window + pasted_count). Without this, `getVisibleOffset()` iterates only
+   `paragraphRecords.length` (old) times with stale `domEnd` and cannot find the cursor div
+   that was just inserted beyond the old `domEnd`.
+2. `getVisibleOffset()` — reads the cursor position from the temporarily full DOM.
+3. `virt.initWindowFromLines(newLines, lo, hi)` — replaces all inserted divs with a windowed
+   rebuild centered on the cursor.
+4. `setVisibleOffset(cursorPos)` — restores the cursor in the new window.
+
 ---
 
 ## Impact on Existing Features
@@ -374,15 +407,69 @@ side), so cursor-in-window is maintained automatically by `adjustWindowOnScroll(
 
 ### SearchPanel (CSS Custom Highlight API)
 
-The search panel highlights matches using `CSS.highlights`. Off-window paragraphs are handled via
-`paragraphRecords[i].src` for text extraction. When navigating to an off-window match,
-`ensureInWindow(i)` expands the DOM window to include the target paragraph before creating the
-highlight range.
+The search panel highlights matches using `CSS.highlights`. Text extraction uses
+`extractHybridText()`: in-window divs are read via `extractSegmentsFromDiv()` (DOM TreeWalker);
+off-window paragraphs are read via `paragraphRecords[i].src` + `buildParagraphVisibleText()`.
+Matches are stored as `MatchEntry` objects with `paragraphIndex`, `localStart`, `localEnd`,
+`viewStart`, `div` (null for off-window), and `range` (null until the paragraph is in-window).
+
+**Navigation to off-window matches**: `teleportWindowTo(entry.paragraphIndex)` replaces the
+former `ensureInWindow(i)`. It rebuilds a fixed-size window centered on the target paragraph in
+one `replaceChildren` call — O(window_size) DOM operations regardless of how far away the target
+is. `ensureInWindow` was O(distance) incremental expand and has been removed entirely.
+
+**Stale Range detection**: `teleportWindowTo()` calls `editorEl.replaceChildren()`, which
+triggers the DOM Range live-update spec: when a paragraph div is removed, any Range boundary
+inside it is moved up to `tate-editor` (the nearest living ancestor). Since `tate-editor` stays
+`isConnected === true`, a disconnected check alone is insufficient. `createRangeInParagraph()`
+always produces Text-node boundaries, so `!(range.startContainer instanceof Text)` unambiguously
+identifies a stale range. Both `setFocus()` and `refreshWindowRanges()` apply this check.
+
+**Range refresh after window changes**: `refreshWindowRanges()` clears stale non-Text ranges and
+builds ranges for entries newly in the DOM window. It is called:
+- In the rAF inside `scrollRangeIntoView()` (after teleport scroll lands).
+- From a scroll listener (`onScrollArea`) registered on `tate-scroll-area` in rAF, which runs
+  after ParagraphVirtualizer's synchronous `onScroll` handler expands the window.
+
+**`replaceAllMatches`**: off-window paragraphs are replaced by modifying `paragraphRecords[i].src`
+and `.viewLen` directly — no DOM insertion. In-window paragraphs modify the DOM div via
+`replaceChildren`. A single `commitToCm6()` at the end commits both paths; `getValue()` reads
+DOM for in-window and `paragraphRecords[i].src` for off-window, so both are captured correctly.
+
+### setValue (external Markdown-view edits)
+
+`setValue(content, preserveCursor)` previously called `parseToHtml(content)` +
+`replaceEditorContent()`, which built all N paragraph divs in the DOM. When the virtualizer is
+active, it now calls `virt.initWindowFromLines(lines, lo, hi)` with the center paragraph derived
+from:
+- The preserved cursor view offset (if `editorEl` has focus), or
+- `floor((domStart + domEnd) / 2)` of the old window (if the editor is not focused).
+
+This avoids O(N) DOM insertion for large external edits while keeping the view near its current
+scroll position.
+
+### handlePaste (large multi-line paste)
+
+`insertParsedParagraphs()` inserts all pasted lines as individual paragraph divs. For large pastes
+this temporarily creates O(N) DOM nodes. The post-paste windowed rebuild:
+
+1. `virt.syncWindowSrcs(newLines)` — brings `domEnd` in sync with the full DOM (the actual div
+   count is now `old_window + pasted_count`). Without this, `getVisibleOffset()` would fail to
+   find the cursor div because it iterates only `paragraphRecords.length` times with stale `domEnd`.
+2. `getVisibleOffset()` — reads the cursor position from the temporarily full DOM.
+3. `virt.initWindowFromLines(newLines, lo, hi)` — collapses the DOM back to ~100 divs centered
+   on the cursor, discarding the memory spike.
+4. `setVisibleOffset(cursorPos)` — restores the cursor in the new windowed DOM.
+
+The `syncWindowSrcs` step is O(N) in time, but `initWindowFromLines` also does O(N) work for
+`initRecords`, so the total cost is 2×O(N) record processing + O(window) DOM operations.
 
 ### Find & Replace
 
-One-by-one and bulk replace operate on `paragraphRecords[i].src` for off-window paragraphs and
-on the DOM for in-window paragraphs. After any replace, `commitToCm6()` propagates the change.
+One-by-one replace (`replaceCurrentMatch`) modifies the in-window div directly and calls
+`commitToCm6()`. Bulk replace (`replaceAllMatches`) uses the two-path model: in-window paragraphs
+modify the DOM div; off-window paragraphs modify `paragraphRecords[i].src` and `.viewLen` directly
+(no DOM insertion). A single `commitToCm6()` call commits all changes.
 
 ---
 
@@ -429,11 +516,20 @@ infrastructure were removed in `4ce9438`.
 - `adjustNow()`: synchronous wrapper for `adjustWindowOnScroll()`, called at programmatic scroll
   points.
 - `expandRight()` / `shrinkRight()` / `expandLeft()` / `shrinkLeft()` window management methods.
-- `ensureInWindow(i)` for cursor restore (`setVisibleOffset`) and outline jump navigation.
+- `teleportWindowTo(center, windowHalf=50)` in `ParagraphVirtualizer`: rebuilds a fixed-size
+  `[center−50, center+50]` window from `paragraphRecords` in one `replaceChildren` call.
+  Used by `EditorElement.jumpWindowTo()` for off-window cursor restore and by `SearchPanel` for
+  navigation to off-window matches. Replaces `ensureInWindow(i)` (removed; see Phase 3).
+- `buildDomWindow(lo, hi, sources)` private helper in `ParagraphVirtualizer`: creates divs from
+  `sources` and inserts them between the spacers via `replaceChildren`. Shared by
+  `initWindowFromLines()` and `teleportWindowTo()`.
+- `initWindowFromLines(lines, lo, hi)` in `ParagraphVirtualizer`: calls `initRecords(lines, lo, hi)`
+  then `buildDomWindow(lo, hi, lines.slice(lo, hi+1))`. Used by `loadContent()`, `setValue()`, and
+  the post-paste windowed rebuild.
 - `resetWindow(lo, hi)` for repositioning the window with updated spacer widths.
-- `jumpWindowTo(center)` in `EditorElement` for teleporting the window to an off-window cursor.
-- `loadContent(content, initialViewOffset)` for file open: creates only the initial window of
-  `INITIAL_WINDOW_HALF = 50` paragraphs on each side of the saved cursor position.
+- `jumpWindowTo(center)` in `EditorElement`: thin wrapper over `teleportWindowTo(center)`.
+- `loadContent(content, initialViewOffset)` for file open: calls `initWindowFromLines` with a
+  window of `INITIAL_WINDOW_HALF = 50` paragraphs on each side of the saved cursor position.
 - `syncWindowSrcs(lines)` for keeping records in sync during typing without disturbing the window.
 - `spliceRecords(lo, deleteCount, newLines)` with within-window detection to avoid stale-width
   spacer recomputation during Undo/Redo.
@@ -510,11 +606,47 @@ proxy nodes at the window boundary.
 
 ---
 
+### Phase 3 — SearchPanel hardening + memory spike fixes (**DONE**)
+
+Resolved remaining correctness and memory issues after Phase B.
+
+**What was built/changed:**
+
+- **`teleportWindowTo(center, windowHalf=50)` replaces `ensureInWindow(i)`** (`25771e2`,
+  `5734561`). `ensureInWindow` expanded the window incrementally (O(distance) DOM operations)
+  from the current boundary to the target, creating up to N DOM insertions for a far-away search
+  hit. `teleportWindowTo` rebuilds a fixed-size window from `paragraphRecords` in one
+  `replaceChildren` call — O(window_size) regardless of distance. `ensureInWindow` was removed.
+
+- **`buildDomWindow(lo, hi, sources)` private helper** (`2a16ed5`): extracted from the common
+  DOM-building pattern shared by `initWindowFromLines()` and `teleportWindowTo()`.
+
+- **`initWindowFromLines(lines, lo, hi)` public method** (`2a16ed5`): `initRecords(lines, lo, hi)`
+  + `buildDomWindow(lo, hi, ...)`. Used by `loadContent()`, `setValue()`, and the post-paste
+  windowed rebuild to avoid duplicating the center-computation + div-generation sequence.
+
+- **SearchPanel stale Range detection** (`db14873`): `setFocus()` detects Ranges invalidated by
+  `replaceChildren()` via `!(startContainer instanceof Text)`. See challenge 9.
+
+- **`refreshWindowRanges()`** (`8562623`): clears stale non-Text ranges and builds ranges for
+  entries newly in the DOM window after teleport or scroll expansion. Called in the
+  `scrollRangeIntoView` rAF and from the scroll listener `onScrollArea` (registered on
+  `tate-scroll-area` in rAF to run after ParagraphVirtualizer's synchronous scroll handler).
+
+- **`replaceAllMatches` off-window path** (`22372a3`): off-window paragraphs are replaced via
+  `paragraphRecords[i].src` and `.viewLen` directly — no DOM insertion or memory spike.
+
+- **`setValue` windowed rebuild** (`2ba0ee7`): external Markdown-view edits call
+  `initWindowFromLines` instead of `parseToHtml` + `replaceEditorContent`, capping DOM size at
+  ~100 divs even for large file-wide changes. Center is the cursor paragraph (if focused) or the
+  old window midpoint (if not focused).
+
+- **`handlePaste` windowed rebuild** (`2ba0ee7`): large multi-line pastes are immediately
+  collapsed to a windowed DOM via `syncWindowSrcs` + `getVisibleOffset` + `initWindowFromLines`
+  after `insertParsedParagraphs` creates the full pasted DOM. See challenge 10.
+
+---
+
 ## Future Features
 
-### Find & Replace — bulk replace
-
-Iterate over all matches in `paragraphRecords` (no DOM access needed for off-window paragraphs),
-apply substitutions to `.src` and `.viewLen`, then rebuild the DOM window from updated records and
-call `commitToCm6()` once. Because `paragraphRecords` is the source of truth, bulk replace is
-a pure data operation followed by a single DOM patch for the visible window.
+(None currently planned. Find & Replace was completed in Phase 3.)
