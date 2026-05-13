@@ -395,7 +395,7 @@ export class EditorElement {
             // A paragraph div is a target for cursor adoption if it has no children, or if
             // all children are empty Text nodes left by splitText(0) during deleteContents().
             const isParagraphEmpty = (n: Node | undefined): n is HTMLElement =>
-                n instanceof HTMLElement && n.tagName === 'DIV' && isEffectivelyEmpty(n);
+                !!n?.instanceOf(HTMLElement) && n.tagName === 'DIV' && isEffectivelyEmpty(n);
             // Move cursor into the empty shell and strip any empty text node artifacts.
             const adoptDiv = (div: HTMLElement) => {
                 clearChildren(div);
@@ -532,10 +532,10 @@ export class EditorElement {
         // Either empty text node causes childNodes.length > 0, bypassing the <br> placeholder
         // check and producing an invisible <div></div>. Strip empty text nodes from both.
         for (const n of Array.from(paragraphDiv.childNodes)) {
-            if (n instanceof Text && n.data === '') n.remove();
+            if (n.instanceOf(Text) && n.data === '') n.remove();
         }
         for (const n of Array.from(afterFragment.childNodes)) {
-            if (n instanceof Text && n.data === '') n.remove();
+            if (n.instanceOf(Text) && n.data === '') n.remove();
         }
 
         // Append first line to the current (now truncated) paragraph
@@ -581,7 +581,7 @@ export class EditorElement {
     private findParagraphDiv(node: Node): HTMLElement | null {
         let current: Node | null = node;
         while (current && current !== this.el) {
-            if (current.parentElement === this.el && current instanceof HTMLElement && current.tagName === 'DIV') {
+            if (current.parentElement === this.el && current.instanceOf(HTMLElement) && current.tagName === 'DIV') {
                 return current;
             }
             current = current.parentElement;
@@ -611,7 +611,7 @@ export class EditorElement {
     // Skips spacer divs (SPACER_CLASS) which are permanent fixtures.
     cleanupEmptyParagraphDivs(): void {
         for (const child of Array.from(this.el.childNodes)) {
-            if (!(child instanceof HTMLElement)) continue;
+            if (!child.instanceOf(HTMLElement)) continue;
             if (child.classList.contains(SPACER_CLASS)) continue;
             if (child.tagName === 'DIV' && isEffectivelyEmpty(child)) child.remove();
         }
@@ -995,7 +995,7 @@ export class EditorElement {
             : expectedCount;
         if (this.el.childNodes.length !== expected + spacerCount) return false;
         for (const node of Array.from(this.el.childNodes)) {
-            if (!(node instanceof HTMLElement) || node.tagName !== 'DIV') return false;
+            if (!node.instanceOf(HTMLElement) || node.tagName !== 'DIV') return false;
         }
         return true;
     }
@@ -1047,7 +1047,7 @@ export class EditorElement {
             // Range truly not laid out — fall back to element-based scroll.
             // In a horizontal scroll container: inline=horizontal, block=vertical (no effect).
             const node = range.startContainer;
-            (node instanceof Element ? node : node.parentElement)?.scrollIntoView({ block: 'nearest', inline: block });
+            (node.instanceOf(Element) ? node : node.parentElement)?.scrollIntoView({ block: 'nearest', inline: block });
             return;
         }
 
@@ -1111,7 +1111,7 @@ export class EditorElement {
         let cursorDiv: HTMLElement | null = null;
         let node: Node | null = range.startContainer;
         while (node && node !== this.el) {
-            if (node instanceof HTMLElement && node.parentElement === this.el) {
+            if (node.instanceOf(HTMLElement) && node.parentElement === this.el) {
                 cursorDiv = node;
                 break;
             }

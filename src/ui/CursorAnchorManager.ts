@@ -28,7 +28,7 @@ export class CursorAnchorManager {
     clearSkipIfEndOfLine(placedAnchor: HTMLElement): void {
         const nextAfterAnchor = placedAnchor.nextSibling;
         const atEndOfLine = !nextAfterAnchor
-            || (nextAfterAnchor instanceof HTMLElement
+            || (nextAfterAnchor?.instanceOf(HTMLElement)
                 && nextAfterAnchor.tagName === 'BR'
                 && nextAfterAnchor === nextAfterAnchor.parentElement?.lastChild);
         if (atEndOfLine) this.pendingAnchorSkip = null;
@@ -72,7 +72,7 @@ export class CursorAnchorManager {
             const r = activeDocument.createRange();
             let placedAnchor: HTMLElement | null = null;
             if (nextSib && nextSib.isConnected) {
-                if (nextSib instanceof HTMLElement
+                if (nextSib.instanceOf(HTMLElement)
                         && nextSib.classList.contains('tate-cursor-anchor')
                         && nextSib.firstChild?.nodeType === Node.TEXT_NODE) {
                     // Use a text-level position inside the anchor to avoid Chrome creating an
@@ -105,9 +105,9 @@ export class CursorAnchorManager {
     // of the tate-editing span and is available when the user exits past the closing bracket.
     ensureCursorAnchorAfter(el: HTMLElement): void {
         const next = el.nextSibling;
-        if (next instanceof HTMLElement && next.classList.contains('tate-cursor-anchor')) return;
+        if (next?.instanceOf(HTMLElement) && next.classList.contains('tate-cursor-anchor')) return;
         const isEndOfLine = !next
-            || (next instanceof HTMLElement && next.tagName === 'BR'
+            || (next.instanceOf(HTMLElement) && next.tagName === 'BR'
                 && next === next.parentElement?.lastChild);
         if (!isEndOfLine) return;
         const anchor = createCursorAnchor();
@@ -174,7 +174,7 @@ export class CursorAnchorManager {
         if (!parentDiv) return null;
         let next = parentDiv.nextSibling;
         while (next) {
-            if (!(next instanceof HTMLElement)) { next = next.nextSibling; continue; }
+            if (!next.instanceOf(HTMLElement)) { next = next.nextSibling; continue; }
             const walker = activeDocument.createTreeWalker(next, NodeFilter.SHOW_TEXT);
             let node = walker.nextNode() as Text | null;
             while (node) {
@@ -207,7 +207,7 @@ export class CursorAnchorManager {
         if (!parentDiv) return null;
         let prevDiv = parentDiv.previousSibling;
         while (prevDiv) {
-            if (!(prevDiv instanceof HTMLElement)) { prevDiv = prevDiv.previousSibling; continue; }
+            if (!prevDiv.instanceOf(HTMLElement)) { prevDiv = prevDiv.previousSibling; continue; }
             const walker = activeDocument.createTreeWalker(prevDiv, NodeFilter.SHOW_TEXT);
             let lastText: Text | null = null;
             let node = walker.nextNode() as Text | null;

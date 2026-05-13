@@ -193,13 +193,13 @@ export function serializeNode(node: Node, rootEl: HTMLElement): string {
     if (node.nodeType === Node.TEXT_NODE) {
         return node.textContent ?? '';
     }
-    if (!(node instanceof HTMLElement)) return '';
+    if (!node.instanceOf(HTMLElement)) return '';
 
     switch (node.tagName) {
         case 'RUBY': {
             const explicit = node.getAttribute('data-ruby-explicit') !== 'false';
             const base = Array.from(node.childNodes)
-                .filter(n => !(n instanceof HTMLElement && n.tagName === 'RT'))
+                .filter(n => !(n.instanceOf(HTMLElement) && n.tagName === 'RT'))
                 .map(n => serializeNode(n, rootEl))
                 .join('');
             const rt = node.querySelector('rt')?.textContent ?? '';

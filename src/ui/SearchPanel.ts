@@ -663,7 +663,7 @@ export class SearchPanel {
         //      startContainer is an unambiguous signal that the range has been corrupted.
         if (entry.range && (
             !entry.range.startContainer.isConnected ||
-            !(entry.range.startContainer instanceof Text)
+            !entry.range.startContainer.instanceOf(Text)
         )) {
             entry.div   = null;
             entry.range = null;

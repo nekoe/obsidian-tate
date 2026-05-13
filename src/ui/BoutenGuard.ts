@@ -49,7 +49,7 @@ export class BoutenGuard {
         const nextSib = bouten.nextSibling;
         if (nextSib) {
             if (nextSib === container
-                    || (nextSib instanceof HTMLElement && nextSib.contains(container))) {
+                    || (nextSib?.instanceOf(HTMLElement) && nextSib.contains(container))) {
                 return bouten;
             }
             // Element-level cursor: {parentDiv, indexOf(nextSib)}
@@ -71,7 +71,7 @@ export class BoutenGuard {
         let targetNode: Text;
         let targetOffset: number;
 
-        if (next instanceof HTMLElement && next.classList.contains('tate-cursor-anchor')
+        if (next?.instanceOf(HTMLElement) && next.classList.contains('tate-cursor-anchor')
                 && next.firstChild?.nodeType === Node.TEXT_NODE) {
             // End-of-line: new text node between bouten and anchor preserves anchor for future navigation
             const textNode = activeDocument.createTextNode(chars);
@@ -140,7 +140,7 @@ export class BoutenGuard {
     redirectCursorOutOfCollapsedBouten(bouten: HTMLElement, sel: Selection): void {
         const next = bouten.nextSibling;
         const r = activeDocument.createRange();
-        if (next instanceof HTMLElement && next.classList.contains('tate-cursor-anchor')
+        if (next?.instanceOf(HTMLElement) && next.classList.contains('tate-cursor-anchor')
                 && next.firstChild?.nodeType === Node.TEXT_NODE) {
             // Place cursor at the END of the anchor text (after U+200B) rather than the start,
             // so Chrome does not re-normalize this position back into the preceding bouten span.

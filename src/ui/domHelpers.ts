@@ -77,7 +77,7 @@ export function findAncestor(
     pred: (el: HTMLElement) => boolean,
     rootEl: HTMLElement,
 ): HTMLElement | null {
-    let el: HTMLElement | null = node instanceof HTMLElement ? node : node.parentElement;
+    let el: HTMLElement | null = node.instanceOf(HTMLElement) ? node : node.parentElement;
     while (el && el !== rootEl) {
         if (pred(el)) return el;
         el = el.parentElement;
@@ -130,7 +130,7 @@ export function findLastBaseTextInElement(
 // deleteContents() often leaves empty Text nodes (data === '') instead of removing
 // them outright, so a childNodes.length === 0 check alone is insufficient.
 export function isEffectivelyEmpty(el: HTMLElement): boolean {
-    return Array.from(el.childNodes).every(c => c instanceof Text && c.data === '');
+    return Array.from(el.childNodes).every(c => c.instanceOf(Text) && c.data === '');
 }
 
 // Removes all child nodes from el.
@@ -154,7 +154,7 @@ export function rawOffsetForExpand(el: HTMLElement, node: Node, offset: number):
         const explicit = el.getAttribute('data-ruby-explicit') !== 'false';
         const prefix = explicit ? 1 : 0;
         const baseLen = Array.from(el.childNodes)
-            .filter(n => !(n instanceof HTMLElement && n.tagName === 'RT'))
+            .filter(n => !(n.instanceOf(HTMLElement) && n.tagName === 'RT'))
             .reduce((sum, n) => sum + (n.textContent?.length ?? 0), 0);
         const rt = el.querySelector('rt');
         if (rt && rt.contains(node)) {

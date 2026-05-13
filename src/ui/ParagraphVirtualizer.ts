@@ -763,7 +763,7 @@ export class ParagraphVirtualizer {
     private findParaDiv(node: Node): HTMLElement | null {
         let el: Node | null = node;
         while (el && el !== this.editorEl) {
-            if (el instanceof HTMLElement
+            if (el.instanceOf(HTMLElement)
                     && el.parentElement === this.editorEl
                     && el.tagName === 'DIV'
                     && !el.classList.contains(SPACER_CLASS)) {

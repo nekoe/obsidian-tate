@@ -595,11 +595,11 @@ function serializeNode(node, rootEl) {
   if (node.nodeType === Node.TEXT_NODE) {
     return (_a = node.textContent) != null ? _a : "";
   }
-  if (!(node instanceof HTMLElement)) return "";
+  if (!node.instanceOf(HTMLElement)) return "";
   switch (node.tagName) {
     case "RUBY": {
       const explicit = node.getAttribute("data-ruby-explicit") !== "false";
-      const base = Array.from(node.childNodes).filter((n) => !(n instanceof HTMLElement && n.tagName === "RT")).map((n) => serializeNode(n, rootEl)).join("");
+      const base = Array.from(node.childNodes).filter((n) => !(n.instanceOf(HTMLElement) && n.tagName === "RT")).map((n) => serializeNode(n, rootEl)).join("");
       const rt = (_c = (_b = node.querySelector("rt")) == null ? void 0 : _b.textContent) != null ? _c : "";
       return explicit ? `\uFF5C${base}\u300A${rt}\u300B` : `${base}\u300A${rt}\u300B`;
     }
@@ -696,7 +696,7 @@ function setCursorAfter(node) {
   sel.addRange(r);
 }
 function findAncestor(node, pred, rootEl) {
-  let el = node instanceof HTMLElement ? node : node.parentElement;
+  let el = node.instanceOf(HTMLElement) ? node : node.parentElement;
   while (el && el !== rootEl) {
     if (pred(el)) return el;
     el = el.parentElement;
@@ -731,7 +731,7 @@ function findLastBaseTextInElement(el, rootEl) {
   return { node: lastText, offset: lastText.length };
 }
 function isEffectivelyEmpty(el) {
-  return Array.from(el.childNodes).every((c) => c instanceof Text && c.data === "");
+  return Array.from(el.childNodes).every((c) => c.instanceOf(Text) && c.data === "");
 }
 function clearChildren(el) {
   for (const c of Array.from(el.childNodes)) c.remove();
@@ -745,7 +745,7 @@ function rawOffsetForExpand(el, node, offset) {
   if (el.tagName === "RUBY") {
     const explicit = el.getAttribute("data-ruby-explicit") !== "false";
     const prefix = explicit ? 1 : 0;
-    const baseLen = Array.from(el.childNodes).filter((n) => !(n instanceof HTMLElement && n.tagName === "RT")).reduce((sum, n) => {
+    const baseLen = Array.from(el.childNodes).filter((n) => !(n.instanceOf(HTMLElement) && n.tagName === "RT")).reduce((sum, n) => {
       var _a, _b;
       return sum + ((_b = (_a = n.textContent) == null ? void 0 : _a.length) != null ? _b : 0);
     }, 0);
@@ -878,7 +878,7 @@ var BoutenGuard = class {
     if (findBoutenAncestor(container, this.el) === bouten) return bouten;
     const nextSib = bouten.nextSibling;
     if (nextSib) {
-      if (nextSib === container || nextSib instanceof HTMLElement && nextSib.contains(container)) {
+      if (nextSib === container || (nextSib == null ? void 0 : nextSib.instanceOf(HTMLElement)) && nextSib.contains(container)) {
         return bouten;
       }
       if (container.nodeType === Node.ELEMENT_NODE && container.childNodes[range.startOffset] === nextSib) {
@@ -896,7 +896,7 @@ var BoutenGuard = class {
     const next = bouten.nextSibling;
     let targetNode;
     let targetOffset;
-    if (next instanceof HTMLElement && next.classList.contains("tate-cursor-anchor") && ((_a = next.firstChild) == null ? void 0 : _a.nodeType) === Node.TEXT_NODE) {
+    if ((next == null ? void 0 : next.instanceOf(HTMLElement)) && next.classList.contains("tate-cursor-anchor") && ((_a = next.firstChild) == null ? void 0 : _a.nodeType) === Node.TEXT_NODE) {
       const textNode = activeDocument.createTextNode(chars);
       bouten.parentNode.insertBefore(textNode, next);
       targetNode = textNode;
@@ -952,7 +952,7 @@ var BoutenGuard = class {
     var _a;
     const next = bouten.nextSibling;
     const r = activeDocument.createRange();
-    if (next instanceof HTMLElement && next.classList.contains("tate-cursor-anchor") && ((_a = next.firstChild) == null ? void 0 : _a.nodeType) === Node.TEXT_NODE) {
+    if ((next == null ? void 0 : next.instanceOf(HTMLElement)) && next.classList.contains("tate-cursor-anchor") && ((_a = next.firstChild) == null ? void 0 : _a.nodeType) === Node.TEXT_NODE) {
       const anchorText = next.firstChild;
       r.setStart(anchorText, anchorText.length);
     } else if ((next == null ? void 0 : next.nodeType) === Node.TEXT_NODE) {
@@ -989,7 +989,7 @@ var CursorAnchorManager = class {
   clearSkipIfEndOfLine(placedAnchor) {
     var _a;
     const nextAfterAnchor = placedAnchor.nextSibling;
-    const atEndOfLine = !nextAfterAnchor || nextAfterAnchor instanceof HTMLElement && nextAfterAnchor.tagName === "BR" && nextAfterAnchor === ((_a = nextAfterAnchor.parentElement) == null ? void 0 : _a.lastChild);
+    const atEndOfLine = !nextAfterAnchor || (nextAfterAnchor == null ? void 0 : nextAfterAnchor.instanceOf(HTMLElement)) && nextAfterAnchor.tagName === "BR" && nextAfterAnchor === ((_a = nextAfterAnchor.parentElement) == null ? void 0 : _a.lastChild);
     if (atEndOfLine) this.pendingAnchorSkip = null;
   }
   // Handles the anchor-skip logic inside handleSelectionChange.
@@ -1031,7 +1031,7 @@ var CursorAnchorManager = class {
       const r = activeDocument.createRange();
       let placedAnchor = null;
       if (nextSib && nextSib.isConnected) {
-        if (nextSib instanceof HTMLElement && nextSib.classList.contains("tate-cursor-anchor") && ((_a = nextSib.firstChild) == null ? void 0 : _a.nodeType) === Node.TEXT_NODE) {
+        if (nextSib.instanceOf(HTMLElement) && nextSib.classList.contains("tate-cursor-anchor") && ((_a = nextSib.firstChild) == null ? void 0 : _a.nodeType) === Node.TEXT_NODE) {
           r.setStart(nextSib.firstChild, 0);
           placedAnchor = nextSib;
         } else {
@@ -1056,8 +1056,8 @@ var CursorAnchorManager = class {
   ensureCursorAnchorAfter(el) {
     var _a;
     const next = el.nextSibling;
-    if (next instanceof HTMLElement && next.classList.contains("tate-cursor-anchor")) return;
-    const isEndOfLine = !next || next instanceof HTMLElement && next.tagName === "BR" && next === ((_a = next.parentElement) == null ? void 0 : _a.lastChild);
+    if ((next == null ? void 0 : next.instanceOf(HTMLElement)) && next.classList.contains("tate-cursor-anchor")) return;
+    const isEndOfLine = !next || next.instanceOf(HTMLElement) && next.tagName === "BR" && next === ((_a = next.parentElement) == null ? void 0 : _a.lastChild);
     if (!isEndOfLine) return;
     const anchor = createCursorAnchor();
     el.parentNode.insertBefore(anchor, next);
@@ -1118,7 +1118,7 @@ var CursorAnchorManager = class {
     if (!parentDiv) return null;
     let next = parentDiv.nextSibling;
     while (next) {
-      if (!(next instanceof HTMLElement)) {
+      if (!next.instanceOf(HTMLElement)) {
         next = next.nextSibling;
         continue;
       }
@@ -1152,7 +1152,7 @@ var CursorAnchorManager = class {
     if (!parentDiv) return null;
     let prevDiv = parentDiv.previousSibling;
     while (prevDiv) {
-      if (!(prevDiv instanceof HTMLElement)) {
+      if (!prevDiv.instanceOf(HTMLElement)) {
         prevDiv = prevDiv.previousSibling;
         continue;
       }
@@ -1272,7 +1272,7 @@ var InlineExpander = class {
   // Returns the first ancestor of node that is an expandable annotation element,
   // filtered by the caller-provided expand flags.
   findExpandableAncestor(node, ruby, tcy, bouten, heading = true) {
-    let el = node instanceof HTMLElement ? node : node.parentElement;
+    let el = node.instanceOf(HTMLElement) ? node : node.parentElement;
     while (el && el !== this.el) {
       if (el.tagName === "RUBY" && ruby) return el;
       if (el.tagName === "SPAN" && el.getAttribute("data-tcy") === "explicit" && tcy) return el;
@@ -2598,7 +2598,7 @@ var ParagraphVirtualizer = class {
   findParaDiv(node) {
     let el = node;
     while (el && el !== this.editorEl) {
-      if (el instanceof HTMLElement && el.parentElement === this.editorEl && el.tagName === "DIV" && !el.classList.contains(SPACER_CLASS)) {
+      if (el.instanceOf(HTMLElement) && el.parentElement === this.editorEl && el.tagName === "DIV" && !el.classList.contains(SPACER_CLASS)) {
         return el;
       }
       el = el.parentElement;
@@ -2915,7 +2915,7 @@ var EditorElement = class {
     if (range.startContainer === this.el) {
       const at = this.el.childNodes[range.startOffset];
       const before = this.el.childNodes[range.startOffset - 1];
-      const isParagraphEmpty = (n) => n instanceof HTMLElement && n.tagName === "DIV" && isEffectivelyEmpty(n);
+      const isParagraphEmpty = (n) => !!(n == null ? void 0 : n.instanceOf(HTMLElement)) && n.tagName === "DIV" && isEffectivelyEmpty(n);
       const adoptDiv = (div) => {
         clearChildren(div);
         range.setStart(div, 0);
@@ -3026,10 +3026,10 @@ var EditorElement = class {
     afterRange.setStart(range.startContainer, range.startOffset);
     const afterFragment = afterRange.extractContents();
     for (const n of Array.from(paragraphDiv.childNodes)) {
-      if (n instanceof Text && n.data === "") n.remove();
+      if (n.instanceOf(Text) && n.data === "") n.remove();
     }
     for (const n of Array.from(afterFragment.childNodes)) {
-      if (n instanceof Text && n.data === "") n.remove();
+      if (n.instanceOf(Text) && n.data === "") n.remove();
     }
     const firstFrag = (0, import_obsidian4.sanitizeHTMLToDom)(parseInlineToHtml(lines[0]));
     paragraphDiv.append(...Array.from(firstFrag.childNodes));
@@ -3063,7 +3063,7 @@ var EditorElement = class {
   findParagraphDiv(node) {
     let current = node;
     while (current && current !== this.el) {
-      if (current.parentElement === this.el && current instanceof HTMLElement && current.tagName === "DIV") {
+      if (current.parentElement === this.el && current.instanceOf(HTMLElement) && current.tagName === "DIV") {
         return current;
       }
       current = current.parentElement;
@@ -3093,7 +3093,7 @@ var EditorElement = class {
   // Skips spacer divs (SPACER_CLASS) which are permanent fixtures.
   cleanupEmptyParagraphDivs() {
     for (const child of Array.from(this.el.childNodes)) {
-      if (!(child instanceof HTMLElement)) continue;
+      if (!child.instanceOf(HTMLElement)) continue;
       if (child.classList.contains(SPACER_CLASS)) continue;
       if (child.tagName === "DIV" && isEffectivelyEmpty(child)) child.remove();
     }
@@ -3397,7 +3397,7 @@ var EditorElement = class {
     const expected = virt && virt.domEnd >= 0 ? virt.domEnd - virt.domStart + 1 : expectedCount;
     if (this.el.childNodes.length !== expected + spacerCount) return false;
     for (const node of Array.from(this.el.childNodes)) {
-      if (!(node instanceof HTMLElement) || node.tagName !== "DIV") return false;
+      if (!node.instanceOf(HTMLElement) || node.tagName !== "DIV") return false;
     }
     return true;
   }
@@ -3438,7 +3438,7 @@ var EditorElement = class {
     const rect = range.getBoundingClientRect();
     if (rect.width === 0 && rect.height === 0 && rect.x === 0 && rect.y === 0) {
       const node = range.startContainer;
-      (_a = node instanceof Element ? node : node.parentElement) == null ? void 0 : _a.scrollIntoView({ block: "nearest", inline: block });
+      (_a = node.instanceOf(Element) ? node : node.parentElement) == null ? void 0 : _a.scrollIntoView({ block: "nearest", inline: block });
       return;
     }
     const containerRect = container.getBoundingClientRect();
@@ -3484,7 +3484,7 @@ var EditorElement = class {
     let cursorDiv = null;
     let node = range.startContainer;
     while (node && node !== this.el) {
-      if (node instanceof HTMLElement && node.parentElement === this.el) {
+      if (node.instanceOf(HTMLElement) && node.parentElement === this.el) {
         cursorDiv = node;
         break;
       }
@@ -4083,7 +4083,7 @@ var SearchPanel = class {
       return;
     }
     this.editorFocused = false;
-    if (entry.range && (!entry.range.startContainer.isConnected || !(entry.range.startContainer instanceof Text))) {
+    if (entry.range && (!entry.range.startContainer.isConnected || !entry.range.startContainer.instanceOf(Text))) {
       entry.div = null;
       entry.range = null;
     }

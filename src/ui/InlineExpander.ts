@@ -17,7 +17,7 @@ export class InlineExpander {
     findExpandableAncestor(
         node: Node, ruby: boolean, tcy: boolean, bouten: boolean, heading = true,
     ): HTMLElement | null {
-        let el: HTMLElement | null = node instanceof HTMLElement ? node : node.parentElement;
+        let el: HTMLElement | null = node.instanceOf(HTMLElement) ? node : node.parentElement;
         while (el && el !== this.el) {
             if (el.tagName === 'RUBY' && ruby) return el;
             if (el.tagName === 'SPAN' && el.getAttribute('data-tcy') === 'explicit' && tcy) return el;
