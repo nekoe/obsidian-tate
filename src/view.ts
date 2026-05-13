@@ -434,11 +434,7 @@ export class VerticalWritingView extends ItemView {
                         return;
                     }
                     this.lastKnownViewOffset = null;
-                    if (savedOffset !== undefined) {
-                        this.restoreViewOffset(savedOffset); // rAF 1 hides spinner; rAF 2 removes class
-                    } else {
-                        this.scheduleScrollRestoringCleanup(gen);
-                    }
+                    this.restoreViewOffset(savedOffset ?? 0); // rAF 1 hides spinner; rAF 2 removes class
                 })();
             })
         );
@@ -510,11 +506,7 @@ export class VerticalWritingView extends ItemView {
                 return;
             }
             this.lastKnownViewOffset = null;
-            if (savedOffset !== undefined) {
-                this.restoreViewOffset(savedOffset); // rAF 1 hides spinner; rAF 2 removes class
-            } else {
-                this.scheduleScrollRestoringCleanup(gen);
-            }
+            this.restoreViewOffset(savedOffset ?? 0); // rAF 1 hides spinner; rAF 2 removes class
             return;
         }
         // If no active file, fall back to the first file in an open Markdown view
@@ -530,11 +522,7 @@ export class VerticalWritingView extends ItemView {
                     return;
                 }
                 this.lastKnownViewOffset = null;
-                if (savedOffset !== undefined) {
-                    this.restoreViewOffset(savedOffset); // rAF 1 hides spinner; rAF 2 removes class
-                } else {
-                    this.scheduleScrollRestoringCleanup(gen);
-                }
+                this.restoreViewOffset(savedOffset ?? 0); // rAF 1 hides spinner; rAF 2 removes class
                 return;
             }
         }

@@ -4521,11 +4521,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
             return;
           }
           this.lastKnownViewOffset = null;
-          if (savedOffset !== void 0) {
-            this.restoreViewOffset(savedOffset);
-          } else {
-            this.scheduleScrollRestoringCleanup(gen);
-          }
+          this.restoreViewOffset(savedOffset != null ? savedOffset : 0);
         })();
       })
     );
@@ -4585,11 +4581,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
         return;
       }
       this.lastKnownViewOffset = null;
-      if (savedOffset !== void 0) {
-        this.restoreViewOffset(savedOffset);
-      } else {
-        this.scheduleScrollRestoringCleanup(gen);
-      }
+      this.restoreViewOffset(savedOffset != null ? savedOffset : 0);
       return;
     }
     for (const leaf of this.app.workspace.getLeavesOfType("markdown")) {
@@ -4604,11 +4596,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
           return;
         }
         this.lastKnownViewOffset = null;
-        if (savedOffset !== void 0) {
-          this.restoreViewOffset(savedOffset);
-        } else {
-          this.scheduleScrollRestoringCleanup(gen);
-        }
+        this.restoreViewOffset(savedOffset != null ? savedOffset : 0);
         return;
       }
     }
