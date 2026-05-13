@@ -8,7 +8,7 @@ import { parseInlineToHtml, serializeNode } from './AozoraParser';
 // ---- Match entry types ----
 
 // A match entry may refer to an in-window div (div != null, range != null) or an off-window
-// paragraph (div/range null). Off-window entries are resolved lazily via ensureInWindow() when
+// paragraph (div/range null). Off-window entries are resolved lazily via teleportWindowTo() when
 // the user navigates to them.
 interface MatchEntry {
     paragraphIndex: number;

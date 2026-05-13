@@ -310,21 +310,6 @@ export class ParagraphVirtualizer {
         return (this.editorEl.children[i - this.domStart + spacerOffset] as HTMLElement) ?? null;
     }
 
-    // Ensures paragraph i is in the DOM window.
-    // Expands the window in the required direction until i is included.
-    // Called by setVisibleOffset (cursor restore) and jump-to-heading.
-    ensureInWindow(i: number): void {
-        if (this.isInWindow(i)) return;
-        const domStartBefore = this.domStart;
-        const domEndBefore   = this.domEnd;
-        if (i < this.domStart) {
-            while (this.domStart > i) this.expandRight();
-        } else {
-            while (this.domEnd < i) this.expandLeft();
-        }
-        this.correctSpacerAfterExpand(domStartBefore, domEndBefore);
-    }
-
     // Teleports the DOM window to be centered on paragraph `center` (± windowHalf).
     // Rebuilds the DOM from paragraphRecords without traversing intermediate paragraphs.
     // Used by EditorElement.jumpWindowTo() and SearchPanel navigation.
