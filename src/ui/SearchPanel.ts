@@ -564,19 +564,23 @@ export class SearchPanel {
         const { text, paragraphs } = extractHybridText(editorEl, this.virtualizer);
         const re = new RegExp(escapeRegex(query), 'gi');
         let m: RegExpExecArray | null;
+        // paragraphs is sorted by globalStart; matches are enumerated in ascending order, so
+        // carry paraIdx forward instead of restarting from 0 for each match (O(N) total).
+        let paraIdx = 0;
         while ((m = re.exec(text)) !== null) {
             const matchStart = m.index;
             const matchEnd = m.index + m[0].length;
 
-            // Find the paragraph containing the match start.
-            let para: ParagraphTextData | undefined;
-            for (const p of paragraphs) {
-                if (matchStart >= p.globalStart && matchStart < p.globalStart + p.text.length) {
-                    para = p;
-                    break;
-                }
+            // Advance to the paragraph that contains matchStart.
+            while (
+                paraIdx < paragraphs.length - 1 &&
+                matchStart >= paragraphs[paraIdx].globalStart + paragraphs[paraIdx].text.length
+            ) paraIdx++;
+            const para = paragraphs[paraIdx];
+            if (!para || matchStart < para.globalStart || matchStart >= para.globalStart + para.text.length) {
+                if (m[0].length === 0) re.lastIndex++;
+                continue;
             }
-            if (!para) { if (m[0].length === 0) re.lastIndex++; continue; }
 
             // Skip matches that span paragraph boundaries (cross-paragraph Ranges are not supported).
             if (matchEnd > para.globalStart + para.text.length) {
@@ -636,10 +640,13 @@ export class SearchPanel {
     private setFocus(index: number, scroll: boolean): void {
         this.currentIndex = index;
         this.updateCount();
-        this.applyFocusHighlight();
 
         const entry = this.matchEntries[index];
-        if (!entry || !scroll) return;
+        // scroll=false: highlight only — apply immediately (range may or may not exist).
+        if (!entry || !scroll) {
+            this.applyFocusHighlight();
+            return;
+        }
 
         // Typing or navigation is restoring control to the search input; clear the flag
         // so the focus highlight is shown again and close() will restore the cursor.
@@ -677,8 +684,9 @@ export class SearchPanel {
             // Cache the resolved div and range so subsequent navigation reuses them.
             entry.div   = div;
             entry.range = range;
-            this.applyFocusHighlight();
         }
+        // Apply focus highlight once, after range is guaranteed to be populated.
+        this.applyFocusHighlight();
 
         // Place the editor cursor at the start of the focused match.
         // sel.addRange() on a contenteditable node steals browser focus.

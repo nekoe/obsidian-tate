@@ -178,13 +178,13 @@ export class ParagraphVirtualizer {
     // of calling initRecords() + manually building divs in EditorElement.
     initWindowFromLines(lines: string[], lo: number, hi: number): void {
         this.initRecords(lines, lo, hi);
-        this.buildDomWindow(lo, hi, lines.slice(lo, hi + 1));
+        this.buildDomWindow(lines.slice(lo, hi + 1));
     }
 
     // Builds paragraph div elements from sources and replaces the editor window's children.
     // Does NOT update spacer widths; callers must have already called resetWindow() (e.g. via
     // initRecords() or resetWindow() directly) so spacer widths are correct.
-    private buildDomWindow(lo: number, hi: number, sources: string[]): void {
+    private buildDomWindow(sources: string[]): void {
         const windowNodes: Node[] = [];
         for (const src of sources) {
             const div = document.createElement('div');
@@ -269,12 +269,18 @@ export class ParagraphVirtualizer {
         });
         this.paragraphRecords.splice(lo, deleteCount, ...newRecords);
         const delta = newLines.length - deleteCount;
-        // If the splice is entirely before the window, shift the window indices.
+        // If the splice is entirely before the window, shift both window bounds.
         if (lo < this.domStart) {
             this.domStart = Math.max(0, this.domStart + delta);
         }
-        // Adjust domEnd by the count delta and clamp to the new total.
-        this.domEnd = Math.min(this.domEnd + delta, this.paragraphRecords.length - 1);
+        // Splices that touch or precede domEnd shift the window's end index.
+        // Splices entirely after domEnd (lo > domEnd) do not change which paragraphs
+        // are in-window; clamp only to keep the index within the new array length.
+        if (lo <= this.domEnd) {
+            this.domEnd = Math.min(this.domEnd + delta, this.paragraphRecords.length - 1);
+        } else {
+            this.domEnd = Math.min(this.domEnd, this.paragraphRecords.length - 1);
+        }
         this.domEnd = Math.max(this.domEnd, this.domStart);
         if (spliceWithinWindow) {
             // Off-screen paragraphs did not change; stored spacer widths remain correct.
@@ -318,7 +324,7 @@ export class ParagraphVirtualizer {
         if (N === 0) return;
         const lo = Math.max(0, center - windowHalf);
         const hi = Math.min(N - 1, center + windowHalf);
-        this.buildDomWindow(lo, hi, this.paragraphRecords.slice(lo, hi + 1).map(r => r.src));
+        this.buildDomWindow(this.paragraphRecords.slice(lo, hi + 1).map(r => r.src));
         this.resetWindow(lo, hi);
     }
 
@@ -340,10 +346,8 @@ export class ParagraphVirtualizer {
         }
         this.domStart = 0;
         this.domEnd   = this.paragraphRecords.length - 1;
-        this.rightSpacerWidth = 0;
-        this.leftSpacerWidth  = 0;
-        if (this.rightSpacer) this.rightSpacer.style.removeProperty('width');
-        if (this.leftSpacer)  this.leftSpacer.style.removeProperty('width');
+        this.applyRightSpacer(0);
+        this.applyLeftSpacer(0);
     }
 
     // Called on selectionchange. Window management is scroll-driven, so this is a no-op.

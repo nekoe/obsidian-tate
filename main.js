@@ -1012,7 +1012,7 @@ var CursorAnchorManager = class {
         } else {
           const pos = this.findPositionBeforeAnchor(anchorSpan);
           if (pos) r.setStart(pos.node, pos.offset);
-          else r.setStartAfter(anchorSpan);
+          else r.setStartBefore(anchorSpan);
         }
         r.collapse(true);
         sel.removeAllRanges();
@@ -2103,12 +2103,12 @@ var ParagraphVirtualizer = class {
   // of calling initRecords() + manually building divs in EditorElement.
   initWindowFromLines(lines, lo, hi) {
     this.initRecords(lines, lo, hi);
-    this.buildDomWindow(lo, hi, lines.slice(lo, hi + 1));
+    this.buildDomWindow(lines.slice(lo, hi + 1));
   }
   // Builds paragraph div elements from sources and replaces the editor window's children.
   // Does NOT update spacer widths; callers must have already called resetWindow() (e.g. via
   // initRecords() or resetWindow() directly) so spacer widths are correct.
-  buildDomWindow(lo, hi, sources) {
+  buildDomWindow(sources) {
     const windowNodes = [];
     for (const src of sources) {
       const div = document.createElement("div");
@@ -2168,7 +2168,11 @@ var ParagraphVirtualizer = class {
     if (lo < this.domStart) {
       this.domStart = Math.max(0, this.domStart + delta);
     }
-    this.domEnd = Math.min(this.domEnd + delta, this.paragraphRecords.length - 1);
+    if (lo <= this.domEnd) {
+      this.domEnd = Math.min(this.domEnd + delta, this.paragraphRecords.length - 1);
+    } else {
+      this.domEnd = Math.min(this.domEnd, this.paragraphRecords.length - 1);
+    }
     this.domEnd = Math.max(this.domEnd, this.domStart);
     if (spliceWithinWindow) {
       return;
@@ -2206,7 +2210,7 @@ var ParagraphVirtualizer = class {
     if (N === 0) return;
     const lo = Math.max(0, center - windowHalf);
     const hi = Math.min(N - 1, center + windowHalf);
-    this.buildDomWindow(lo, hi, this.paragraphRecords.slice(lo, hi + 1).map((r) => r.src));
+    this.buildDomWindow(this.paragraphRecords.slice(lo, hi + 1).map((r) => r.src));
     this.resetWindow(lo, hi);
   }
   // Replaces all paragraph divs with the full document content (one div per record).
@@ -2227,10 +2231,8 @@ var ParagraphVirtualizer = class {
     }
     this.domStart = 0;
     this.domEnd = this.paragraphRecords.length - 1;
-    this.rightSpacerWidth = 0;
-    this.leftSpacerWidth = 0;
-    if (this.rightSpacer) this.rightSpacer.style.removeProperty("width");
-    if (this.leftSpacer) this.leftSpacer.style.removeProperty("width");
+    this.applyRightSpacer(0);
+    this.applyLeftSpacer(0);
   }
   // Called on selectionchange. Window management is scroll-driven, so this is a no-op.
   ensureWindowAroundCursor() {
@@ -3304,7 +3306,7 @@ var EditorElement = class {
   // Updates paragraph divs to match nextContent, replacing only divs whose line changed.
   // Returns the changed/added divs, or null if hasCleanDivStructure failed (full rebuild).
   patchParagraphs(prevContent, nextContent) {
-    var _a;
+    var _a, _b, _c;
     const prevLines = prevContent.split("\n");
     const nextLines = nextContent ? nextContent.split("\n") : [""];
     const el = this.el;
@@ -3339,11 +3341,33 @@ var EditorElement = class {
     while (suf < P - lo && suf < N - lo && prevLines[P - 1 - suf] === nextLines[N - 1 - suf]) suf++;
     const hiPrev = P - suf;
     const hiNext = N - suf;
-    if (virt && virt.domEnd >= 0 && (lo < virt.domStart || hiPrev > virt.domEnd + 1)) {
-      virt.spliceRecords(lo, hiPrev - lo, nextLines.slice(lo, hiNext));
-      return null;
+    if (virt && virt.domEnd >= 0) {
+      const isEntirelyBeforeWindow = hiPrev <= virt.domStart;
+      const isEntirelyAfterWindow = lo > virt.domEnd;
+      if (isEntirelyBeforeWindow || isEntirelyAfterWindow) {
+        virt.spliceRecords(lo, hiPrev - lo, nextLines.slice(lo, hiNext));
+        return null;
+      }
+      if (lo < virt.domStart || hiPrev > virt.domEnd + 1) {
+        virt.spliceRecords(lo, hiPrev - lo, nextLines.slice(lo, hiNext));
+        const winLo = virt.domStart;
+        const winHi = virt.domEnd;
+        const windowNodes = [];
+        for (let i = winLo; i <= winHi; i++) {
+          const src = (_b = (_a = virt.paragraphRecords[i]) == null ? void 0 : _a.src) != null ? _b : "";
+          const div = document.createElement("div");
+          div.replaceChildren((0, import_obsidian4.sanitizeHTMLToDom)(parseInlineToHtml(src) || "<br>"));
+          windowNodes.push(div);
+        }
+        if (virt.rightSpacer && virt.leftSpacer) {
+          el.replaceChildren(virt.rightSpacer, ...windowNodes, virt.leftSpacer);
+        } else {
+          el.replaceChildren(...windowNodes);
+        }
+        return null;
+      }
     }
-    const suffixAnchor = (_a = el.children[this.paragraphChildIndex(hiPrev)]) != null ? _a : null;
+    const suffixAnchor = (_c = el.children[this.paragraphChildIndex(hiPrev)]) != null ? _c : null;
     const insertCount = hiNext - hiPrev;
     if (insertCount > 0) {
       for (let i = 0; i < insertCount; i++)
@@ -4000,17 +4024,13 @@ var SearchPanel = class {
     const { text, paragraphs } = extractHybridText(editorEl, this.virtualizer);
     const re = new RegExp(escapeRegex(query), "gi");
     let m;
+    let paraIdx = 0;
     while ((m = re.exec(text)) !== null) {
       const matchStart = m.index;
       const matchEnd = m.index + m[0].length;
-      let para;
-      for (const p of paragraphs) {
-        if (matchStart >= p.globalStart && matchStart < p.globalStart + p.text.length) {
-          para = p;
-          break;
-        }
-      }
-      if (!para) {
+      while (paraIdx < paragraphs.length - 1 && matchStart >= paragraphs[paraIdx].globalStart + paragraphs[paraIdx].text.length) paraIdx++;
+      const para = paragraphs[paraIdx];
+      if (!para || matchStart < para.globalStart || matchStart >= para.globalStart + para.text.length) {
         if (m[0].length === 0) re.lastIndex++;
         continue;
       }
@@ -4061,9 +4081,11 @@ var SearchPanel = class {
     var _a;
     this.currentIndex = index;
     this.updateCount();
-    this.applyFocusHighlight();
     const entry = this.matchEntries[index];
-    if (!entry || !scroll) return;
+    if (!entry || !scroll) {
+      this.applyFocusHighlight();
+      return;
+    }
     this.editorFocused = false;
     if (entry.range && (!entry.range.startContainer.isConnected || !(entry.range.startContainer instanceof Text))) {
       entry.div = null;
@@ -4084,8 +4106,8 @@ var SearchPanel = class {
       range = r;
       entry.div = div;
       entry.range = range;
-      this.applyFocusHighlight();
     }
+    this.applyFocusHighlight();
     const sel = window.getSelection();
     if (sel) {
       const cursorRange = document.createRange();

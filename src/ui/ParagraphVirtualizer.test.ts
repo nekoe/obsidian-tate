@@ -115,6 +115,44 @@ describe('ParagraphVirtualizer', () => {
             virt.spliceRecords(0, 1, ['吾輩《わがはい》']);
             expect(virt.paragraphRecords[0].viewLen).toBe(2); // 吾輩 (rt excluded)
         });
+
+        it('insertion before window shifts domStart and domEnd forward', () => {
+            virt.domStart = 2;
+            virt.domEnd   = 3;
+            virt.spliceRecords(0, 0, ['inserted']);
+            expect(virt.paragraphRecords).toHaveLength(5);
+            expect(virt.domStart).toBe(3);
+            expect(virt.domEnd).toBe(4);
+        });
+
+        it('deletion before window shifts domStart and domEnd back', () => {
+            virt.domStart = 2;
+            virt.domEnd   = 3;
+            virt.spliceRecords(0, 1, []);
+            expect(virt.paragraphRecords).toHaveLength(3);
+            expect(virt.domStart).toBe(1);
+            expect(virt.domEnd).toBe(2);
+        });
+
+        it('splice spanning window start clamps domStart to 0 when all prefix removed', () => {
+            virt.domStart = 2;
+            virt.domEnd   = 3;
+            virt.spliceRecords(0, 3, ['only']);
+            // paragraphs: ['only', 'line3'] (4 replaced by ['only', 'line3'])
+            expect(virt.paragraphRecords).toHaveLength(2);
+            // delta = 1 - 3 = -2; domStart = max(0, 2 + (-2)) = 0; domEnd = min(3 + (-2), 1) = 1
+            expect(virt.domStart).toBe(0);
+            expect(virt.domEnd).toBe(1);
+        });
+
+        it('splice after window does not affect domStart or domEnd', () => {
+            virt.domStart = 0;
+            virt.domEnd   = 1;
+            virt.spliceRecords(2, 2, ['x', 'y', 'z']);
+            expect(virt.paragraphRecords).toHaveLength(5);
+            expect(virt.domStart).toBe(0);
+            expect(virt.domEnd).toBe(1);
+        });
     });
 
     // ---- syncWindowSrcs ----

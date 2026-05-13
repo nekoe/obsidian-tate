@@ -54,7 +54,7 @@ export class CursorAnchorManager {
                 } else {
                     const pos = this.findPositionBeforeAnchor(anchorSpan);
                     if (pos) r.setStart(pos.node, pos.offset);
-                    else r.setStartAfter(anchorSpan);
+                    else r.setStartBefore(anchorSpan);
                 }
                 r.collapse(true);
                 sel.removeAllRanges();

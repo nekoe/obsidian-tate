@@ -911,11 +911,40 @@ export class EditorElement {
         const hiPrev = P - suf;
         const hiNext = N - suf;
 
-        // When the DOM window is partial, skip DOM manipulation for changes outside the window.
-        // Off-window diff: update records only (spliceRecords adjusts domStart/domEnd as needed).
-        if (virt && virt.domEnd >= 0 && (lo < virt.domStart || hiPrev > virt.domEnd + 1)) {
-            virt.spliceRecords(lo, hiPrev - lo, nextLines.slice(lo, hiNext));
-            return null;
+        // When the DOM window is partial, handle changes relative to the window:
+        //   • Entirely outside: update records only (no DOM nodes to touch).
+        //   • Partially overlapping: update records first (adjusts domStart/domEnd), then
+        //     rebuild the window from the now-correct paragraphRecords. Returning null
+        //     triggers the tate-scroll-restoring path in doUndoRedo, which is safe here.
+        //   • Entirely inside: fall through to the DOM patch loop below.
+        if (virt && virt.domEnd >= 0) {
+            const isEntirelyBeforeWindow = hiPrev <= virt.domStart;
+            const isEntirelyAfterWindow  = lo > virt.domEnd;
+            if (isEntirelyBeforeWindow || isEntirelyAfterWindow) {
+                virt.spliceRecords(lo, hiPrev - lo, nextLines.slice(lo, hiNext));
+                return null;
+            }
+            if (lo < virt.domStart || hiPrev > virt.domEnd + 1) {
+                // Change overlaps the window boundary. spliceRecords adjusts domStart/domEnd
+                // so the window indices remain valid in the new paragraph array.
+                virt.spliceRecords(lo, hiPrev - lo, nextLines.slice(lo, hiNext));
+                const winLo = virt.domStart;
+                const winHi = virt.domEnd;
+                const windowNodes: Node[] = [];
+                for (let i = winLo; i <= winHi; i++) {
+                    const src = virt.paragraphRecords[i]?.src ?? '';
+                    const div = document.createElement('div');
+                    div.replaceChildren(sanitizeHTMLToDom(parseInlineToHtml(src) || '<br>'));
+                    windowNodes.push(div);
+                }
+                if (virt.rightSpacer && virt.leftSpacer) {
+                    el.replaceChildren(virt.rightSpacer, ...windowNodes, virt.leftSpacer);
+                } else {
+                    el.replaceChildren(...windowNodes);
+                }
+                return null;
+            }
+            // Fall through: change is entirely within [domStart, domEnd].
         }
 
         // Insert or remove divs in the middle so the total count matches N.
