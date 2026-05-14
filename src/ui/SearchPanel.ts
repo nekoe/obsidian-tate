@@ -734,7 +734,7 @@ export class SearchPanel {
         for (const entry of this.matchEntries) {
             // Clear ranges corrupted by the DOM Range live-update spec: when a paragraph div is
             // removed by replaceChildren(), the browser moves Range boundaries up to tate-editor.
-            if (entry.range && !(entry.range.startContainer instanceof Text)) {
+            if (entry.range && !entry.range.startContainer.instanceOf(Text)) {
                 entry.div   = null;
                 entry.range = null;
                 changed = true;

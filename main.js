@@ -4137,7 +4137,7 @@ var SearchPanel = class {
   refreshWindowRanges() {
     let changed = false;
     for (const entry of this.matchEntries) {
-      if (entry.range && !(entry.range.startContainer instanceof Text)) {
+      if (entry.range && !entry.range.startContainer.instanceOf(Text)) {
         entry.div = null;
         entry.range = null;
         changed = true;
