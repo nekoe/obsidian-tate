@@ -29,6 +29,7 @@ export class EditorElement {
         this.el.setAttribute('contenteditable', 'true');
         this.el.setAttribute('spellcheck', 'false');
         this.el.setAttribute('data-placeholder', 'ファイルを開いてください');
+        this.el.addClass('tate-empty');
         this.inlineEditor = new InlineEditor(this.el);
         this.inputTransformer = new InputTransformer(this.el, DEFAULT_SETTINGS);
     }

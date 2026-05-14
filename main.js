@@ -2632,6 +2632,7 @@ var EditorElement = class {
     this.el.setAttribute("contenteditable", "true");
     this.el.setAttribute("spellcheck", "false");
     this.el.setAttribute("data-placeholder", "\u30D5\u30A1\u30A4\u30EB\u3092\u958B\u3044\u3066\u304F\u3060\u3055\u3044");
+    this.el.addClass("tate-empty");
     this.inlineEditor = new InlineEditor(this.el);
     this.inputTransformer = new InputTransformer(this.el, DEFAULT_SETTINGS);
   }
@@ -4277,6 +4278,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
       (content, preserveCursor) => {
         var _a;
         this.lastCommittedContent = content;
+        editorEl.el.toggleClass("tate-empty", content === "");
         if (preserveCursor) {
           const savedOffset = (_a = this.lastKnownViewOffset) != null ? _a : editorEl.getViewCursorOffset();
           this.beginScrollRestoring();
@@ -5136,7 +5138,7 @@ var TatePlugin = class extends import_obsidian8.Plugin {
     });
     this.addCommand({
       id: "add-tcy",
-      name: "\u9078\u629E\u30C6\u30AD\u30B9\u30C8\u3092\u7E26\u4E2D\u6A2A\u306B\u3059\u308B (tate-chu-yoko: tcy)",
+      name: "\u9078\u629E\u30C6\u30AD\u30B9\u30C8\u3092\u7E26\u4E2D\u6A2A\u306B\u3059\u308B (tcy)",
       checkCallback: (checking) => {
         const view = this.getActiveTateView();
         if (!view) return false;

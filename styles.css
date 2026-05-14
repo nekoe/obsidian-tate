@@ -37,10 +37,10 @@
     cursor: text;
 }
 
-/* Placeholder (shown when no file is selected).
-   :not(:has(> :not(.tate-spacer))) matches both a truly empty editor and one that
-   contains only the two spacer divs inserted by ParagraphVirtualizer.attach(). */
-.tate-editor:not(:has(> :not(.tate-spacer)))::before {
+/* Placeholder shown when no file is selected.
+   .tate-empty is set on the editor element by EditorElement constructor and removed
+   by view.ts when a non-empty file is loaded. */
+.tate-editor.tate-empty::before {
     content: attr(data-placeholder);
     color: var(--text-faint);
     pointer-events: none;
