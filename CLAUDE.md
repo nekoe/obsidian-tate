@@ -117,6 +117,45 @@ See the design documents in `docs/design/` for details:
 
 After changing settings, call `plugin.applySettingsToAllViews()` to apply them immediately to all open views.
 
+## Obsidian Coding Conventions
+
+The following rules are enforced by the Obsidian Community automated review system.
+
+### Popout window compatibility
+
+Obsidian supports detached popout windows, each with its own `window` and `document`. Always use the popout-safe equivalents instead of bare globals:
+
+| Instead of | Use |
+|---|---|
+| `document` | `activeDocument` |
+| `window.setTimeout` / `setTimeout` | `window.setTimeout` |
+| `window.clearTimeout` / `clearTimeout` | `window.clearTimeout` |
+| `window.requestAnimationFrame` / `requestAnimationFrame` | `window.requestAnimationFrame` |
+| `window.cancelAnimationFrame` / `cancelAnimationFrame` | `window.cancelAnimationFrame` |
+
+(`activeDocument` is a global provided by Obsidian; the `window.*` timer/rAF forms are required because bare `setTimeout` etc. resolve to the Node.js versions in the TypeScript type environment.)
+
+### Cross-window DOM type checks
+
+`instanceof HTMLElement` / `instanceof Text` / `instanceof Element` fail across window boundaries. Use the Obsidian-provided method instead:
+
+```typescript
+// Instead of
+node instanceof HTMLElement
+
+// Use
+node.instanceOf(HTMLElement)       // when node is non-null
+node?.instanceOf(HTMLElement)      // when node may be null (preserves false-on-null semantics)
+```
+
+### Styling
+
+Do not set styles via `element.style.setProperty`. Use CSS classes for static styles, and `setCssProps` for dynamic CSS custom properties.
+
+### Type assertions
+
+Do not write `as T` when TypeScript has already narrowed the type (e.g. after `instanceof`/`.instanceOf()`) or when the variable is already declared as `T`. Remove redundant non-null assertions (`!`) on `any`-typed expressions.
+
 ## Obsidian API Notes
 
 - `containerEl.children[1]` is the ItemView content area (Obsidian convention)
