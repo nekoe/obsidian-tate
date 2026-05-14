@@ -1,4 +1,4 @@
-import { Editor, ItemView, MarkdownView, Notice, Scope, TFile, WorkspaceLeaf } from 'obsidian';
+import { Editor, ItemView, MarkdownView, Notice, Platform, Scope, TFile, WorkspaceLeaf } from 'obsidian';
 import type TatePlugin from './main';
 import { SyncCoordinator } from './sync/SyncCoordinator';
 import { EditorElement } from './ui/EditorElement';
@@ -348,6 +348,29 @@ export class VerticalWritingView extends ItemView {
                 e.preventDefault();
                 if (virtualizer.paragraphRecords.length > 0) virtualizer.setVirtualSelectAll();
                 return;
+            }
+            // Cmd+↑ / Cmd+↓ (macOS): jump to document start / end
+            // Ctrl+Home / Ctrl+End (Windows/Linux): jump to document start / end
+            if (!e.isComposing && !e.altKey && !e.shiftKey) {
+                const jumpToStart = Platform.isMacOS
+                    ? e.metaKey && e.key === 'ArrowUp'
+                    : e.ctrlKey && e.key === 'Home';
+                const jumpToEnd = Platform.isMacOS
+                    ? e.metaKey && e.key === 'ArrowDown'
+                    : e.ctrlKey && e.key === 'End';
+                if (jumpToStart || jumpToEnd) {
+                    e.preventDefault();
+                    virtualizer.clearVirtualSelection();
+                    if (this.commitTimer !== null) this.commitToCm6();
+                    if (jumpToStart) {
+                        this.jumpToViewOffset(0);
+                    } else {
+                        const totalLen = virtualizer.paragraphRecords.reduce((sum, r) => sum + r.viewLen, 0);
+                        this.jumpToViewOffset(totalLen);
+                    }
+                    editorEl.afterNavigation();
+                    return;
+                }
             }
             // ArrowUp/ArrowDown inside a tcy span: move left/right within the horizontal text
             if (!e.isComposing && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
