@@ -281,7 +281,7 @@ export class VerticalWritingView extends ItemView {
             this.commitToCm6(); // IME confirmation is a commit point
             this.searchPanel?.onContentChanged();
         });
-        this.registerDomEvent(document, 'selectionchange', () => {
+        this.registerDomEvent(activeDocument, 'selectionchange', () => {
             // Ensure the cursor paragraph and its neighbors are in the DOM window / thawed.
             if (activeDocument.activeElement === editorEl.el) virtualizer.ensureWindowAroundCursor();
             const contentChanged = editorEl.handleSelectionChange();

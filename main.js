@@ -4398,7 +4398,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
       this.commitToCm6();
       (_a = this.searchPanel) == null ? void 0 : _a.onContentChanged();
     });
-    this.registerDomEvent(document, "selectionchange", () => {
+    this.registerDomEvent(activeDocument, "selectionchange", () => {
       if (activeDocument.activeElement === editorEl.el) virtualizer.ensureWindowAroundCursor();
       const contentChanged = editorEl.handleSelectionChange();
       if (contentChanged) this.commitToCm6();
