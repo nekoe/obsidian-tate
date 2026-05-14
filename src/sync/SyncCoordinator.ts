@@ -88,13 +88,6 @@ export class SyncCoordinator {
         this.setEditorValue(externalContent, true);
     }
 
-    onFileDelete(file: TFile): void {
-        if (file !== this.currentFile) return;
-        this.currentFile = null;
-        this.selfWriteChecksums.clear();
-        this.setEditorValue('', false);
-    }
-
     clearCurrentFile(): void {
         this.currentFile = null;
         this.selfWriteChecksums.clear();

@@ -101,12 +101,6 @@ var SyncCoordinator = class {
     if (externalContent === this.getEditorValue()) return;
     this.setEditorValue(externalContent, true);
   }
-  onFileDelete(file) {
-    if (file !== this.currentFile) return;
-    this.currentFile = null;
-    this.selfWriteChecksums.clear();
-    this.setEditorValue("", false);
-  }
   clearCurrentFile() {
     this.currentFile = null;
     this.selfWriteChecksums.clear();
@@ -4279,7 +4273,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
       (content, preserveCursor) => {
         var _a;
         this.lastCommittedContent = content;
-        editorEl.el.toggleClass("tate-empty", syncCoordinator.currentFile === null);
+        editorEl.el.removeClass("tate-empty");
         if (preserveCursor) {
           const savedOffset = (_a = this.lastKnownViewOffset) != null ? _a : editorEl.getViewCursorOffset();
           this.beginScrollRestoring();
@@ -4491,6 +4485,17 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
         editorEl.afterNavigation();
       }
     });
+    const clearForUnload = () => {
+      syncCoordinator.clearCurrentFile();
+      editorEl.clearContent();
+      virtualizer.initRecords([]);
+      this.lastCommittedContent = "";
+      this.pendingCursorOffset = null;
+      this.lastKnownViewOffset = null;
+      this.plugin.updateCharCount(null);
+      this.plugin.refreshOutline();
+      this.cancelScrollRestoring();
+    };
     this.registerEvent(
       this.app.vault.on("modify", (file) => {
         if (file instanceof import_obsidian6.TFile) {
@@ -4500,10 +4505,9 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
     );
     this.registerEvent(
       this.app.vault.on("delete", (file) => {
-        if (file instanceof import_obsidian6.TFile) {
-          void this.plugin.deleteCursorPosition(file.path);
-          syncCoordinator.onFileDelete(file);
-        }
+        if (!(file instanceof import_obsidian6.TFile)) return;
+        void this.plugin.deleteCursorPosition(file.path);
+        if (file === syncCoordinator.currentFile) clearForUnload();
       })
     );
     this.registerEvent(
@@ -4519,15 +4523,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
         if (file === syncCoordinator.currentFile) return;
         this.closeSearch();
         if (!file) {
-          syncCoordinator.clearCurrentFile();
-          editorEl.clearContent();
-          virtualizer.initRecords([]);
-          this.lastCommittedContent = "";
-          this.pendingCursorOffset = null;
-          this.lastKnownViewOffset = null;
-          this.plugin.updateCharCount(null);
-          this.plugin.refreshOutline();
-          this.cancelScrollRestoring();
+          clearForUnload();
           return;
         }
         const prevFile = syncCoordinator.currentFile;
@@ -4562,15 +4558,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
               this.lastKnownViewOffset
             );
           }
-          syncCoordinator.clearCurrentFile();
-          editorEl.clearContent();
-          virtualizer.initRecords([]);
-          this.lastCommittedContent = "";
-          this.pendingCursorOffset = null;
-          this.lastKnownViewOffset = null;
-          this.plugin.updateCharCount(null);
-          this.plugin.refreshOutline();
-          this.cancelScrollRestoring();
+          clearForUnload();
         }
       })
     );

@@ -102,7 +102,7 @@ export class VerticalWritingView extends ItemView {
             () => this.lastCommittedContent,
             (content, preserveCursor) => {
                 this.lastCommittedContent = content;
-                editorEl.el.toggleClass('tate-empty', syncCoordinator.currentFile === null);
+                editorEl.el.removeClass('tate-empty');
                 if (preserveCursor) {
                     // External edit: rebuild all divs under tate-scroll-restoring so they are
                     // born with content-visibility:visible → contain-intrinsic-block-size cache
@@ -398,6 +398,20 @@ export class VerticalWritingView extends ItemView {
             }
         });
 
+        // Shared unload logic for all three file-unload paths:
+        // file-open(null), layout-change, and vault.on('delete').
+        const clearForUnload = () => {
+            syncCoordinator.clearCurrentFile();
+            editorEl.clearContent();
+            virtualizer.initRecords([]);
+            this.lastCommittedContent = '';
+            this.pendingCursorOffset = null;
+            this.lastKnownViewOffset = null;
+            this.plugin.updateCharCount(null);
+            this.plugin.refreshOutline();
+            this.cancelScrollRestoring();
+        };
+
         this.registerEvent(
             this.app.vault.on('modify', (file) => {
                 if (file instanceof TFile) {
@@ -407,10 +421,9 @@ export class VerticalWritingView extends ItemView {
         );
         this.registerEvent(
             this.app.vault.on('delete', (file) => {
-                if (file instanceof TFile) {
-                    void this.plugin.deleteCursorPosition(file.path);
-                    syncCoordinator.onFileDelete(file);
-                }
+                if (!(file instanceof TFile)) return;
+                void this.plugin.deleteCursorPosition(file.path);
+                if (file === syncCoordinator.currentFile) clearForUnload();
             })
         );
         this.registerEvent(
@@ -431,15 +444,7 @@ export class VerticalWritingView extends ItemView {
                 if (!file) {
                     // file-open fires with null when the active file is cleared (e.g., the active
                     // Markdown view is closed while the tate view is not the active leaf).
-                    syncCoordinator.clearCurrentFile();
-                    editorEl.clearContent();
-                    virtualizer.initRecords([]);
-                    this.lastCommittedContent = '';
-                    this.pendingCursorOffset = null;
-                    this.lastKnownViewOffset = null;
-                    this.plugin.updateCharCount(null);
-                    this.plugin.refreshOutline();
-                    this.cancelScrollRestoring();
+                    clearForUnload();
                     return;
                 }
                 // Save cursor for the file being switched away from before loading the new one.
@@ -480,15 +485,7 @@ export class VerticalWritingView extends ItemView {
                             this.lastKnownViewOffset,
                         );
                     }
-                    syncCoordinator.clearCurrentFile();
-                    editorEl.clearContent();
-                    virtualizer.initRecords([]);
-                    this.lastCommittedContent = '';
-                    this.pendingCursorOffset = null;
-                    this.lastKnownViewOffset = null;
-                    this.plugin.updateCharCount(null);
-                    this.plugin.refreshOutline();
-                    this.cancelScrollRestoring();
+                    clearForUnload();
                 }
             })
         );
