@@ -102,7 +102,7 @@ export class VerticalWritingView extends ItemView {
             () => this.lastCommittedContent,
             (content, preserveCursor) => {
                 this.lastCommittedContent = content;
-                editorEl.el.toggleClass('tate-empty', content === '');
+                editorEl.el.toggleClass('tate-empty', syncCoordinator.currentFile === null);
                 if (preserveCursor) {
                     // External edit: rebuild all divs under tate-scroll-restoring so they are
                     // born with content-visibility:visible → contain-intrinsic-block-size cache

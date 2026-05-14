@@ -631,6 +631,7 @@ export class EditorElement {
         } else {
             this.el.replaceChildren();
         }
+        this.el.addClass('tate-empty');
     }
 
     applySettings(settings: TatePluginSettings): void {

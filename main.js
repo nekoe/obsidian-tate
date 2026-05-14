@@ -3115,6 +3115,7 @@ var EditorElement = class {
     } else {
       this.el.replaceChildren();
     }
+    this.el.addClass("tate-empty");
   }
   applySettings(settings) {
     var _a;
@@ -4278,7 +4279,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
       (content, preserveCursor) => {
         var _a;
         this.lastCommittedContent = content;
-        editorEl.el.toggleClass("tate-empty", content === "");
+        editorEl.el.toggleClass("tate-empty", syncCoordinator.currentFile === null);
         if (preserveCursor) {
           const savedOffset = (_a = this.lastKnownViewOffset) != null ? _a : editorEl.getViewCursorOffset();
           this.beginScrollRestoring();
