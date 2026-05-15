@@ -1,7 +1,7 @@
-import { App, sanitizeHTMLToDom, Scope, setIcon } from 'obsidian';
+import { App, Scope, setIcon } from 'obsidian';
 import type { EditorElement } from './EditorElement';
 import type { ParagraphVirtualizer } from './ParagraphVirtualizer';
-import { isInsideRtNode } from './domHelpers';
+import { sanitizeForEditor, isInsideRtNode } from './domHelpers';
 import { buildSegmentMap, viewToSrc, type Segment } from './SegmentMap';
 import { parseInlineToHtml, serializeNode } from './AozoraParser';
 
@@ -475,7 +475,7 @@ export class SearchPanel {
         const segs = buildSegmentMap(srcLine);
         const newSrc = buildReplacedSrc(srcLine, segs, entry.localStart, entry.localEnd, replacement);
 
-        entry.div.replaceChildren(sanitizeHTMLToDom(parseInlineToHtml(newSrc) || '<br>'));
+        entry.div.replaceChildren(sanitizeForEditor(parseInlineToHtml(newSrc) || '<br>'));
 
         this.commitCallback?.();
 
@@ -520,7 +520,7 @@ export class SearchPanel {
                     const segs = buildSegmentMap(srcLine);
                     srcLine = buildReplacedSrc(srcLine, segs, entry.localStart, entry.localEnd, replacement);
                 }
-                div.replaceChildren(sanitizeHTMLToDom(parseInlineToHtml(srcLine) || '<br>'));
+                div.replaceChildren(sanitizeForEditor(parseInlineToHtml(srcLine) || '<br>'));
             } else {
                 // Off-window: modify paragraphRecords[i].src directly — no DOM needed.
                 // getValue() reads paragraphRecords[i].src for off-window paragraphs, so

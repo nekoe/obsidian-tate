@@ -1,7 +1,6 @@
-import { sanitizeHTMLToDom } from 'obsidian';
 import { buildSegmentMap } from './SegmentMap';
 import { parseInlineToHtml } from './AozoraParser';
-import { computeViewOffsetInDiv, computeDomPositionFromViewOff, findLastBaseTextInElement } from './domHelpers';
+import { sanitizeForEditor, computeViewOffsetInDiv, computeDomPositionFromViewOff, findLastBaseTextInElement } from './domHelpers';
 
 // CSS class applied to both spacer divs so DOM walkers can skip them.
 export const SPACER_CLASS = 'tate-spacer';
@@ -184,7 +183,7 @@ export class ParagraphVirtualizer {
         const windowNodes: Node[] = [];
         for (const src of sources) {
             const div = activeDocument.createElement('div');
-            div.replaceChildren(sanitizeHTMLToDom(parseInlineToHtml(src) || '<br>'));
+            div.replaceChildren(sanitizeForEditor(parseInlineToHtml(src) || '<br>'));
             windowNodes.push(div);
         }
         if (this.rightSpacer && this.leftSpacer) {
@@ -331,7 +330,7 @@ export class ParagraphVirtualizer {
         const frag = activeDocument.createDocumentFragment();
         for (const rec of this.paragraphRecords) {
             const div = activeDocument.createElement('div');
-            div.replaceChildren(sanitizeHTMLToDom(parseInlineToHtml(rec.src) || '<br>'));
+            div.replaceChildren(sanitizeForEditor(parseInlineToHtml(rec.src) || '<br>'));
             frag.appendChild(div);
         }
         const nodes = Array.from(frag.childNodes);
@@ -398,7 +397,7 @@ export class ParagraphVirtualizer {
         const i = this.domStart - 1;
         const rec = this.paragraphRecords[i];
         const div = activeDocument.createElement('div');
-        div.replaceChildren(sanitizeHTMLToDom(parseInlineToHtml(rec.src) || '<br>'));
+        div.replaceChildren(sanitizeForEditor(parseInlineToHtml(rec.src) || '<br>'));
         // Insert after rightSpacer (children[0]) → before the current first paragraph.
         const firstPara = this.rightSpacer
             ? this.editorEl.children[1] // first paragraph is after rightSpacer
@@ -416,7 +415,7 @@ export class ParagraphVirtualizer {
         const i = this.domEnd + 1;
         const rec = this.paragraphRecords[i];
         const div = activeDocument.createElement('div');
-        div.replaceChildren(sanitizeHTMLToDom(parseInlineToHtml(rec.src) || '<br>'));
+        div.replaceChildren(sanitizeForEditor(parseInlineToHtml(rec.src) || '<br>'));
         // Insert before leftSpacer (last child) → after the current last paragraph.
         this.editorEl.insertBefore(div, this.leftSpacer ?? null);
         const w = rec.width > 0 ? rec.width : this.estimateWidth(rec.viewLen);

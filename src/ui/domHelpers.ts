@@ -1,3 +1,16 @@
+import { sanitizeHTMLToDom } from 'obsidian';
+
+// ---- sanitizeHTMLToDom wrapper ----
+
+// sanitizeHTMLToDom strips the contenteditable attribute for security. Post-process
+// to restore contenteditable=false on <rt> elements so they form non-editable islands
+// inside the contenteditable editor.
+export function sanitizeForEditor(html: string): DocumentFragment {
+    const frag = sanitizeHTMLToDom(html);
+    frag.querySelectorAll('rt').forEach(rt => { rt.contentEditable = 'false'; });
+    return frag;
+}
+
 // ---- Element factories ----
 
 export function createRubyEl(base: string, rt: string, explicit: boolean): HTMLElement {
@@ -5,6 +18,7 @@ export function createRubyEl(base: string, rt: string, explicit: boolean): HTMLE
     rubyEl.setAttribute('data-ruby-explicit', String(explicit));
     rubyEl.appendChild(activeDocument.createTextNode(base));
     const rtEl = activeDocument.createElement('rt');
+    rtEl.contentEditable = 'false';
     rtEl.textContent = rt;
     rubyEl.appendChild(rtEl);
     return rubyEl;
