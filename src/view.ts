@@ -28,10 +28,10 @@ export class VerticalWritingView extends ItemView {
     // Set before loadFile() so the SyncCoordinator callback can read it synchronously.
     private pendingLoadViewOffset = 0;
     // Monotonic counter managed by beginScrollRestoring/cancelScrollRestoring.
-    // Guards cleanup rAFs: a stale rAF from a superseded load will not remove
-    // the class that belongs to a newer load (prevents fast-switching race condition).
+    // Guards cleanup rAFs: a stale rAF from a superseded load will not hide
+    // the spinner that belongs to a newer load (prevents fast-switching race condition).
     private scrollRestoringGeneration = 0;
-    // Spinner element shown while tate-scroll-restoring is active (file load + scroll restore).
+    // Spinner element shown during file load + scroll restore.
     private spinnerEl: HTMLElement | null = null;
     // Last cursor offset observed while the editor had focus (updated on every selectionchange).
     // Fallback for save paths that run while the editor is unfocused: getViewCursorOffset()
@@ -104,15 +104,13 @@ export class VerticalWritingView extends ItemView {
                 this.lastCommittedContent = content;
                 editorEl.el.removeClass('tate-empty');
                 if (preserveCursor) {
-                    // External edit: rebuild all divs under tate-scroll-restoring so they are
-                    // born with content-visibility:visible → contain-intrinsic-block-size cache
-                    // is accurate from their first paint. Then restore cursor and scroll,
+                    // External edit: show spinner, rebuild all divs, then restore cursor and scroll
                     // identical to the file-load path.
                     // Prefer lastKnownViewOffset over getViewCursorOffset(): the latter returns 0
                     // when the editor is not focused (external edit often fires while unfocused).
                     const savedOffset = this.lastKnownViewOffset ?? editorEl.getViewCursorOffset();
-                    this.beginScrollRestoring();       // adds class BEFORE setValue
-                    editorEl.setValue(content, false); // new divs born with class active
+                    this.beginScrollRestoring();
+                    editorEl.setValue(content, false);
                     this.plugin.updateCharCount(countChars(content));
                     this.plugin.refreshOutline();
                     // restoreViewOffset handles both cases:
@@ -463,7 +461,7 @@ export class VerticalWritingView extends ItemView {
                         return;
                     }
                     this.lastKnownViewOffset = null;
-                    this.restoreViewOffset(savedOffset ?? 0); // rAF 1 hides spinner; rAF 2 removes class
+                    this.restoreViewOffset(savedOffset ?? 0);
                 })();
             })
         );
@@ -527,7 +525,7 @@ export class VerticalWritingView extends ItemView {
                 return;
             }
             this.lastKnownViewOffset = null;
-            this.restoreViewOffset(savedOffset ?? 0); // rAF 1 hides spinner; rAF 2 removes class
+            this.restoreViewOffset(savedOffset ?? 0);
             return;
         }
         // If no active file, fall back to the first file in an open Markdown view
@@ -543,7 +541,7 @@ export class VerticalWritingView extends ItemView {
                     return;
                 }
                 this.lastKnownViewOffset = null;
-                this.restoreViewOffset(savedOffset ?? 0); // rAF 1 hides spinner; rAF 2 removes class
+                this.restoreViewOffset(savedOffset ?? 0);
                 return;
             }
         }
@@ -569,10 +567,8 @@ export class VerticalWritingView extends ItemView {
      *  sets the cursor, and scrolls into view. Otherwise defers to the next
      *  active-leaf-change event via pendingCursorOffset.
      *
-     *  Callers must set tate-scroll-restoring on el.el BEFORE the loadFile() call that
-     *  precedes this method. The class ensures new paragraph divs are built with real sizes
-     *  (content-visibility:visible). scrollCursorIntoView is deferred one rAF so it runs
-     *  after Obsidian's view-activation logic (focus resets, revealLeaf, etc.) completes. */
+     *  scrollCursorIntoView is deferred one rAF so it runs after Obsidian's view-activation
+     *  logic (focus resets, revealLeaf, etc.) completes. */
     private restoreViewOffset(savedOffset: number): void {
         const el = this.editorEl;
         if (!el) return;
@@ -589,16 +585,10 @@ export class VerticalWritingView extends ItemView {
                 this.hideLoadingSpinner();
                 // Re-assert cursor in case focus() moved it between now and this frame.
                 el.setViewCursorOffset(savedOffset);
-                el.scrollCursorIntoView(); // tate-scroll-restoring still active → real sizes
-                window.requestAnimationFrame(() => {
-                    if (this.scrollRestoringGeneration === gen) {
-                        el.el.classList.remove('tate-scroll-restoring');
-                    }
-                });
+                el.scrollCursorIntoView();
             });
         } else {
             // View is not yet active; active-leaf-change will apply cursor + scroll.
-            // The tate-scroll-restoring class set by the caller remains active until then.
             this.pendingCursorOffset = savedOffset;
         }
     }
@@ -640,33 +630,28 @@ export class VerticalWritingView extends ItemView {
         this.spinnerEl?.classList.remove('tate-loading-visible');
     }
 
-    /** Starts a scroll-restore cycle: increments the generation counter, adds
-     *  tate-scroll-restoring (must be called before loadFile() so new paragraph divs
-     *  are created with content-visibility:visible and real sizes), and shows the spinner.
+    /** Starts a file-load cycle: increments the generation counter and shows the spinner.
      *  Returns the generation number for use in rAF guards. */
     private beginScrollRestoring(): number {
         const gen = ++this.scrollRestoringGeneration;
-        this.editorEl?.el.classList.add('tate-scroll-restoring');
         this.showLoadingSpinner();
         return gen;
     }
 
-    /** Schedules a one-rAF cleanup for the scroll-restore cycle identified by gen.
+    /** Schedules a one-rAF cleanup for the load cycle identified by gen.
      *  Used when no scroll is needed (no savedOffset or superseded load). */
     private scheduleScrollRestoringCleanup(gen: number): void {
         window.requestAnimationFrame(() => {
             if (this.scrollRestoringGeneration === gen) {
-                this.editorEl?.el.classList.remove('tate-scroll-restoring');
                 this.hideLoadingSpinner();
             }
         });
     }
 
-    /** Cancels an in-flight scroll-restore cycle immediately (synchronous, no rAF).
+    /** Cancels an in-flight load cycle immediately (synchronous, no rAF).
      *  Increments the generation to invalidate any pending cleanup rAFs. */
     private cancelScrollRestoring(): void {
         ++this.scrollRestoringGeneration;
-        this.editorEl?.el.classList.remove('tate-scroll-restoring');
         this.hideLoadingSpinner();
     }
 
@@ -697,7 +682,6 @@ export class VerticalWritingView extends ItemView {
             el.el.focus({ preventScroll: true });
             if (this.pendingCursorOffset !== null) {
                 // New file was loaded in the background: restore the saved offset and scroll.
-                // tate-scroll-restoring was set before loadFile(); real sizes are in effect.
                 // Defer hide + scroll to rAF 1 so the spinner is visible on the first
                 // paint when the tab becomes active (matches restoreViewOffset active path).
                 const gen = this.scrollRestoringGeneration; // snapshot for rAF guard
@@ -712,11 +696,6 @@ export class VerticalWritingView extends ItemView {
                     // Re-assert cursor in case focus() moved it between now and this frame.
                     el.setViewCursorOffset(offset);
                     el.scrollCursorIntoView();
-                    window.requestAnimationFrame(() => {
-                        if (this.scrollRestoringGeneration === gen) {
-                            el.el.classList.remove('tate-scroll-restoring');
-                        }
-                    });
                 });
             } else {
                 // Normal tab switch: restore cursor, then check for external file changes
@@ -927,21 +906,13 @@ export class VerticalWritingView extends ItemView {
         // 'nearest' when it was already in the window (minimal scroll suffices).
         const block = editorEl.cursorJumped ? 'center' : 'nearest';
         if (changedDivs === null) {
-            // hasCleanDivStructure failed → full rebuild. beginScrollRestoring adds
-            // tate-scroll-restoring synchronously (class is pending before any layout).
-            // Scroll is deferred to rAF 1 so the forced layout flush runs with the class
-            // active → content-visibility:visible → accurate sizes → cache written.
-            // Class removed in rAF 2 (two-rAF pattern ensures Frame N's layout sees class).
+            // hasCleanDivStructure failed → full rebuild. Show spinner and defer scroll
+            // to rAF 1 so the layout flush completes before scrollIntoView runs.
             const gen = this.beginScrollRestoring();
             window.requestAnimationFrame(() => {
                 if (this.scrollRestoringGeneration !== gen) return;
                 this.hideLoadingSpinner();
                 editorEl.scrollCursorIntoView(block, block);
-                window.requestAnimationFrame(() => {
-                    if (this.scrollRestoringGeneration === gen) {
-                        editorEl.el.classList.remove('tate-scroll-restoring');
-                    }
-                });
             });
         } else {
             editorEl.scrollCursorIntoView(block, block);

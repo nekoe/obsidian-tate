@@ -54,7 +54,7 @@
     user-select: none;
 }
 
-/* Loading spinner shown while tate-scroll-restoring is active. Removed in rAF 1
+/* Loading spinner shown during file load + scroll restore. Hidden in rAF 1
    (before scrollIntoView) so it disappears simultaneously with the content reveal. */
 .tate-loading-spinner {
     display: none;

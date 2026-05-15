@@ -917,7 +917,7 @@ export class EditorElement {
         //   • Entirely outside: update records only (no DOM nodes to touch).
         //   • Partially overlapping: update records first (adjusts domStart/domEnd), then
         //     rebuild the window from the now-correct paragraphRecords. Returning null
-        //     triggers the tate-scroll-restoring path in doUndoRedo, which is safe here.
+        //     triggers the spinner + deferred scroll path in doUndoRedo, which is safe here.
         //   • Entirely inside: fall through to the DOM patch loop below.
         if (virt && virt.domEnd >= 0) {
             const isEntirelyBeforeWindow = hiPrev <= virt.domStart;
@@ -1034,9 +1034,9 @@ export class EditorElement {
      *  bounding rect rather than calling element.scrollIntoView(). For long paragraphs that span
      *  multiple columns, element.scrollIntoView() scrolls to the element boundary (paragraph center
      *  or edge) instead of the column containing the range. The rect-based approach is exact.
-     *  Also forces a layout flush via getBoundingClientRect(), which — when tate-scroll-restoring
-     *  or tate-layout-refreshing is active — runs with content-visibility:visible on the relevant
-     *  divs, so the returned rect reflects actual (not cached) sizes. */
+     *  Also forces a layout flush via getBoundingClientRect(), which — when tate-layout-refreshing
+     *  is active — runs with content-visibility:visible on the relevant divs, so the returned
+     *  rect reflects actual (not cached) sizes. */
     private scrollRangeIntoView(range: Range, block: ScrollLogicalPosition): void {
         const container = this.el.parentElement; // .tate-scroll-area (overflow-x: auto)
         if (!container) return;

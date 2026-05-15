@@ -3427,9 +3427,9 @@ var EditorElement = class {
    *  bounding rect rather than calling element.scrollIntoView(). For long paragraphs that span
    *  multiple columns, element.scrollIntoView() scrolls to the element boundary (paragraph center
    *  or edge) instead of the column containing the range. The rect-based approach is exact.
-   *  Also forces a layout flush via getBoundingClientRect(), which — when tate-scroll-restoring
-   *  or tate-layout-refreshing is active — runs with content-visibility:visible on the relevant
-   *  divs, so the returned rect reflects actual (not cached) sizes. */
+   *  Also forces a layout flush via getBoundingClientRect(), which — when tate-layout-refreshing
+   *  is active — runs with content-visibility:visible on the relevant divs, so the returned
+   *  rect reflects actual (not cached) sizes. */
   scrollRangeIntoView(range, block) {
     var _a, _b, _c;
     const container = this.el.parentElement;
@@ -4217,10 +4217,10 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
     // Set before loadFile() so the SyncCoordinator callback can read it synchronously.
     this.pendingLoadViewOffset = 0;
     // Monotonic counter managed by beginScrollRestoring/cancelScrollRestoring.
-    // Guards cleanup rAFs: a stale rAF from a superseded load will not remove
-    // the class that belongs to a newer load (prevents fast-switching race condition).
+    // Guards cleanup rAFs: a stale rAF from a superseded load will not hide
+    // the spinner that belongs to a newer load (prevents fast-switching race condition).
     this.scrollRestoringGeneration = 0;
-    // Spinner element shown while tate-scroll-restoring is active (file load + scroll restore).
+    // Spinner element shown during file load + scroll restore.
     this.spinnerEl = null;
     // Last cursor offset observed while the editor had focus (updated on every selectionchange).
     // Fallback for save paths that run while the editor is unfocused: getViewCursorOffset()
@@ -4627,10 +4627,8 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
    *  sets the cursor, and scrolls into view. Otherwise defers to the next
    *  active-leaf-change event via pendingCursorOffset.
    *
-   *  Callers must set tate-scroll-restoring on el.el BEFORE the loadFile() call that
-   *  precedes this method. The class ensures new paragraph divs are built with real sizes
-   *  (content-visibility:visible). scrollCursorIntoView is deferred one rAF so it runs
-   *  after Obsidian's view-activation logic (focus resets, revealLeaf, etc.) completes. */
+   *  scrollCursorIntoView is deferred one rAF so it runs after Obsidian's view-activation
+   *  logic (focus resets, revealLeaf, etc.) completes. */
   restoreViewOffset(savedOffset) {
     const el = this.editorEl;
     if (!el) return;
@@ -4644,11 +4642,6 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
         this.hideLoadingSpinner();
         el.setViewCursorOffset(savedOffset);
         el.scrollCursorIntoView();
-        window.requestAnimationFrame(() => {
-          if (this.scrollRestoringGeneration === gen) {
-            el.el.classList.remove("tate-scroll-restoring");
-          }
-        });
       });
     } else {
       this.pendingCursorOffset = savedOffset;
@@ -4688,34 +4681,26 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
     var _a;
     (_a = this.spinnerEl) == null ? void 0 : _a.classList.remove("tate-loading-visible");
   }
-  /** Starts a scroll-restore cycle: increments the generation counter, adds
-   *  tate-scroll-restoring (must be called before loadFile() so new paragraph divs
-   *  are created with content-visibility:visible and real sizes), and shows the spinner.
+  /** Starts a file-load cycle: increments the generation counter and shows the spinner.
    *  Returns the generation number for use in rAF guards. */
   beginScrollRestoring() {
-    var _a;
     const gen = ++this.scrollRestoringGeneration;
-    (_a = this.editorEl) == null ? void 0 : _a.el.classList.add("tate-scroll-restoring");
     this.showLoadingSpinner();
     return gen;
   }
-  /** Schedules a one-rAF cleanup for the scroll-restore cycle identified by gen.
+  /** Schedules a one-rAF cleanup for the load cycle identified by gen.
    *  Used when no scroll is needed (no savedOffset or superseded load). */
   scheduleScrollRestoringCleanup(gen) {
     window.requestAnimationFrame(() => {
-      var _a;
       if (this.scrollRestoringGeneration === gen) {
-        (_a = this.editorEl) == null ? void 0 : _a.el.classList.remove("tate-scroll-restoring");
         this.hideLoadingSpinner();
       }
     });
   }
-  /** Cancels an in-flight scroll-restore cycle immediately (synchronous, no rAF).
+  /** Cancels an in-flight load cycle immediately (synchronous, no rAF).
    *  Increments the generation to invalidate any pending cleanup rAFs. */
   cancelScrollRestoring() {
-    var _a;
     ++this.scrollRestoringGeneration;
-    (_a = this.editorEl) == null ? void 0 : _a.el.classList.remove("tate-scroll-restoring");
     this.hideLoadingSpinner();
   }
   applySettings(settings) {
@@ -4752,11 +4737,6 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
           this.hideLoadingSpinner();
           el.setViewCursorOffset(offset);
           el.scrollCursorIntoView();
-          window.requestAnimationFrame(() => {
-            if (this.scrollRestoringGeneration === gen) {
-              el.el.classList.remove("tate-scroll-restoring");
-            }
-          });
         });
       } else {
         if (this.lastKnownViewOffset !== null) {
@@ -4936,11 +4916,6 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
         if (this.scrollRestoringGeneration !== gen) return;
         this.hideLoadingSpinner();
         editorEl.scrollCursorIntoView(block, block);
-        window.requestAnimationFrame(() => {
-          if (this.scrollRestoringGeneration === gen) {
-            editorEl.el.classList.remove("tate-scroll-restoring");
-          }
-        });
       });
     } else {
       editorEl.scrollCursorIntoView(block, block);
