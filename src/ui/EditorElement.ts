@@ -4,7 +4,7 @@ import { buildSegmentMap, srcToView, viewToSrc } from './SegmentMap';
 import { parseInlineToHtml, parseToHtml, serializeNode } from './AozoraParser';
 import { InlineEditor } from './InlineEditor';
 import { InputTransformer } from './InputTransformer';
-import { isEffectivelyEmpty, clearChildren, ensureBrPlaceholder, computeDivViewLen, isInsideRtNode, findCursorAnchorAncestor, findParentDivInEditor } from './domHelpers';
+import { isEffectivelyEmpty, clearChildren, ensureBrPlaceholder, computeDivViewLen, computeViewOffsetInDiv, computeDomPositionFromViewOff, findParentDivInEditor } from './domHelpers';
 import type { ParagraphVirtualizer, VirtualSelection } from './ParagraphVirtualizer';
 import { SPACER_CLASS } from './ParagraphVirtualizer';
 
@@ -1130,27 +1130,7 @@ export class EditorElement {
         // If the cursor is not inside any child div (e.g. cursor on el itself), return 0.
         if (!cursorDiv) return count;
 
-        // Walk text nodes inside the cursor div to find the exact offset.
-        const walker = activeDocument.createTreeWalker(cursorDiv, NodeFilter.SHOW_TEXT);
-        let textNode = walker.nextNode() as Text | null;
-        while (textNode) {
-            if (textNode === range.startContainer) {
-                if (!isInsideRtNode(textNode, this.el)) {
-                    const text = textNode.textContent ?? '';
-                    count += findCursorAnchorAncestor(textNode, this.el)
-                        ? text.slice(0, range.startOffset).replace(/\u200B/g, '').length
-                        : range.startOffset;
-                }
-                break;
-            }
-            if (range.comparePoint(textNode, 0) >= 0) break;
-            if (!isInsideRtNode(textNode, this.el)) {
-                count += findCursorAnchorAncestor(textNode, this.el)
-                    ? (textNode.textContent ?? '').replace(/\u200B/g, '').length
-                    : textNode.length;
-            }
-            textNode = walker.nextNode() as Text | null;
-        }
+        count += computeViewOffsetInDiv(cursorDiv, this.el, range.startContainer, range.startOffset);
         return count;
     }
 
@@ -1199,40 +1179,17 @@ export class EditorElement {
                 return;
             }
 
-            // Walk text nodes of the in-window div.
-            const walker = activeDocument.createTreeWalker(child, NodeFilter.SHOW_TEXT);
-            let node = walker.nextNode() as Text | null;
-            while (node) {
-                if (!isInsideRtNode(node, this.el)) {
-                    const isAnchor = !!findCursorAnchorAncestor(node, this.el);
-                    const visLen = isAnchor
-                        ? (node.textContent ?? '').replace(/\u200B/g, '').length
-                        : node.length;
-                    if (remaining <= visLen) {
-                        const range = activeDocument.createRange();
-                        let actualOffset: number;
-                        if (isAnchor) {
-                            const text = node.textContent ?? '';
-                            actualOffset = 0;
-                            let visible = 0;
-                            for (let ci = 0; ci < text.length; ci++) {
-                                if (visible === remaining) { actualOffset = ci; break; }
-                                if (text[ci] !== '\u200B') visible++;
-                                actualOffset = ci + 1;
-                            }
-                        } else {
-                            actualOffset = remaining;
-                        }
-                        range.setStart(node, actualOffset);
-                        range.collapse(true);
-                        sel.removeAllRanges();
-                        sel.addRange(range);
-                        return;
-                    }
-                    remaining -= visLen;
-                }
-                node = walker.nextNode() as Text | null;
+            const divViewLen = computeDivViewLen(child, this.el);
+            if (remaining <= divViewLen) {
+                const pos = computeDomPositionFromViewOff(child, this.el, remaining);
+                const range = activeDocument.createRange();
+                range.setStart(pos.node, pos.offset);
+                range.collapse(true);
+                sel.removeAllRanges();
+                sel.addRange(range);
+                return;
             }
+            remaining -= divViewLen;
         }
 
         const range = activeDocument.createRange();
