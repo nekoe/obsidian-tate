@@ -198,6 +198,12 @@ export class SearchPanel {
     // were not highlighted because their matchEntries still had range=null).
     // Uses window.requestAnimationFrame so it runs after ParagraphVirtualizer's synchronous scroll handler.
     private readonly onScrollArea = () => window.requestAnimationFrame(() => this.refreshWindowRanges());
+    // Stored so destroy() can removeEventListener with the exact same reference.
+    private readonly onEditorMouseDown = (): void => {
+        if (!this.isOpen) return;
+        this.editorFocused = true;
+        this.clearFocusHighlight();
+    };
 
     constructor(
         private readonly editorElementRef: EditorElement,
@@ -209,11 +215,7 @@ export class SearchPanel {
 
         // When the user clicks the editor, remove the focus highlight and mark that
         // the editor has focus so close() does not restore the cursor over the click position.
-        editorElementRef.el.addEventListener('mousedown', () => {
-            if (!this.isOpen) return;
-            this.editorFocused = true;
-            this.clearFocusHighlight();
-        });
+        editorElementRef.el.addEventListener('mousedown', this.onEditorMouseDown);
 
         this.searchScope.register([], 'Enter', (evt) => {
             if (evt.isComposing) return;
@@ -268,6 +270,10 @@ export class SearchPanel {
         this.app.keymap.pushScope(this.searchScope);
         this.editorElementRef.el.parentElement?.addEventListener('scroll', this.onScrollArea);
         this.inputEl?.focus();
+    }
+
+    destroy(): void {
+        this.editorElementRef.el.removeEventListener('mousedown', this.onEditorMouseDown);
     }
 
     close(): number | null {

@@ -595,6 +595,7 @@ export class VerticalWritingView extends ItemView {
 
     async onClose(): Promise<void> {
         this.searchPanel?.close();
+        this.searchPanel?.destroy();
         this.popEscScope();
         if (this.selectionChangeRafId !== null) {
             window.cancelAnimationFrame(this.selectionChangeRafId);
