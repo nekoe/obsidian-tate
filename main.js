@@ -28,10 +28,10 @@ __export(main_exports, {
   default: () => TatePlugin
 });
 module.exports = __toCommonJS(main_exports);
-var import_obsidian6 = require("obsidian");
+var import_obsidian8 = require("obsidian");
 
 // src/view.ts
-var import_obsidian4 = require("obsidian");
+var import_obsidian6 = require("obsidian");
 
 // src/sync/SyncCoordinator.ts
 var MAX_SELF_WRITES = 20;
@@ -117,6 +117,9 @@ var SyncCoordinator = class {
     this.selfWriteChecksums.clear();
   }
 };
+
+// src/ui/EditorElement.ts
+var import_obsidian4 = require("obsidian");
 
 // src/settings.ts
 var import_obsidian = require("obsidian");
@@ -485,7 +488,7 @@ function splitByExplicitRuby(text) {
     }
     result.push({
       type: "html",
-      html: `<ruby data-ruby-explicit="true">${esc(m[1])}<rt contenteditable="false">${esc(m[2])}</rt></ruby>`
+      html: `<ruby data-ruby-explicit="true">${esc(m[1])}<rt>${esc(m[2])}</rt></ruby>`
     });
     lastIndex = re.lastIndex;
   }
@@ -572,7 +575,7 @@ function splitByImplicitRuby(text) {
     }
     result.push({
       type: "html",
-      html: `<ruby data-ruby-explicit="false">${esc(m[1])}<rt contenteditable="false">${esc(m[2])}</rt></ruby>`
+      html: `<ruby data-ruby-explicit="false">${esc(m[1])}<rt>${esc(m[2])}</rt></ruby>`
     });
     lastIndex = re.lastIndex;
   }
@@ -633,20 +636,11 @@ function serializeNode(node, rootEl) {
 }
 
 // src/ui/domHelpers.ts
-var import_obsidian2 = require("obsidian");
-function sanitizeForEditor(html) {
-  const frag = (0, import_obsidian2.sanitizeHTMLToDom)(html);
-  frag.querySelectorAll("rt").forEach((rt) => {
-    rt.contentEditable = "false";
-  });
-  return frag;
-}
 function createRubyEl(base, rt, explicit) {
   const rubyEl = activeDocument.createElement("ruby");
   rubyEl.setAttribute("data-ruby-explicit", String(explicit));
   rubyEl.appendChild(activeDocument.createTextNode(base));
   const rtEl = activeDocument.createElement("rt");
-  rtEl.contentEditable = "false";
   rtEl.textContent = rt;
   rubyEl.appendChild(rtEl);
   return rubyEl;
@@ -1267,6 +1261,7 @@ var LiveConverter = class {
 };
 
 // src/ui/InlineExpander.ts
+var import_obsidian2 = require("obsidian");
 var InlineExpander = class {
   constructor(el) {
     this.el = el;
@@ -1339,7 +1334,7 @@ var InlineExpander = class {
       precedingTextNode.textContent = ((_c = precedingTextNode.textContent) != null ? _c : "").slice(0, -precedingChars.length);
     }
     parent.removeChild(expandedEl);
-    const fragment = sanitizeForEditor(html);
+    const fragment = (0, import_obsidian2.sanitizeHTMLToDom)(html);
     while (fragment.firstChild) {
       parent.insertBefore(fragment.firstChild, nextSibling);
     }
@@ -1982,6 +1977,7 @@ var InputTransformer = class {
 };
 
 // src/ui/ParagraphVirtualizer.ts
+var import_obsidian3 = require("obsidian");
 var SPACER_CLASS = "tate-spacer";
 var VERTICAL_LINE_HEIGHT = 2;
 var EXPAND_MARGIN = 440;
@@ -2109,7 +2105,7 @@ var ParagraphVirtualizer = class {
     const windowNodes = [];
     for (const src of sources) {
       const div = activeDocument.createElement("div");
-      div.replaceChildren(sanitizeForEditor(parseInlineToHtml(src) || "<br>"));
+      div.replaceChildren((0, import_obsidian3.sanitizeHTMLToDom)(parseInlineToHtml(src) || "<br>"));
       windowNodes.push(div);
     }
     if (this.rightSpacer && this.leftSpacer) {
@@ -2217,7 +2213,7 @@ var ParagraphVirtualizer = class {
     const frag = activeDocument.createDocumentFragment();
     for (const rec of this.paragraphRecords) {
       const div = activeDocument.createElement("div");
-      div.replaceChildren(sanitizeForEditor(parseInlineToHtml(rec.src) || "<br>"));
+      div.replaceChildren((0, import_obsidian3.sanitizeHTMLToDom)(parseInlineToHtml(rec.src) || "<br>"));
       frag.appendChild(div);
     }
     const nodes = Array.from(frag.childNodes);
@@ -2281,7 +2277,7 @@ var ParagraphVirtualizer = class {
     const i = this.domStart - 1;
     const rec = this.paragraphRecords[i];
     const div = activeDocument.createElement("div");
-    div.replaceChildren(sanitizeForEditor(parseInlineToHtml(rec.src) || "<br>"));
+    div.replaceChildren((0, import_obsidian3.sanitizeHTMLToDom)(parseInlineToHtml(rec.src) || "<br>"));
     const firstPara = this.rightSpacer ? this.editorEl.children[1] : this.editorEl.firstChild;
     this.editorEl.insertBefore(div, firstPara != null ? firstPara : null);
     const w = rec.width > 0 ? rec.width : this.estimateWidth(rec.viewLen);
@@ -2295,7 +2291,7 @@ var ParagraphVirtualizer = class {
     const i = this.domEnd + 1;
     const rec = this.paragraphRecords[i];
     const div = activeDocument.createElement("div");
-    div.replaceChildren(sanitizeForEditor(parseInlineToHtml(rec.src) || "<br>"));
+    div.replaceChildren((0, import_obsidian3.sanitizeHTMLToDom)(parseInlineToHtml(rec.src) || "<br>"));
     this.editorEl.insertBefore(div, (_a = this.leftSpacer) != null ? _a : null);
     const w = rec.width > 0 ? rec.width : this.estimateWidth(rec.viewLen);
     this.applyLeftSpacer(Math.max(0, this.leftSpacerWidth - w));
@@ -2744,7 +2740,7 @@ var EditorElement = class {
       const hi = Math.min(N - 1, center + INITIAL_WINDOW_HALF);
       virt.initWindowFromLines(lines, lo, hi);
     } else {
-      this.replaceEditorContent(sanitizeForEditor(parseToHtml(content)));
+      this.replaceEditorContent((0, import_obsidian4.sanitizeHTMLToDom)(parseToHtml(content)));
     }
     if (shouldPreserveCursor) {
       this.setVisibleOffset(pos);
@@ -2966,7 +2962,7 @@ var EditorElement = class {
   insertParsedInline(range, line) {
     const sel = window.getSelection();
     if (line) {
-      const frag = sanitizeForEditor(parseInlineToHtml(line));
+      const frag = (0, import_obsidian4.sanitizeHTMLToDom)(parseInlineToHtml(line));
       for (const node of Array.from(frag.childNodes)) {
         range.insertNode(node);
         range.setStartAfter(node);
@@ -2989,7 +2985,7 @@ var EditorElement = class {
       let lastDiv = null;
       for (const line of lines) {
         const div = activeDocument.createElement("div");
-        div.replaceChildren(sanitizeForEditor(parseInlineToHtml(line) || "<br>"));
+        div.replaceChildren((0, import_obsidian4.sanitizeHTMLToDom)(parseInlineToHtml(line) || "<br>"));
         this.el.insertBefore(div, refNode);
         lastDiv = div;
       }
@@ -3011,7 +3007,7 @@ var EditorElement = class {
           range.collapse(true);
         }
         if (lines[i]) {
-          const frag = sanitizeForEditor(parseInlineToHtml(lines[i]));
+          const frag = (0, import_obsidian4.sanitizeHTMLToDom)(parseInlineToHtml(lines[i]));
           for (const node of Array.from(frag.childNodes)) {
             range.insertNode(node);
             range.setStartAfter(node);
@@ -3033,14 +3029,14 @@ var EditorElement = class {
     for (const n of Array.from(afterFragment.childNodes)) {
       if (n.instanceOf(Text) && n.data === "") n.remove();
     }
-    const firstFrag = sanitizeForEditor(parseInlineToHtml(lines[0]));
+    const firstFrag = (0, import_obsidian4.sanitizeHTMLToDom)(parseInlineToHtml(lines[0]));
     paragraphDiv.append(...Array.from(firstFrag.childNodes));
     ensureBrPlaceholder(paragraphDiv);
     let insertAfter = paragraphDiv;
     let lastPastedNode = null;
     for (let i = 1; i < lines.length; i++) {
       const div = activeDocument.createElement("div");
-      const lineFrag = sanitizeForEditor(parseInlineToHtml(lines[i]));
+      const lineFrag = (0, import_obsidian4.sanitizeHTMLToDom)(parseInlineToHtml(lines[i]));
       const lineNodes = Array.from(lineFrag.childNodes);
       div.append(...lineNodes);
       lastPastedNode = lineNodes.length > 0 ? lineNodes[lineNodes.length - 1] : null;
@@ -3317,7 +3313,7 @@ var EditorElement = class {
         const windowNodes = [];
         for (let i = lo2; i <= hi; i++) {
           const div = activeDocument.createElement("div");
-          div.replaceChildren(sanitizeForEditor(parseInlineToHtml(nextLines[i]) || "<br>"));
+          div.replaceChildren((0, import_obsidian4.sanitizeHTMLToDom)(parseInlineToHtml(nextLines[i]) || "<br>"));
           windowNodes.push(div);
         }
         if (virt.rightSpacer && virt.leftSpacer) {
@@ -3327,7 +3323,7 @@ var EditorElement = class {
         }
         virt.initRecords(nextLines, lo2, hi);
       } else {
-        this.replaceEditorContent(sanitizeForEditor(parseToHtml(nextContent)));
+        this.replaceEditorContent((0, import_obsidian4.sanitizeHTMLToDom)(parseToHtml(nextContent)));
         virt == null ? void 0 : virt.initRecords(nextLines);
       }
       return null;
@@ -3355,7 +3351,7 @@ var EditorElement = class {
         for (let i = winLo; i <= winHi; i++) {
           const src = (_b = (_a = virt.paragraphRecords[i]) == null ? void 0 : _a.src) != null ? _b : "";
           const div = activeDocument.createElement("div");
-          div.replaceChildren(sanitizeForEditor(parseInlineToHtml(src) || "<br>"));
+          div.replaceChildren((0, import_obsidian4.sanitizeHTMLToDom)(parseInlineToHtml(src) || "<br>"));
           windowNodes.push(div);
         }
         if (virt.rightSpacer && virt.leftSpacer) {
@@ -3379,7 +3375,7 @@ var EditorElement = class {
     for (let i = lo; i < hiNext; i++) {
       const div = el.children[this.paragraphChildIndex(i)];
       const html = parseInlineToHtml(nextLines[i]) || "<br>";
-      div.replaceChildren(sanitizeForEditor(html));
+      div.replaceChildren((0, import_obsidian4.sanitizeHTMLToDom)(html));
       changedDivs.push(div);
     }
     const checkFrom = virt && virt.domEnd >= 0 ? virt.domStart : 0;
@@ -3608,7 +3604,7 @@ var EditorElement = class {
 };
 
 // src/ui/SearchPanel.ts
-var import_obsidian3 = require("obsidian");
+var import_obsidian5 = require("obsidian");
 function visibleToRawOffset(node, visibleOffset) {
   var _a;
   const text = (_a = node.textContent) != null ? _a : "";
@@ -3739,7 +3735,7 @@ var SearchPanel = class {
     // were not highlighted because their matchEntries still had range=null).
     // Uses window.requestAnimationFrame so it runs after ParagraphVirtualizer's synchronous scroll handler.
     this.onScrollArea = () => window.requestAnimationFrame(() => this.refreshWindowRanges());
-    this.searchScope = new import_obsidian3.Scope(app.scope);
+    this.searchScope = new import_obsidian5.Scope(app.scope);
     editorElementRef.el.addEventListener("mousedown", () => {
       if (!this.isOpen) return;
       this.editorFocused = true;
@@ -3831,12 +3827,12 @@ var SearchPanel = class {
   showReplaceRow() {
     var _a;
     (_a = this.replaceRowEl) == null ? void 0 : _a.classList.add("tate-replace-visible");
-    if (this.toggleBtnEl) (0, import_obsidian3.setIcon)(this.toggleBtnEl, "chevron-down");
+    if (this.toggleBtnEl) (0, import_obsidian5.setIcon)(this.toggleBtnEl, "chevron-down");
   }
   hideReplaceRow() {
     var _a;
     (_a = this.replaceRowEl) == null ? void 0 : _a.classList.remove("tate-replace-visible");
-    if (this.toggleBtnEl) (0, import_obsidian3.setIcon)(this.toggleBtnEl, "chevron-right");
+    if (this.toggleBtnEl) (0, import_obsidian5.setIcon)(this.toggleBtnEl, "chevron-right");
   }
   toggleReplaceRow() {
     var _a;
@@ -3872,7 +3868,7 @@ var SearchPanel = class {
     const toggleBtn = activeDocument.createElement("button");
     toggleBtn.className = "tate-search-toggle";
     toggleBtn.tabIndex = -1;
-    (0, import_obsidian3.setIcon)(toggleBtn, expandReplace ? "chevron-down" : "chevron-right");
+    (0, import_obsidian5.setIcon)(toggleBtn, expandReplace ? "chevron-down" : "chevron-right");
     toggleBtn.setAttribute("aria-label", "\u7F6E\u63DB\u6B04\u3092\u8868\u793A");
     toggleBtn.addEventListener("click", () => this.toggleReplaceRow());
     this.toggleBtnEl = toggleBtn;
@@ -3903,19 +3899,19 @@ var SearchPanel = class {
     nextBtn.className = "tate-search-btn";
     nextBtn.tabIndex = -1;
     nextBtn.setAttribute("aria-label", "\u6B21\u3078");
-    (0, import_obsidian3.setIcon)(nextBtn, "arrow-down");
+    (0, import_obsidian5.setIcon)(nextBtn, "arrow-down");
     nextBtn.addEventListener("click", () => this.navigate(1));
     const prevBtn = activeDocument.createElement("button");
     prevBtn.className = "tate-search-btn";
     prevBtn.tabIndex = -1;
     prevBtn.setAttribute("aria-label", "\u524D\u3078");
-    (0, import_obsidian3.setIcon)(prevBtn, "arrow-up");
+    (0, import_obsidian5.setIcon)(prevBtn, "arrow-up");
     prevBtn.addEventListener("click", () => this.navigate(-1));
     const closeBtn = activeDocument.createElement("button");
     closeBtn.className = "tate-search-btn";
     closeBtn.tabIndex = -1;
     closeBtn.setAttribute("aria-label", "\u9589\u3058\u308B");
-    (0, import_obsidian3.setIcon)(closeBtn, "x");
+    (0, import_obsidian5.setIcon)(closeBtn, "x");
     closeBtn.addEventListener("click", () => this.close());
     searchRow.append(toggleBtn, input, count, nextBtn, prevBtn, closeBtn);
     const replaceRow = activeDocument.createElement("div");
@@ -3934,13 +3930,13 @@ var SearchPanel = class {
     replaceBtn.className = "tate-search-btn";
     replaceBtn.tabIndex = -1;
     replaceBtn.setAttribute("aria-label", "\u7F6E\u63DB");
-    (0, import_obsidian3.setIcon)(replaceBtn, "replace");
+    (0, import_obsidian5.setIcon)(replaceBtn, "replace");
     replaceBtn.addEventListener("click", () => this.replaceCurrentMatch());
     const replaceAllBtn = activeDocument.createElement("button");
     replaceAllBtn.className = "tate-search-btn";
     replaceAllBtn.tabIndex = -1;
     replaceAllBtn.setAttribute("aria-label", "\u5168\u7F6E\u63DB");
-    (0, import_obsidian3.setIcon)(replaceAllBtn, "replace-all");
+    (0, import_obsidian5.setIcon)(replaceAllBtn, "replace-all");
     replaceAllBtn.addEventListener("click", () => this.replaceAllMatches());
     const replaceBtnGroup = activeDocument.createElement("div");
     replaceBtnGroup.className = "tate-replace-btn-group";
@@ -3959,7 +3955,7 @@ var SearchPanel = class {
     const srcLine = Array.from(entry.div.childNodes).map((n) => serializeNode(n, this.editorElementRef.el)).join("");
     const segs = buildSegmentMap(srcLine);
     const newSrc = buildReplacedSrc(srcLine, segs, entry.localStart, entry.localEnd, replacement);
-    entry.div.replaceChildren(sanitizeForEditor(parseInlineToHtml(newSrc) || "<br>"));
+    entry.div.replaceChildren((0, import_obsidian5.sanitizeHTMLToDom)(parseInlineToHtml(newSrc) || "<br>"));
     (_c = this.commitCallback) == null ? void 0 : _c.call(this);
     const nextIndex = this.currentIndex;
     this.runSearch(false);
@@ -3988,7 +3984,7 @@ var SearchPanel = class {
           const segs = buildSegmentMap(srcLine);
           srcLine = buildReplacedSrc(srcLine, segs, entry.localStart, entry.localEnd, replacement);
         }
-        div.replaceChildren(sanitizeForEditor(parseInlineToHtml(srcLine) || "<br>"));
+        div.replaceChildren((0, import_obsidian5.sanitizeHTMLToDom)(parseInlineToHtml(srcLine) || "<br>"));
       } else {
         const rec = this.virtualizer.paragraphRecords[paragraphIndex];
         if (!rec) continue;
@@ -4202,7 +4198,7 @@ var SearchPanel = class {
 
 // src/view.ts
 var TATE_VIEW_TYPE = "tate-vertical-writing";
-var _VerticalWritingView = class _VerticalWritingView extends import_obsidian4.ItemView {
+var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.ItemView {
   constructor(leaf, plugin) {
     super(leaf);
     this.plugin = plugin;
@@ -4240,7 +4236,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian4.I
     // Consumed on the first isComposing=true input event to call adjustNow() once,
     // after the browser has deleted the range and inserted the composition text.
     this.needsLayoutRepairOnFirstComposingInput = false;
-    this.escScope = new import_obsidian4.Scope(this.app.scope);
+    this.escScope = new import_obsidian6.Scope(this.app.scope);
   }
   getViewType() {
     return TATE_VIEW_TYPE;
@@ -4449,8 +4445,8 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian4.I
         return;
       }
       if (!e.isComposing && !e.altKey && !e.shiftKey) {
-        const jumpToStart = import_obsidian4.Platform.isMacOS ? e.metaKey && e.key === "ArrowUp" : e.ctrlKey && e.key === "Home";
-        const jumpToEnd = import_obsidian4.Platform.isMacOS ? e.metaKey && e.key === "ArrowDown" : e.ctrlKey && e.key === "End";
+        const jumpToStart = import_obsidian6.Platform.isMacOS ? e.metaKey && e.key === "ArrowUp" : e.ctrlKey && e.key === "Home";
+        const jumpToEnd = import_obsidian6.Platform.isMacOS ? e.metaKey && e.key === "ArrowDown" : e.ctrlKey && e.key === "End";
         if (jumpToStart || jumpToEnd) {
           e.preventDefault();
           virtualizer.clearVirtualSelection();
@@ -4502,21 +4498,21 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian4.I
     };
     this.registerEvent(
       this.app.vault.on("modify", (file) => {
-        if (file instanceof import_obsidian4.TFile) {
+        if (file instanceof import_obsidian6.TFile) {
           void syncCoordinator.onModify(file);
         }
       })
     );
     this.registerEvent(
       this.app.vault.on("delete", (file) => {
-        if (!(file instanceof import_obsidian4.TFile)) return;
+        if (!(file instanceof import_obsidian6.TFile)) return;
         void this.plugin.deleteCursorPosition(file.path);
         if (file === syncCoordinator.currentFile) clearForUnload();
       })
     );
     this.registerEvent(
       this.app.vault.on("rename", (file, oldPath) => {
-        if (file instanceof import_obsidian4.TFile) {
+        if (file instanceof import_obsidian6.TFile) {
           this.plugin.renameCursorPosition(oldPath, file.path);
           syncCoordinator.onFileRename(file, oldPath);
         }
@@ -4553,7 +4549,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian4.I
         if (!syncCoordinator.currentFile) return;
         const stillOpen = this.app.workspace.getLeavesOfType("markdown").some((leaf) => {
           const mv = leaf.view;
-          return mv instanceof import_obsidian4.MarkdownView && mv.file === syncCoordinator.currentFile;
+          return mv instanceof import_obsidian6.MarkdownView && mv.file === syncCoordinator.currentFile;
         });
         if (!stillOpen) {
           if (this.lastKnownViewOffset !== null) {
@@ -4600,7 +4596,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian4.I
       return;
     }
     for (const leaf of this.app.workspace.getLeavesOfType("markdown")) {
-      if (leaf.view instanceof import_obsidian4.MarkdownView && leaf.view.file) {
+      if (leaf.view instanceof import_obsidian6.MarkdownView && leaf.view.file) {
         const file = leaf.view.file;
         const savedOffset = this.plugin.getCursorPosition(file.path);
         this.pendingLoadViewOffset = savedOffset != null ? savedOffset : 0;
@@ -4786,7 +4782,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian4.I
   applyRuby() {
     if (!this.editorEl) return;
     if (!this.editorEl.wrapSelectionWithRuby()) {
-      new import_obsidian4.Notice("\u30C6\u30AD\u30B9\u30C8\u3092\u9078\u629E\u3057\u3066\u304F\u3060\u3055\u3044");
+      new import_obsidian6.Notice("\u30C6\u30AD\u30B9\u30C8\u3092\u9078\u629E\u3057\u3066\u304F\u3060\u3055\u3044");
     }
   }
   applyTcy() {
@@ -4815,7 +4811,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian4.I
   applyAnnotation(wrap) {
     if (!this.editorEl) return;
     if (!wrap(this.editorEl)) {
-      new import_obsidian4.Notice("\u30C6\u30AD\u30B9\u30C8\u3092\u9078\u629E\u3057\u3066\u304F\u3060\u3055\u3044");
+      new import_obsidian6.Notice("\u30C6\u30AD\u30B9\u30C8\u3092\u9078\u629E\u3057\u3066\u304F\u3060\u3055\u3044");
     } else {
       this.commitToCm6();
     }
@@ -4828,7 +4824,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian4.I
     if (!file) return null;
     for (const leaf of this.app.workspace.getLeavesOfType("markdown")) {
       const mv = leaf.view;
-      if (mv instanceof import_obsidian4.MarkdownView && mv.file === file) {
+      if (mv instanceof import_obsidian6.MarkdownView && mv.file === file) {
         return mv.editor;
       }
     }
@@ -4839,7 +4835,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian4.I
   guardCm6(e) {
     if (this.getCm6Editor()) return true;
     e.preventDefault();
-    new import_obsidian4.Notice("\u7E26\u66F8\u304D\u30A8\u30C7\u30A3\u30BF\u3092\u4F7F\u7528\u3059\u308B\u306B\u306F\u3001\u5BFE\u5FDC\u3059\u308B Markdown \u30D3\u30E5\u30FC\u3092\u958B\u3044\u3066\u304F\u3060\u3055\u3044");
+    new import_obsidian6.Notice("\u7E26\u66F8\u304D\u30A8\u30C7\u30A3\u30BF\u3092\u4F7F\u7528\u3059\u308B\u306B\u306F\u3001\u5BFE\u5FDC\u3059\u308B Markdown \u30D3\u30E5\u30FC\u3092\u958B\u3044\u3066\u304F\u3060\u3055\u3044");
     return false;
   }
   /** Schedules a debounced commit. Resets the timer on each call so the commit fires
@@ -4953,9 +4949,9 @@ function countChars(source) {
 }
 
 // src/ui/OutlineView.ts
-var import_obsidian5 = require("obsidian");
+var import_obsidian7 = require("obsidian");
 var TATE_OUTLINE_VIEW_TYPE = "tate-outline";
-var OutlineView = class extends import_obsidian5.ItemView {
+var OutlineView = class extends import_obsidian7.ItemView {
   constructor(leaf, plugin) {
     super(leaf);
     this.plugin = plugin;
@@ -5042,7 +5038,7 @@ function extractHeadings(records) {
 }
 
 // src/main.ts
-var TatePlugin = class extends import_obsidian6.Plugin {
+var TatePlugin = class extends import_obsidian8.Plugin {
   constructor() {
     super(...arguments);
     this.settings = DEFAULT_SETTINGS;
@@ -5055,7 +5051,7 @@ var TatePlugin = class extends import_obsidian6.Plugin {
     this.statusBarItem = this.addStatusBarItem();
     this.statusBarItem.hide();
     const iconEl = this.statusBarItem.createEl("span", { cls: "tate-status-icon" });
-    (0, import_obsidian6.setIcon)(iconEl, "tally-3");
+    (0, import_obsidian8.setIcon)(iconEl, "tally-3");
     this.charCountEl = this.statusBarItem.createEl("span");
     this.registerView(
       TATE_VIEW_TYPE,

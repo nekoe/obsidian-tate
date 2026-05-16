@@ -60,7 +60,7 @@ function splitByExplicitRuby(text: string): ParseSegment[] {
         }
         result.push({
             type: 'html',
-            html: `<ruby data-ruby-explicit="true">${esc(m[1])}<rt contenteditable="false">${esc(m[2])}</rt></ruby>`,
+            html: `<ruby data-ruby-explicit="true">${esc(m[1])}<rt>${esc(m[2])}</rt></ruby>`,
         });
         lastIndex = re.lastIndex;
     }
@@ -169,7 +169,7 @@ function splitByImplicitRuby(text: string): ParseSegment[] {
         }
         result.push({
             type: 'html',
-            html: `<ruby data-ruby-explicit="false">${esc(m[1])}<rt contenteditable="false">${esc(m[2])}</rt></ruby>`,
+            html: `<ruby data-ruby-explicit="false">${esc(m[1])}<rt>${esc(m[2])}</rt></ruby>`,
         });
         lastIndex = re.lastIndex;
     }

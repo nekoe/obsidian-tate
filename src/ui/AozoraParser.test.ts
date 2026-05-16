@@ -41,31 +41,31 @@ describe('parseInlineToHtml', () => {
 
     it('explicit ruby with full-width pipe ｜', () => {
         expect(parseInlineToHtml('｜東京《とうきょう》')).toBe(
-            '<ruby data-ruby-explicit="true">東京<rt contenteditable="false">とうきょう</rt></ruby>'
+            '<ruby data-ruby-explicit="true">東京<rt>とうきょう</rt></ruby>'
         );
     });
 
     it('explicit ruby with half-width pipe |', () => {
         expect(parseInlineToHtml('|東京《とうきょう》')).toBe(
-            '<ruby data-ruby-explicit="true">東京<rt contenteditable="false">とうきょう</rt></ruby>'
+            '<ruby data-ruby-explicit="true">東京<rt>とうきょう</rt></ruby>'
         );
     });
 
     it('explicit ruby with empty rt', () => {
         expect(parseInlineToHtml('｜東京《》')).toBe(
-            '<ruby data-ruby-explicit="true">東京<rt contenteditable="false"></rt></ruby>'
+            '<ruby data-ruby-explicit="true">東京<rt></rt></ruby>'
         );
     });
 
     it('explicit ruby surrounded by plain text', () => {
         expect(parseInlineToHtml('前｜東京《とうきょう》後')).toBe(
-            '前<ruby data-ruby-explicit="true">東京<rt contenteditable="false">とうきょう</rt></ruby>後'
+            '前<ruby data-ruby-explicit="true">東京<rt>とうきょう</rt></ruby>後'
         );
     });
 
     it('base text with HTML special chars is escaped inside ruby', () => {
         expect(parseInlineToHtml('｜A&B《rt》')).toBe(
-            '<ruby data-ruby-explicit="true">A&amp;B<rt contenteditable="false">rt</rt></ruby>'
+            '<ruby data-ruby-explicit="true">A&amp;B<rt>rt</rt></ruby>'
         );
     });
 
@@ -73,7 +73,7 @@ describe('parseInlineToHtml', () => {
 
     it('implicit ruby (kanji base)', () => {
         expect(parseInlineToHtml('東京《とうきょう》')).toBe(
-            '<ruby data-ruby-explicit="false">東京<rt contenteditable="false">とうきょう</rt></ruby>'
+            '<ruby data-ruby-explicit="false">東京<rt>とうきょう</rt></ruby>'
         );
     });
 
@@ -88,7 +88,7 @@ describe('parseInlineToHtml', () => {
     it('explicit ruby takes priority over implicit when ｜ is present', () => {
         // ｜東 is matched as explicit first; remaining 《》 has no kanji prefix → plain
         expect(parseInlineToHtml('｜東《ひがし》《とう》')).toBe(
-            '<ruby data-ruby-explicit="true">東<rt contenteditable="false">ひがし</rt></ruby>《とう》'
+            '<ruby data-ruby-explicit="true">東<rt>ひがし</rt></ruby>《とう》'
         );
     });
 
@@ -159,7 +159,7 @@ describe('parseInlineToHtml', () => {
     it('mixed: ruby + tcy + bouten + plain', () => {
         const src = '｜春《はる》中AB［＃「AB」は縦中横］末春［＃「春」に傍点］';
         expect(parseInlineToHtml(src)).toBe(
-            '<ruby data-ruby-explicit="true">春<rt contenteditable="false">はる</rt></ruby>' +
+            '<ruby data-ruby-explicit="true">春<rt>はる</rt></ruby>' +
             '中' +
             '<span data-tcy="explicit" class="tcy">AB</span>' +
             '末' +
@@ -196,14 +196,14 @@ describe('parseToHtml', () => {
 
     it('aozora notation inside line', () => {
         expect(parseToHtml('｜東京《とうきょう》')).toBe(
-            '<div><ruby data-ruby-explicit="true">東京<rt contenteditable="false">とうきょう</rt></ruby></div>'
+            '<div><ruby data-ruby-explicit="true">東京<rt>とうきょう</rt></ruby></div>'
         );
     });
 
     it('multiline with notations on different lines', () => {
         expect(parseToHtml('前\n｜東《ひがし》\n後')).toBe(
             '<div>前</div>' +
-            '<div><ruby data-ruby-explicit="true">東<rt contenteditable="false">ひがし</rt></ruby></div>' +
+            '<div><ruby data-ruby-explicit="true">東<rt>ひがし</rt></ruby></div>' +
             '<div>後</div>'
         );
     });

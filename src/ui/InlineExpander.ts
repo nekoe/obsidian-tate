@@ -1,5 +1,6 @@
+import { sanitizeHTMLToDom } from 'obsidian';
 import { parseInlineToHtml, serializeNode } from './AozoraParser';
-import { sanitizeForEditor, rawOffsetForExpand, getExtraCharsFromAnnotation } from './domHelpers';
+import { rawOffsetForExpand, getExtraCharsFromAnnotation } from './domHelpers';
 
 // Result of collapseEditing. The detached flag is true when the span was not
 // in the DOM; in that case, InlineEditor must NOT clear inBurst.
@@ -96,7 +97,7 @@ export class InlineExpander {
 
         // Direct DOM manipulation (handles start of line, end of line, and middle uniformly)
         parent.removeChild(expandedEl);
-        const fragment = sanitizeForEditor(html);
+        const fragment = sanitizeHTMLToDom(html);
         while (fragment.firstChild) {
             parent.insertBefore(fragment.firstChild, nextSibling);
         }

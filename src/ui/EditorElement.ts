@@ -1,9 +1,10 @@
+import { sanitizeHTMLToDom } from 'obsidian';
 import { DEFAULT_SETTINGS, TatePluginSettings } from '../settings';
 import { buildSegmentMap, srcToView, viewToSrc } from './SegmentMap';
 import { parseInlineToHtml, parseToHtml, serializeNode } from './AozoraParser';
 import { InlineEditor } from './InlineEditor';
 import { InputTransformer } from './InputTransformer';
-import { isEffectivelyEmpty, clearChildren, ensureBrPlaceholder, computeDivViewLen, isInsideRtNode, findCursorAnchorAncestor, sanitizeForEditor } from './domHelpers';
+import { isEffectivelyEmpty, clearChildren, ensureBrPlaceholder, computeDivViewLen, isInsideRtNode, findCursorAnchorAncestor } from './domHelpers';
 import type { ParagraphVirtualizer, VirtualSelection } from './ParagraphVirtualizer';
 import { SPACER_CLASS } from './ParagraphVirtualizer';
 
@@ -166,7 +167,7 @@ export class EditorElement {
             const hi = Math.min(N - 1, center + INITIAL_WINDOW_HALF);
             virt.initWindowFromLines(lines, lo, hi);
         } else {
-            this.replaceEditorContent(sanitizeForEditor(parseToHtml(content)));
+            this.replaceEditorContent(sanitizeHTMLToDom(parseToHtml(content)));
         }
 
         if (shouldPreserveCursor) {
@@ -457,7 +458,7 @@ export class EditorElement {
     private insertParsedInline(range: Range, line: string): void {
         const sel = window.getSelection()!;
         if (line) {
-            const frag = sanitizeForEditor(parseInlineToHtml(line));
+            const frag = sanitizeHTMLToDom(parseInlineToHtml(line));
             for (const node of Array.from(frag.childNodes)) {
                 range.insertNode(node);
                 range.setStartAfter(node);
@@ -482,7 +483,7 @@ export class EditorElement {
             let lastDiv: HTMLDivElement | null = null;
             for (const line of lines) {
                 const div = activeDocument.createElement('div');
-                div.replaceChildren(sanitizeForEditor(parseInlineToHtml(line) || '<br>'));
+                div.replaceChildren(sanitizeHTMLToDom(parseInlineToHtml(line) || '<br>'));
                 this.el.insertBefore(div, refNode);
                 lastDiv = div;
             }
@@ -507,7 +508,7 @@ export class EditorElement {
                     range.collapse(true);
                 }
                 if (lines[i]) {
-                    const frag = sanitizeForEditor(parseInlineToHtml(lines[i]));
+                    const frag = sanitizeHTMLToDom(parseInlineToHtml(lines[i]));
                     for (const node of Array.from(frag.childNodes)) {
                         range.insertNode(node);
                         range.setStartAfter(node);
@@ -539,7 +540,7 @@ export class EditorElement {
         }
 
         // Append first line to the current (now truncated) paragraph
-        const firstFrag = sanitizeForEditor(parseInlineToHtml(lines[0]));
+        const firstFrag = sanitizeHTMLToDom(parseInlineToHtml(lines[0]));
         paragraphDiv.append(...Array.from(firstFrag.childNodes));
         ensureBrPlaceholder(paragraphDiv);
         // paragraphDiv (lines[0]) is the cursor's current paragraph — always visible; not collected.
@@ -550,7 +551,7 @@ export class EditorElement {
 
         for (let i = 1; i < lines.length; i++) {
             const div = activeDocument.createElement('div');
-            const lineFrag = sanitizeForEditor(parseInlineToHtml(lines[i]));
+            const lineFrag = sanitizeHTMLToDom(parseInlineToHtml(lines[i]));
             const lineNodes = Array.from(lineFrag.childNodes);
             div.append(...lineNodes);
             lastPastedNode = lineNodes.length > 0 ? lineNodes[lineNodes.length - 1] : null;
@@ -882,7 +883,7 @@ export class EditorElement {
                 const windowNodes: Node[] = [];
                 for (let i = lo; i <= hi; i++) {
                     const div = activeDocument.createElement('div');
-                    div.replaceChildren(sanitizeForEditor(parseInlineToHtml(nextLines[i]) || '<br>'));
+                    div.replaceChildren(sanitizeHTMLToDom(parseInlineToHtml(nextLines[i]) || '<br>'));
                     windowNodes.push(div);
                 }
                 if (virt.rightSpacer && virt.leftSpacer) {
@@ -892,7 +893,7 @@ export class EditorElement {
                 }
                 virt.initRecords(nextLines, lo, hi);
             } else {
-                this.replaceEditorContent(sanitizeForEditor(parseToHtml(nextContent)));
+                this.replaceEditorContent(sanitizeHTMLToDom(parseToHtml(nextContent)));
                 virt?.initRecords(nextLines);
             }
             return null;
@@ -935,7 +936,7 @@ export class EditorElement {
                 for (let i = winLo; i <= winHi; i++) {
                     const src = virt.paragraphRecords[i]?.src ?? '';
                     const div = activeDocument.createElement('div');
-                    div.replaceChildren(sanitizeForEditor(parseInlineToHtml(src) || '<br>'));
+                    div.replaceChildren(sanitizeHTMLToDom(parseInlineToHtml(src) || '<br>'));
                     windowNodes.push(div);
                 }
                 if (virt.rightSpacer && virt.leftSpacer) {
@@ -968,7 +969,7 @@ export class EditorElement {
         for (let i = lo; i < hiNext; i++) {
             const div = el.children[this.paragraphChildIndex(i)] as HTMLDivElement;
             const html = parseInlineToHtml(nextLines[i]) || '<br>';
-            div.replaceChildren(sanitizeForEditor(html));
+            div.replaceChildren(sanitizeHTMLToDom(html));
             changedDivs.push(div);
         }
 
