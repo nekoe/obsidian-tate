@@ -180,7 +180,7 @@ export class ParagraphVirtualizer {
     // Builds paragraph div elements from sources and replaces the editor window's children.
     // Does NOT update spacer widths; callers must have already called resetWindow() (e.g. via
     // initRecords() or resetWindow() directly) so spacer widths are correct.
-    private buildDomWindow(sources: string[]): void {
+    buildDomWindow(sources: string[]): void {
         const windowNodes: Node[] = [];
         for (const src of sources) {
             const div = activeDocument.createElement('div');

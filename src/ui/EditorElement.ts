@@ -865,18 +865,8 @@ export class EditorElement {
                 // Windowed rebuild: rebuild only the current window, not all N paragraphs.
                 const lo = Math.max(0, Math.min(virt.domStart, nextLines.length - 1));
                 const hi = Math.min(virt.domEnd, nextLines.length - 1);
-                const windowNodes: Node[] = [];
-                for (let i = lo; i <= hi; i++) {
-                    const div = activeDocument.createElement('div');
-                    div.replaceChildren(sanitizeHTMLToDom(parseInlineToHtml(nextLines[i]) || '<br>'));
-                    windowNodes.push(div);
-                }
-                if (virt.rightSpacer && virt.leftSpacer) {
-                    el.replaceChildren(virt.rightSpacer, ...windowNodes, virt.leftSpacer);
-                } else {
-                    el.replaceChildren(...windowNodes);
-                }
                 virt.initRecords(nextLines, lo, hi);
+                virt.buildDomWindow(nextLines.slice(lo, hi + 1));
             } else {
                 this.replaceEditorContent(sanitizeHTMLToDom(parseToHtml(nextContent)));
                 virt?.initRecords(nextLines);
@@ -915,20 +905,7 @@ export class EditorElement {
                 // Change overlaps the window boundary. spliceRecords adjusts domStart/domEnd
                 // so the window indices remain valid in the new paragraph array.
                 virt.spliceRecords(lo, hiPrev - lo, nextLines.slice(lo, hiNext));
-                const winLo = virt.domStart;
-                const winHi = virt.domEnd;
-                const windowNodes: Node[] = [];
-                for (let i = winLo; i <= winHi; i++) {
-                    const src = virt.paragraphRecords[i]?.src ?? '';
-                    const div = activeDocument.createElement('div');
-                    div.replaceChildren(sanitizeHTMLToDom(parseInlineToHtml(src) || '<br>'));
-                    windowNodes.push(div);
-                }
-                if (virt.rightSpacer && virt.leftSpacer) {
-                    el.replaceChildren(virt.rightSpacer, ...windowNodes, virt.leftSpacer);
-                } else {
-                    el.replaceChildren(...windowNodes);
-                }
+                virt.buildDomWindow(virt.paragraphRecords.slice(virt.domStart, virt.domEnd + 1).map(r => r.src));
                 return null;
             }
             // Fall through: change is entirely within [domStart, domEnd].

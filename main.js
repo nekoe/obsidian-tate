@@ -3309,7 +3309,7 @@ var EditorElement = class {
   // Updates paragraph divs to match nextContent, replacing only divs whose line changed.
   // Returns the changed/added divs, or null if hasCleanDivStructure failed (full rebuild).
   patchParagraphs(prevContent, nextContent) {
-    var _a, _b, _c;
+    var _a;
     const prevLines = prevContent.split("\n");
     const nextLines = nextContent ? nextContent.split("\n") : [""];
     const el = this.el;
@@ -3318,18 +3318,8 @@ var EditorElement = class {
       if (virt && virt.domEnd >= 0) {
         const lo2 = Math.max(0, Math.min(virt.domStart, nextLines.length - 1));
         const hi = Math.min(virt.domEnd, nextLines.length - 1);
-        const windowNodes = [];
-        for (let i = lo2; i <= hi; i++) {
-          const div = activeDocument.createElement("div");
-          div.replaceChildren((0, import_obsidian4.sanitizeHTMLToDom)(parseInlineToHtml(nextLines[i]) || "<br>"));
-          windowNodes.push(div);
-        }
-        if (virt.rightSpacer && virt.leftSpacer) {
-          el.replaceChildren(virt.rightSpacer, ...windowNodes, virt.leftSpacer);
-        } else {
-          el.replaceChildren(...windowNodes);
-        }
         virt.initRecords(nextLines, lo2, hi);
+        virt.buildDomWindow(nextLines.slice(lo2, hi + 1));
       } else {
         this.replaceEditorContent((0, import_obsidian4.sanitizeHTMLToDom)(parseToHtml(nextContent)));
         virt == null ? void 0 : virt.initRecords(nextLines);
@@ -3353,24 +3343,11 @@ var EditorElement = class {
       }
       if (lo < virt.domStart || hiPrev > virt.domEnd + 1) {
         virt.spliceRecords(lo, hiPrev - lo, nextLines.slice(lo, hiNext));
-        const winLo = virt.domStart;
-        const winHi = virt.domEnd;
-        const windowNodes = [];
-        for (let i = winLo; i <= winHi; i++) {
-          const src = (_b = (_a = virt.paragraphRecords[i]) == null ? void 0 : _a.src) != null ? _b : "";
-          const div = activeDocument.createElement("div");
-          div.replaceChildren((0, import_obsidian4.sanitizeHTMLToDom)(parseInlineToHtml(src) || "<br>"));
-          windowNodes.push(div);
-        }
-        if (virt.rightSpacer && virt.leftSpacer) {
-          el.replaceChildren(virt.rightSpacer, ...windowNodes, virt.leftSpacer);
-        } else {
-          el.replaceChildren(...windowNodes);
-        }
+        virt.buildDomWindow(virt.paragraphRecords.slice(virt.domStart, virt.domEnd + 1).map((r) => r.src));
         return null;
       }
     }
-    const suffixAnchor = (_c = el.children[this.paragraphChildIndex(hiPrev)]) != null ? _c : null;
+    const suffixAnchor = (_a = el.children[this.paragraphChildIndex(hiPrev)]) != null ? _a : null;
     const insertCount = hiNext - hiPrev;
     if (insertCount > 0) {
       for (let i = 0; i < insertCount; i++)
