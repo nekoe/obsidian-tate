@@ -35,6 +35,9 @@
     word-break: break-all;
     box-sizing: border-box;
     cursor: text;
+    font-family: var(--tate-font-family);
+    font-size: var(--tate-font-size);
+    line-break: var(--tate-line-break);
 }
 
 /* Placeholder shown when no file is selected.

@@ -606,9 +606,11 @@ export class EditorElement {
     }
 
     applySettings(settings: TatePluginSettings): void {
-        this.el.style.fontFamily = settings.fontFamily;
-        this.el.style.fontSize = `${settings.fontSize}px`;
-        this.el.style.lineBreak = settings.lineBreak;
+        this.el.setCssProps({
+            '--tate-font-family': settings.fontFamily,
+            '--tate-font-size': `${settings.fontSize}px`,
+            '--tate-line-break': settings.lineBreak,
+        });
         this.virtualizer?.setFontSize(settings.fontSize);
         this.inputTransformer.updateSettings(settings);
         this.inlineEditor.setExpandSettings(
