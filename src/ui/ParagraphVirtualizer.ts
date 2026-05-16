@@ -294,6 +294,15 @@ export class ParagraphVirtualizer {
         return this.paragraphRecords[i]?.src ?? '';
     }
 
+    // Updates src and viewLen of an off-window record without touching the DOM.
+    // Called by SearchPanel.replaceAllMatches() to apply replacements to off-window paragraphs.
+    updateRecord(i: number, src: string): void {
+        const rec = this.paragraphRecords[i];
+        if (!rec) return;
+        rec.src = src;
+        rec.viewLen = this.buildParagraphVisibleText(src).length;
+    }
+
     // Returns the visible character count for the paragraph at index i. O(1).
     getViewLenByIndex(i: number): number {
         return this.paragraphRecords[i]?.viewLen ?? 0;

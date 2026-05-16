@@ -528,19 +528,16 @@ export class SearchPanel {
                 }
                 div.replaceChildren(sanitizeHTMLToDom(parseInlineToHtml(srcLine) || '<br>'));
             } else {
-                // Off-window: modify paragraphRecords[i].src directly — no DOM needed.
+                // Off-window: update via updateRecord() — no DOM needed.
                 // getValue() reads paragraphRecords[i].src for off-window paragraphs, so
                 // commitToCm6() picks up the change. syncWindowSrcs() (called inside commitToCm6)
                 // then confirms src and viewLen from the new content.
-                const rec = this.virtualizer.paragraphRecords[paragraphIndex];
-                if (!rec) continue;
-                let srcLine = rec.src;
+                let srcLine = this.virtualizer.getSrcByIndex(paragraphIndex);
                 for (const entry of entries) {
                     const segs = buildSegmentMap(srcLine);
                     srcLine = buildReplacedSrc(srcLine, segs, entry.localStart, entry.localEnd, replacement);
                 }
-                rec.src     = srcLine;
-                rec.viewLen = this.virtualizer.buildParagraphVisibleText(srcLine).length;
+                this.virtualizer.updateRecord(paragraphIndex, srcLine);
             }
         }
 
