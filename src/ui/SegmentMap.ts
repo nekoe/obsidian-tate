@@ -1,5 +1,4 @@
-// Unicode range for kanji characters (same as EditorElement.ts)
-const KANJI_RE_STR = '[\u4E00-\u9FFF\u3400-\u4DBF\u{20000}-\u{2A6DF}々〆〤]+';
+import { KANJI_RE_STR } from './domHelpers';
 
 export type SegmentKind = 'plain' | 'ruby-explicit' | 'ruby-implicit' | 'tcy' | 'bouten' | 'heading-large' | 'heading-mid' | 'heading-small' | 'newline';
 

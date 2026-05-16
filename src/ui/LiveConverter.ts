@@ -1,5 +1,5 @@
-import { KANJI_RE_STR } from './AozoraParser';
 import {
+    KANJI_RE_STR,
     createRubyEl, createTcyEl, createBoutenEl, createHeadingEl,
     insertAnnotationElement, setCursorAfter, isInsideRuby,
 } from './domHelpers';
