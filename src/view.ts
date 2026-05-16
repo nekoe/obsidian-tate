@@ -462,6 +462,13 @@ export class VerticalWritingView extends ItemView {
                 if (!file) {
                     // file-open fires with null when the active file is cleared (e.g., the active
                     // Markdown view is closed while the tate view is not the active leaf).
+                    // Save cursor before clearing (symmetric with the layout-change path).
+                    if (syncCoordinator.currentFile && this.lastKnownViewOffset !== null) {
+                        void this.plugin.saveCursorPosition(
+                            syncCoordinator.currentFile.path,
+                            this.lastKnownViewOffset,
+                        );
+                    }
                     clearForUnload();
                     return;
                 }

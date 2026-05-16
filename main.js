@@ -4481,6 +4481,12 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
         if (file === syncCoordinator.currentFile) return;
         this.closeSearch();
         if (!file) {
+          if (syncCoordinator.currentFile && this.lastKnownViewOffset !== null) {
+            void this.plugin.saveCursorPosition(
+              syncCoordinator.currentFile.path,
+              this.lastKnownViewOffset
+            );
+          }
           clearForUnload();
           return;
         }
