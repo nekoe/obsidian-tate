@@ -152,6 +152,7 @@ cp main.js manifest.json styles.css {YOUR_VAULT_PATH}/.obsidian/plugins/tate/
 
 ## Known Limitations
 
+- **Cursor jump near ruby elements on macOS older than 26:** On macOS versions earlier than 26, pressing the left or right arrow key while the cursor is in a paragraph containing ruby elements may cause the cursor to jump unexpectedly.
 - **IME input after emphasis marks:** When the cursor is placed immediately after an emphasis mark (bouten) and text is entered via IME, the composition text temporarily appears with sesame marks applied. The marks disappear once the IME input is confirmed.
 - **Deletion at ruby/tate-chu-yoko boundaries:** Pressing Delete or Backspace with the cursor placed at the very start or end of a ruby or tate-chu-yoko element does not delete the adjacent character. To delete, either select the text first, or expand the element inline and delete from within.
 - **Consecutive Aozora notation input:** Typing one Aozora notation immediately after another may cause the second notation to be inserted incorrectly or cursor movement to behave unexpectedly.
