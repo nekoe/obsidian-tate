@@ -9,8 +9,8 @@ import type { ParagraphVirtualizer, VirtualSelection } from './ParagraphVirtuali
 import { SPACER_CLASS } from './ParagraphVirtualizer';
 
 // Half the number of paragraph divs to create on each side of the cursor on file load.
-// 100 total paragraphs covers typical viewports (≤ 45 columns) plus the IntersectionObserver
-// rootMargin buffer (440px ≈ 10 columns) with room to spare.
+// 100 total paragraphs covers typical viewports (≤ 45 columns) plus the scroll-based
+// expand margin (EXPAND_MARGIN = 440px ≈ 10 columns) with room to spare.
 const INITIAL_WINDOW_HALF = 50;
 
 export class EditorElement {
