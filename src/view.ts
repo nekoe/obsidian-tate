@@ -730,7 +730,10 @@ export class VerticalWritingView extends ItemView {
         this.onThisLeafActivated();
     }
 
-    openSearch(): void {
+    openSearch(): void { this.openSearchPanel(false); }
+    openReplace(): void { this.openSearchPanel(true); }
+
+    private openSearchPanel(expandReplace: boolean): void {
         const el = this.editorEl;
         if (!el || !this.searchPanel) return;
 
@@ -741,20 +744,7 @@ export class VerticalWritingView extends ItemView {
         }
 
         const offset = el.getViewCursorOffset();
-        this.searchPanel.open(offset);
-    }
-
-    openReplace(): void {
-        const el = this.editorEl;
-        if (!el || !this.searchPanel) return;
-
-        if (el.isInlineExpanded()) {
-            const contentChanged = el.collapseForEnter();
-            if (contentChanged) this.commitToCm6();
-        }
-
-        const offset = el.getViewCursorOffset();
-        this.searchPanel.open(offset, true);
+        this.searchPanel.open(offset, expandReplace);
     }
 
     private closeSearch(): void {
