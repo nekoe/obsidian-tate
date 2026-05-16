@@ -1724,6 +1724,22 @@ var InlineEditor = class {
     if (!detached) this.inBurst = false;
     return hasChanged;
   }
+  // Collapses the editing span (DOM cleanup) before applying CM6 changes, then resets all state.
+  // Unlike reset(), this removes span.tate-editing from the DOM so that patchParagraphs() sees a
+  // clean annotation element even when the Undo/Redo touches a different paragraph.
+  // After collapse, selectionchange will re-expand the annotation if the cursor lands inside it.
+  collapseForApply() {
+    var _a;
+    if ((_a = this.expandedEl) == null ? void 0 : _a.isConnected) {
+      this.isModifyingDom = true;
+      try {
+        this.collapseEditing();
+      } finally {
+        this.isModifyingDom = false;
+      }
+    }
+    this.reset();
+  }
   // Normalizes savedRange and returns { textNode, startOffset, endOffset }.
   resolveSelectionRange() {
     const r = this.savedRange;
@@ -3282,7 +3298,7 @@ var EditorElement = class {
   // Returns the changed/added divs for proactive layout cache refresh, or null if patchParagraphs
   // fell back to a full replaceChildren (hasCleanDivStructure failed).
   applyFromCm6(prevContent, content, srcOffset) {
-    this.inlineEditor.reset();
+    this.inlineEditor.collapseForApply();
     const changedDivs = this.patchParagraphs(prevContent, content);
     const segs = buildSegmentMap(content);
     const viewOffset = srcToView(segs, srcOffset);

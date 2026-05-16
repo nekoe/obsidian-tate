@@ -482,6 +482,22 @@ export class InlineEditor {
         return hasChanged;
     }
 
+    // Collapses the editing span (DOM cleanup) before applying CM6 changes, then resets all state.
+    // Unlike reset(), this removes span.tate-editing from the DOM so that patchParagraphs() sees a
+    // clean annotation element even when the Undo/Redo touches a different paragraph.
+    // After collapse, selectionchange will re-expand the annotation if the cursor lands inside it.
+    collapseForApply(): void {
+        if (this.expandedEl?.isConnected) {
+            this.isModifyingDom = true;
+            try {
+                this.collapseEditing();
+            } finally {
+                this.isModifyingDom = false;
+            }
+        }
+        this.reset();
+    }
+
     // Normalizes savedRange and returns { textNode, startOffset, endOffset }.
     private resolveSelectionRange(): { textNode: Text; startOffset: number; endOffset: number } | null {
         const r = this.savedRange;

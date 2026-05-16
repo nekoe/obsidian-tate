@@ -839,8 +839,11 @@ export class EditorElement {
     // Returns the changed/added divs for proactive layout cache refresh, or null if patchParagraphs
     // fell back to a full replaceChildren (hasCleanDivStructure failed).
     applyFromCm6(prevContent: string, content: string, srcOffset: number): HTMLDivElement[] | null {
-        // Clear any expanded span (CM6 state is the source of truth, so force reset)
-        this.inlineEditor.reset();
+        // Collapse any expanded span before patching so patchParagraphs() sees a clean DOM.
+        // reset() alone only clears state variables and leaves span.tate-editing in the DOM,
+        // which causes the span to persist when Undo/Redo touches a different paragraph.
+        // After collapse, selectionchange re-expands if the cursor lands inside the annotation.
+        this.inlineEditor.collapseForApply();
         // Patch only the paragraph divs whose source line changed, preserving the
         // content-visibility: auto size cache for unchanged paragraphs. This avoids the
         // O(N) replaceChildren cost and prevents the scroll-width collapse that causes
