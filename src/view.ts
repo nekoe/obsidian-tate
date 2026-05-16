@@ -141,6 +141,36 @@ export class VerticalWritingView extends ItemView {
             return false;
         });
 
+        this.registerEditorDomEvents(editorEl, virtualizer);
+
+        // Shared unload logic for all three file-unload paths:
+        // file-open(null), layout-change, and vault.on('delete').
+        const clearForUnload = () => {
+            syncCoordinator.clearCurrentFile();
+            editorEl.clearContent();
+            virtualizer.initRecords([]);
+            this.lastCommittedContent = '';
+            this.pendingCursorOffset = null;
+            this.lastKnownViewOffset = null;
+            this.plugin.updateCharCount(null);
+            this.plugin.refreshOutline();
+            this.cancelScrollRestoring();
+        };
+
+        this.registerVaultEvents(syncCoordinator, clearForUnload);
+
+        this.registerWorkspaceEvents(syncCoordinator, clearForUnload);
+
+        await this.loadInitialFile(syncCoordinator);
+
+        // If the view is already active when it opens (the common case), push the scope now.
+        // Otherwise the first active-leaf-change for this leaf will push it.
+        if (this.app.workspace.getActiveViewOfType(VerticalWritingView) === this) {
+            this.pushEscScope();
+        }
+    }
+
+    private registerEditorDomEvents(editorEl: EditorElement, virtualizer: ParagraphVirtualizer): void {
         // Registered via registerDomEvent so listeners are automatically removed on onClose
 
         this.registerDomEvent(editorEl.el, 'copy', (e: ClipboardEvent) => {
@@ -395,21 +425,9 @@ export class VerticalWritingView extends ItemView {
                 editorEl.afterNavigation();
             }
         });
+    }
 
-        // Shared unload logic for all three file-unload paths:
-        // file-open(null), layout-change, and vault.on('delete').
-        const clearForUnload = () => {
-            syncCoordinator.clearCurrentFile();
-            editorEl.clearContent();
-            virtualizer.initRecords([]);
-            this.lastCommittedContent = '';
-            this.pendingCursorOffset = null;
-            this.lastKnownViewOffset = null;
-            this.plugin.updateCharCount(null);
-            this.plugin.refreshOutline();
-            this.cancelScrollRestoring();
-        };
-
+    private registerVaultEvents(syncCoordinator: SyncCoordinator, clearForUnload: () => void): void {
         this.registerEvent(
             this.app.vault.on('modify', (file) => {
                 if (file instanceof TFile) {
@@ -432,7 +450,9 @@ export class VerticalWritingView extends ItemView {
                 }
             })
         );
+    }
 
+    private registerWorkspaceEvents(syncCoordinator: SyncCoordinator, clearForUnload: () => void): void {
         // file-open detects file switches more reliably than active-leaf-change
         this.registerEvent(
             this.app.workspace.on('file-open', (file) => {
@@ -502,14 +522,6 @@ export class VerticalWritingView extends ItemView {
                 }
             })
         );
-
-        await this.loadInitialFile(syncCoordinator);
-
-        // If the view is already active when it opens (the common case), push the scope now.
-        // Otherwise the first active-leaf-change for this leaf will push it.
-        if (this.app.workspace.getActiveViewOfType(VerticalWritingView) === this) {
-            this.pushEscScope();
-        }
     }
 
     private async loadInitialFile(syncCoordinator: SyncCoordinator): Promise<void> {
