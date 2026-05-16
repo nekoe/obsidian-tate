@@ -1,7 +1,7 @@
 // ---- Constants ----
 
 // CJK Unified Ideographs (U+4E00–U+9FFF) + Extension A (U+3400–U+4DBF) + iteration marks
-export const KANJI_RE_STR = '[一-鿿㐀-䶿\u{20000}-\u{2A6DF}々〆〤]+';
+export const KANJI_RE_STR = '[\u4E00-\u9FFF\u3400-\u4DBF\u{20000}-\u{2A6DF}々〆〤]+';
 
 // ---- Element factories ----
 
