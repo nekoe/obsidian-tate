@@ -323,7 +323,7 @@ export class InlineEditor {
         if (!tcySpan) return false;
 
         const moveLeft = key === 'ArrowUp';
-        const textNode = tcySpan.firstChild instanceof Text ? tcySpan.firstChild : null;
+        const textNode = tcySpan.firstChild?.instanceOf(Text) ? tcySpan.firstChild as Text : null;
         const r = activeDocument.createRange();
 
         if (!textNode) {
@@ -444,7 +444,7 @@ export class InlineEditor {
         // Chrome's cursor normalization back into the span and redirect instead of re-expanding.
         if (nextSib?.isConnected) {
             const prevOfNextSib = nextSib.previousSibling;
-            if (prevOfNextSib instanceof HTMLElement && prevOfNextSib.getAttribute('data-bouten')) {
+            if (prevOfNextSib?.instanceOf(HTMLElement) && prevOfNextSib.getAttribute('data-bouten')) {
                 this.boutenGuard.set(prevOfNextSib, prevOfNextSib.textContent ?? '');
             }
         }

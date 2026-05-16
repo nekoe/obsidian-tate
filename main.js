@@ -1590,6 +1590,7 @@ var InlineEditor = class {
   // should navigate within the tcy text rather than jumping to the adjacent line.
   // Returns true if the key was consumed (caller should call preventDefault).
   handleTcyNavigation(key) {
+    var _a;
     if (key !== "ArrowUp" && key !== "ArrowDown") return false;
     const sel = window.getSelection();
     if (!sel || sel.rangeCount === 0) return false;
@@ -1597,7 +1598,7 @@ var InlineEditor = class {
     const tcySpan = findTcyAncestor(range.startContainer, this.el);
     if (!tcySpan) return false;
     const moveLeft = key === "ArrowUp";
-    const textNode = tcySpan.firstChild instanceof Text ? tcySpan.firstChild : null;
+    const textNode = ((_a = tcySpan.firstChild) == null ? void 0 : _a.instanceOf(Text)) ? tcySpan.firstChild : null;
     const r = activeDocument.createRange();
     if (!textNode) {
       if (moveLeft) r.setStartBefore(tcySpan);
@@ -1699,7 +1700,7 @@ var InlineEditor = class {
     this.anchorManager.placeCursorAfterCollapse(nextSib, parentEl, sel);
     if (nextSib == null ? void 0 : nextSib.isConnected) {
       const prevOfNextSib = nextSib.previousSibling;
-      if (prevOfNextSib instanceof HTMLElement && prevOfNextSib.getAttribute("data-bouten")) {
+      if ((prevOfNextSib == null ? void 0 : prevOfNextSib.instanceOf(HTMLElement)) && prevOfNextSib.getAttribute("data-bouten")) {
         this.boutenGuard.set(prevOfNextSib, (_a = prevOfNextSib.textContent) != null ? _a : "");
       }
     }
