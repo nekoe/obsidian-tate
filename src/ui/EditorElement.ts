@@ -102,17 +102,8 @@ export class EditorElement {
         const lines = content ? content.split('\n') : [''];
         const N = lines.length;
 
-        // Convert VIEW offset to paragraph index. View offset counts visible chars only
-        // (ruby annotations excluded), so accumulate viewLens, not source lengths.
-        // View offsets also do not count newline characters between paragraphs.
         const virt = this.virtualizer;
-        let center = N - 1;
-        let charCount = 0;
-        for (let i = 0; i < N; i++) {
-            const viewLen = virt ? virt.buildParagraphVisibleText(lines[i]).length : lines[i].length;
-            if (initialViewOffset <= charCount + viewLen) { center = i; break; }
-            charCount += viewLen;
-        }
+        const center = this.findCenterParagraph(lines, initialViewOffset);
         const lo = Math.max(0, center - INITIAL_WINDOW_HALF);
         const hi = Math.min(N - 1, center + INITIAL_WINDOW_HALF);
 
@@ -149,14 +140,7 @@ export class EditorElement {
             const N = lines.length;
             let center: number;
             if (pos >= 0) {
-                // Derive center paragraph from the preserved cursor view offset.
-                center = N - 1;
-                let charCount = 0;
-                for (let i = 0; i < N; i++) {
-                    const viewLen = virt.buildParagraphVisibleText(lines[i]).length;
-                    if (pos <= charCount + viewLen) { center = i; break; }
-                    charCount += viewLen;
-                }
+                center = this.findCenterParagraph(lines, pos);
             } else if (virt.domEnd >= 0) {
                 // No cursor to preserve: keep the window near its current scroll position.
                 center = Math.min(Math.floor((virt.domStart + virt.domEnd) / 2), N - 1);
@@ -434,13 +418,7 @@ export class EditorElement {
                 virt.syncWindowSrcs(newLines); // expand domEnd to full DOM
                 const cursorPos = this.getVisibleOffset();
                 const N = newLines.length;
-                let center = N - 1;
-                let charCount = 0;
-                for (let i = 0; i < N; i++) {
-                    const viewLen = virt.buildParagraphVisibleText(newLines[i]).length;
-                    if (cursorPos <= charCount + viewLen) { center = i; break; }
-                    charCount += viewLen;
-                }
+                const center = this.findCenterParagraph(newLines, cursorPos);
                 const lo = Math.max(0, center - INITIAL_WINDOW_HALF);
                 const hi = Math.min(N - 1, center + INITIAL_WINDOW_HALF);
                 this.inlineEditor.reset();
@@ -734,6 +712,21 @@ export class EditorElement {
     // Resets the burst flag and clears boutenGuard on mouse click or navigation key.
     afterNavigation(): void {
         this.inlineEditor.afterNavigation();
+    }
+
+    // Finds the paragraph index whose view-length range contains viewOffset.
+    // Uses ParagraphVirtualizer.buildParagraphVisibleText() when available; falls back to
+    // raw string length (virtualizer not yet attached, e.g. early loadContent() call).
+    private findCenterParagraph(lines: string[], viewOffset: number): number {
+        const virt = this.virtualizer;
+        let center = lines.length - 1;
+        let charCount = 0;
+        for (let i = 0; i < lines.length; i++) {
+            const viewLen = virt ? virt.buildParagraphVisibleText(lines[i]).length : lines[i].length;
+            if (viewOffset <= charCount + viewLen) { center = i; break; }
+            charCount += viewLen;
+        }
+        return center;
     }
 
     // Returns the Aozora source string for paragraph i: from the live DOM if in-window,
