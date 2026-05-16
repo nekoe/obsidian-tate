@@ -736,6 +736,14 @@ export class EditorElement {
         this.inlineEditor.afterNavigation();
     }
 
+    // Returns the Aozora source string for paragraph i: from the live DOM if in-window,
+    // or from paragraphRecords otherwise.
+    private getParaSrc(virt: ParagraphVirtualizer, i: number): string {
+        const div = virt.getWindowDiv(i);
+        if (div) return Array.from(div.childNodes).map(n => serializeNode(n, this.el)).join('');
+        return virt.getSrcByIndex(i);
+    }
+
     // Deletes the content covered by a VirtualSelection. Rebuilds the content from
     // paragraphRecords (using the DOM for in-window paragraphs) with the selected range
     // removed, then reloads and positions the cursor at the deletion point.
@@ -748,19 +756,13 @@ export class EditorElement {
             : [focusParaIdx, focusViewOff, anchorParaIdx, anchorViewOff];
         const N = virt.paragraphRecords.length;
 
-        const getSrc = (i: number): string => {
-            const div = virt.getWindowDiv(i);
-            if (div) return Array.from(div.childNodes).map(n => serializeNode(n, this.el)).join('');
-            return virt.getSrcByIndex(i);
-        };
-
         const allLines: string[] = [];
-        for (let i = 0; i < si; i++) allLines.push(getSrc(i));
+        for (let i = 0; i < si; i++) allLines.push(this.getParaSrc(virt, i));
         allLines.push(
-            this.sliceAozoraSrcByView(getSrc(si), 0, so) +
-            this.sliceAozoraSrcByView(getSrc(ei), eo)
+            this.sliceAozoraSrcByView(this.getParaSrc(virt, si), 0, so) +
+            this.sliceAozoraSrcByView(this.getParaSrc(virt, ei), eo)
         );
-        for (let i = ei + 1; i < N; i++) allLines.push(getSrc(i));
+        for (let i = ei + 1; i < N; i++) allLines.push(this.getParaSrc(virt, i));
 
         const newContent = allLines.join('\n');
         let cursorViewOffset = 0;
@@ -814,15 +816,9 @@ export class EditorElement {
             ? [anchorParaIdx, anchorViewOff, focusParaIdx, focusViewOff]
             : [focusParaIdx, focusViewOff, anchorParaIdx, anchorViewOff];
 
-        const getSrc = (i: number): string => {
-            const div = virt.getWindowDiv(i);
-            if (div) return Array.from(div.childNodes).map(n => serializeNode(n, this.el)).join('');
-            return virt.getSrcByIndex(i);
-        };
-
         const parts: string[] = [];
         for (let i = si; i <= ei; i++) {
-            const src = getSrc(i);
+            const src = this.getParaSrc(virt, i);
             let sliced: string;
             if (i === si && i === ei) sliced = this.sliceAozoraSrcByView(src, so, eo);
             else if (i === si)        sliced = this.sliceAozoraSrcByView(src, so);
