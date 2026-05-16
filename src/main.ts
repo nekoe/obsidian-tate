@@ -1,4 +1,6 @@
-import { Plugin, WorkspaceLeaf, setIcon } from 'obsidian';
+import { writeFileSync } from 'fs';
+import { join } from 'path';
+import { FileSystemAdapter, Plugin, WorkspaceLeaf, setIcon } from 'obsidian';
 import { TATE_VIEW_TYPE, VerticalWritingView } from './view';
 import { DEFAULT_SETTINGS, TatePluginSettings, TateSettingTab } from './settings';
 import { OutlineView, TATE_OUTLINE_VIEW_TYPE } from './ui/OutlineView';
@@ -141,14 +143,30 @@ export default class TatePlugin extends Plugin {
 
         this.addSettingTab(new TateSettingTab(this.app, this));
 
-        // Best-effort cursor save on app quit. Not guaranteed to run (Obsidian limitation).
+        // Best-effort cursor save on app quit.
+        // saveCursorForQuit() updates this.cursorPositions in memory synchronously as a side
+        // effect, so we call it for each view and then write to disk with writeFileSync.
+        // tasks.add() is intentionally avoided: it causes Obsidian to call t.preventDefault()
+        // in window.onbeforeunload, which cancels the native macOS quit signal. Obsidian then
+        // calls window.close() after tasks resolve, but window.close() does not call app.quit(),
+        // so the process stays alive on macOS until the user presses Cmd-Q a second time.
         this.registerEvent(
-            this.app.workspace.on('quit', (tasks) => {
+            this.app.workspace.on('quit', (_tasks) => {
                 for (const leaf of this.app.workspace.getLeavesOfType(TATE_VIEW_TYPE)) {
                     if (leaf.view instanceof VerticalWritingView) {
-                        const p = leaf.view.saveCursorForQuit();
-                        if (p) tasks.add(() => p);
+                        leaf.view.saveCursorForQuit(); // updates cursorPositions in memory; ignore Promise
                     }
+                }
+                const adapter = this.app.vault.adapter;
+                if (!(adapter instanceof FileSystemAdapter) || !this.manifest.dir) return;
+                try {
+                    writeFileSync(
+                        join(adapter.getBasePath(), this.manifest.dir, 'data.json'),
+                        JSON.stringify({ settings: this.settings, cursorPositions: this.cursorPositions }),
+                        'utf8',
+                    );
+                } catch {
+                    // ignore write errors on quit
                 }
             })
         );
