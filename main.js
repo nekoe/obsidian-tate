@@ -838,6 +838,16 @@ function getExtraCharsFromAnnotation(rawText) {
   }
   return "";
 }
+function findParentDivInEditor(node, editorEl) {
+  let current = node;
+  while (current && current !== editorEl) {
+    if (current.instanceOf(HTMLElement) && current.parentElement === editorEl && current.tagName === "DIV") {
+      return current;
+    }
+    current = current.parentElement;
+  }
+  return null;
+}
 
 // src/ui/BoutenGuard.ts
 var BoutenGuard = class {
@@ -2194,6 +2204,14 @@ var ParagraphVirtualizer = class {
     var _a, _b;
     return (_b = (_a = this.paragraphRecords[i]) == null ? void 0 : _a.src) != null ? _b : "";
   }
+  // Updates src and viewLen of an off-window record without touching the DOM.
+  // Called by SearchPanel.replaceAllMatches() to apply replacements to off-window paragraphs.
+  updateRecord(i, src) {
+    const rec = this.paragraphRecords[i];
+    if (!rec) return;
+    rec.src = src;
+    rec.viewLen = this.buildParagraphVisibleText(src).length;
+  }
   // Returns the visible character count for the paragraph at index i. O(1).
   getViewLenByIndex(i) {
     var _a, _b;
@@ -2609,14 +2627,8 @@ var ParagraphVirtualizer = class {
   }
   // Returns the direct paragraph div (non-spacer DIV child of editorEl) that contains node.
   findParaDiv(node) {
-    let el = node;
-    while (el && el !== this.editorEl) {
-      if (el.instanceOf(HTMLElement) && el.parentElement === this.editorEl && el.tagName === "DIV" && !el.classList.contains(SPACER_CLASS)) {
-        return el;
-      }
-      el = el.parentElement;
-    }
-    return null;
+    const div = findParentDivInEditor(node, this.editorEl);
+    return div && !div.classList.contains(SPACER_CLASS) ? div : null;
   }
   // Returns the paragraphRecords index for the given in-window div, or -1 if not found.
   getParagraphIndex(div) {
@@ -2704,16 +2716,7 @@ var EditorElement = class {
     const lines = content ? content.split("\n") : [""];
     const N = lines.length;
     const virt = this.virtualizer;
-    let center = N - 1;
-    let charCount = 0;
-    for (let i = 0; i < N; i++) {
-      const viewLen = virt ? virt.buildParagraphVisibleText(lines[i]).length : lines[i].length;
-      if (initialViewOffset <= charCount + viewLen) {
-        center = i;
-        break;
-      }
-      charCount += viewLen;
-    }
+    const center = this.findCenterParagraph(lines, initialViewOffset);
     const lo = Math.max(0, center - INITIAL_WINDOW_HALF);
     const hi = Math.min(N - 1, center + INITIAL_WINDOW_HALF);
     virt == null ? void 0 : virt.initWindowFromLines(lines, lo, hi);
@@ -2737,16 +2740,7 @@ var EditorElement = class {
       const N = lines.length;
       let center;
       if (pos >= 0) {
-        center = N - 1;
-        let charCount = 0;
-        for (let i = 0; i < N; i++) {
-          const viewLen = virt.buildParagraphVisibleText(lines[i]).length;
-          if (pos <= charCount + viewLen) {
-            center = i;
-            break;
-          }
-          charCount += viewLen;
-        }
+        center = this.findCenterParagraph(lines, pos);
       } else if (virt.domEnd >= 0) {
         center = Math.min(Math.floor((virt.domStart + virt.domEnd) / 2), N - 1);
       } else {
@@ -2955,16 +2949,7 @@ var EditorElement = class {
         virt.syncWindowSrcs(newLines);
         const cursorPos = this.getVisibleOffset();
         const N = newLines.length;
-        let center = N - 1;
-        let charCount = 0;
-        for (let i = 0; i < N; i++) {
-          const viewLen = virt.buildParagraphVisibleText(newLines[i]).length;
-          if (cursorPos <= charCount + viewLen) {
-            center = i;
-            break;
-          }
-          charCount += viewLen;
-        }
+        const center = this.findCenterParagraph(newLines, cursorPos);
         const lo = Math.max(0, center - INITIAL_WINDOW_HALF);
         const hi = Math.min(N - 1, center + INITIAL_WINDOW_HALF);
         this.inlineEditor.reset();
@@ -3075,14 +3060,7 @@ var EditorElement = class {
   }
   // Returns the direct <div> child of this.el that contains node, or null.
   findParagraphDiv(node) {
-    let current = node;
-    while (current && current !== this.el) {
-      if (current.parentElement === this.el && current.instanceOf(HTMLElement) && current.tagName === "DIV") {
-        return current;
-      }
-      current = current.parentElement;
-    }
-    return null;
+    return findParentDivInEditor(node, this.el);
   }
   // Restores a minimal <div><br></div> if Chrome deleted all paragraph divs (e.g., Backspace on last char).
   normalizeEmptyDom() {
@@ -3212,6 +3190,30 @@ var EditorElement = class {
   afterNavigation() {
     this.inlineEditor.afterNavigation();
   }
+  // Finds the paragraph index whose view-length range contains viewOffset.
+  // Uses ParagraphVirtualizer.buildParagraphVisibleText() when available; falls back to
+  // raw string length (virtualizer not yet attached, e.g. early loadContent() call).
+  findCenterParagraph(lines, viewOffset) {
+    const virt = this.virtualizer;
+    let center = lines.length - 1;
+    let charCount = 0;
+    for (let i = 0; i < lines.length; i++) {
+      const viewLen = virt ? virt.buildParagraphVisibleText(lines[i]).length : lines[i].length;
+      if (viewOffset <= charCount + viewLen) {
+        center = i;
+        break;
+      }
+      charCount += viewLen;
+    }
+    return center;
+  }
+  // Returns the Aozora source string for paragraph i: from the live DOM if in-window,
+  // or from paragraphRecords otherwise.
+  getParaSrc(virt, i) {
+    const div = virt.getWindowDiv(i);
+    if (div) return Array.from(div.childNodes).map((n) => serializeNode(n, this.el)).join("");
+    return virt.getSrcByIndex(i);
+  }
   // Deletes the content covered by a VirtualSelection. Rebuilds the content from
   // paragraphRecords (using the DOM for in-window paragraphs) with the selected range
   // removed, then reloads and positions the cursor at the deletion point.
@@ -3221,17 +3223,12 @@ var EditorElement = class {
     const { anchorParaIdx, anchorViewOff, focusParaIdx, focusViewOff } = vs;
     const [si, so, ei, eo] = anchorParaIdx <= focusParaIdx ? [anchorParaIdx, anchorViewOff, focusParaIdx, focusViewOff] : [focusParaIdx, focusViewOff, anchorParaIdx, anchorViewOff];
     const N = virt.paragraphRecords.length;
-    const getSrc = (i) => {
-      const div = virt.getWindowDiv(i);
-      if (div) return Array.from(div.childNodes).map((n) => serializeNode(n, this.el)).join("");
-      return virt.getSrcByIndex(i);
-    };
     const allLines = [];
-    for (let i = 0; i < si; i++) allLines.push(getSrc(i));
+    for (let i = 0; i < si; i++) allLines.push(this.getParaSrc(virt, i));
     allLines.push(
-      this.sliceAozoraSrcByView(getSrc(si), 0, so) + this.sliceAozoraSrcByView(getSrc(ei), eo)
+      this.sliceAozoraSrcByView(this.getParaSrc(virt, si), 0, so) + this.sliceAozoraSrcByView(this.getParaSrc(virt, ei), eo)
     );
-    for (let i = ei + 1; i < N; i++) allLines.push(getSrc(i));
+    for (let i = ei + 1; i < N; i++) allLines.push(this.getParaSrc(virt, i));
     const newContent = allLines.join("\n");
     let cursorViewOffset = 0;
     for (let i = 0; i < si; i++) cursorViewOffset += virt.getViewLenByIndex(i);
@@ -3275,14 +3272,9 @@ var EditorElement = class {
     const virt = this.virtualizer;
     const { anchorParaIdx, anchorViewOff, focusParaIdx, focusViewOff } = vs;
     const [si, so, ei, eo] = anchorParaIdx <= focusParaIdx ? [anchorParaIdx, anchorViewOff, focusParaIdx, focusViewOff] : [focusParaIdx, focusViewOff, anchorParaIdx, anchorViewOff];
-    const getSrc = (i) => {
-      const div = virt.getWindowDiv(i);
-      if (div) return Array.from(div.childNodes).map((n) => serializeNode(n, this.el)).join("");
-      return virt.getSrcByIndex(i);
-    };
     const parts = [];
     for (let i = si; i <= ei; i++) {
-      const src = getSrc(i);
+      const src = this.getParaSrc(virt, i);
       let sliced;
       if (i === si && i === ei) sliced = this.sliceAozoraSrcByView(src, so, eo);
       else if (i === si) sliced = this.sliceAozoraSrcByView(src, so);
@@ -3491,7 +3483,6 @@ var EditorElement = class {
   }
   // ---- Cursor operations (offset managed in visible character count, excluding <rt> and U+200B) ----
   getVisibleOffset() {
-    var _a, _b;
     const sel = window.getSelection();
     if (!sel || sel.rangeCount === 0) return 0;
     const range = sel.getRangeAt(0);
@@ -3523,26 +3514,10 @@ var EditorElement = class {
       }
     }
     if (!cursorDiv) return count;
-    const walker = activeDocument.createTreeWalker(cursorDiv, NodeFilter.SHOW_TEXT);
-    let textNode = walker.nextNode();
-    while (textNode) {
-      if (textNode === range.startContainer) {
-        if (!isInsideRtNode(textNode, this.el)) {
-          const text = (_a = textNode.textContent) != null ? _a : "";
-          count += findCursorAnchorAncestor(textNode, this.el) ? text.slice(0, range.startOffset).replace(/\u200B/g, "").length : range.startOffset;
-        }
-        break;
-      }
-      if (range.comparePoint(textNode, 0) >= 0) break;
-      if (!isInsideRtNode(textNode, this.el)) {
-        count += findCursorAnchorAncestor(textNode, this.el) ? ((_b = textNode.textContent) != null ? _b : "").replace(/\u200B/g, "").length : textNode.length;
-      }
-      textNode = walker.nextNode();
-    }
+    count += computeViewOffsetInDiv(cursorDiv, this.el, range.startContainer, range.startOffset);
     return count;
   }
   setVisibleOffset(offset) {
-    var _a, _b;
     const sel = window.getSelection();
     if (!sel) return;
     this._cursorJumped = false;
@@ -3576,40 +3551,17 @@ var EditorElement = class {
         sel.addRange(range2);
         return;
       }
-      const walker = activeDocument.createTreeWalker(child, NodeFilter.SHOW_TEXT);
-      let node = walker.nextNode();
-      while (node) {
-        if (!isInsideRtNode(node, this.el)) {
-          const isAnchor = !!findCursorAnchorAncestor(node, this.el);
-          const visLen = isAnchor ? ((_a = node.textContent) != null ? _a : "").replace(/\u200B/g, "").length : node.length;
-          if (remaining <= visLen) {
-            const range2 = activeDocument.createRange();
-            let actualOffset;
-            if (isAnchor) {
-              const text = (_b = node.textContent) != null ? _b : "";
-              actualOffset = 0;
-              let visible = 0;
-              for (let ci = 0; ci < text.length; ci++) {
-                if (visible === remaining) {
-                  actualOffset = ci;
-                  break;
-                }
-                if (text[ci] !== "\u200B") visible++;
-                actualOffset = ci + 1;
-              }
-            } else {
-              actualOffset = remaining;
-            }
-            range2.setStart(node, actualOffset);
-            range2.collapse(true);
-            sel.removeAllRanges();
-            sel.addRange(range2);
-            return;
-          }
-          remaining -= visLen;
-        }
-        node = walker.nextNode();
+      const divViewLen = computeDivViewLen(child, this.el);
+      if (remaining <= divViewLen) {
+        const pos = computeDomPositionFromViewOff(child, this.el, remaining);
+        const range2 = activeDocument.createRange();
+        range2.setStart(pos.node, pos.offset);
+        range2.collapse(true);
+        sel.removeAllRanges();
+        sel.addRange(range2);
+        return;
       }
+      remaining -= divViewLen;
     }
     const range = activeDocument.createRange();
     range.selectNodeContents(this.el);
@@ -3751,12 +3703,14 @@ var SearchPanel = class {
     // were not highlighted because their matchEntries still had range=null).
     // Uses window.requestAnimationFrame so it runs after ParagraphVirtualizer's synchronous scroll handler.
     this.onScrollArea = () => window.requestAnimationFrame(() => this.refreshWindowRanges());
-    this.searchScope = new import_obsidian5.Scope(app.scope);
-    editorElementRef.el.addEventListener("mousedown", () => {
+    // Stored so destroy() can removeEventListener with the exact same reference.
+    this.onEditorMouseDown = () => {
       if (!this.isOpen) return;
       this.editorFocused = true;
       this.clearFocusHighlight();
-    });
+    };
+    this.searchScope = new import_obsidian5.Scope(app.scope);
+    editorElementRef.el.addEventListener("mousedown", this.onEditorMouseDown);
     this.searchScope.register([], "Enter", (evt) => {
       if (evt.isComposing) return;
       if (this.editorFocused) return;
@@ -3807,6 +3761,9 @@ var SearchPanel = class {
     this.app.keymap.pushScope(this.searchScope);
     (_c = this.editorElementRef.el.parentElement) == null ? void 0 : _c.addEventListener("scroll", this.onScrollArea);
     (_d = this.inputEl) == null ? void 0 : _d.focus();
+  }
+  destroy() {
+    this.editorElementRef.el.removeEventListener("mousedown", this.onEditorMouseDown);
   }
   close() {
     var _a, _b, _c;
@@ -4002,15 +3959,12 @@ var SearchPanel = class {
         }
         div.replaceChildren((0, import_obsidian5.sanitizeHTMLToDom)(parseInlineToHtml(srcLine) || "<br>"));
       } else {
-        const rec = this.virtualizer.paragraphRecords[paragraphIndex];
-        if (!rec) continue;
-        let srcLine = rec.src;
+        let srcLine = this.virtualizer.getSrcByIndex(paragraphIndex);
         for (const entry of entries) {
           const segs = buildSegmentMap(srcLine);
           srcLine = buildReplacedSrc(srcLine, segs, entry.localStart, entry.localEnd, replacement);
         }
-        rec.src = srcLine;
-        rec.viewLen = this.virtualizer.buildParagraphVisibleText(srcLine).length;
+        this.virtualizer.updateRecord(paragraphIndex, srcLine);
       }
     }
     (_d = this.commitCallback) == null ? void 0 : _d.call(this);
@@ -4309,6 +4263,26 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
       if (evt.isComposing) return;
       return false;
     });
+    this.registerEditorDomEvents(editorEl, virtualizer);
+    const clearForUnload = () => {
+      syncCoordinator.clearCurrentFile();
+      editorEl.clearContent();
+      virtualizer.initRecords([]);
+      this.lastCommittedContent = "";
+      this.pendingCursorOffset = null;
+      this.lastKnownViewOffset = null;
+      this.plugin.updateCharCount(null);
+      this.plugin.refreshOutline();
+      this.cancelScrollRestoring();
+    };
+    this.registerVaultEvents(syncCoordinator, clearForUnload);
+    this.registerWorkspaceEvents(syncCoordinator, clearForUnload);
+    await this.loadInitialFile(syncCoordinator);
+    if (this.app.workspace.getActiveViewOfType(_VerticalWritingView) === this) {
+      this.pushEscScope();
+    }
+  }
+  registerEditorDomEvents(editorEl, virtualizer) {
     this.registerDomEvent(editorEl.el, "copy", (e) => {
       editorEl.handleCopy(e);
     });
@@ -4501,17 +4475,8 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
         editorEl.afterNavigation();
       }
     });
-    const clearForUnload = () => {
-      syncCoordinator.clearCurrentFile();
-      editorEl.clearContent();
-      virtualizer.initRecords([]);
-      this.lastCommittedContent = "";
-      this.pendingCursorOffset = null;
-      this.lastKnownViewOffset = null;
-      this.plugin.updateCharCount(null);
-      this.plugin.refreshOutline();
-      this.cancelScrollRestoring();
-    };
+  }
+  registerVaultEvents(syncCoordinator, clearForUnload) {
     this.registerEvent(
       this.app.vault.on("modify", (file) => {
         if (file instanceof import_obsidian6.TFile) {
@@ -4534,6 +4499,8 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
         }
       })
     );
+  }
+  registerWorkspaceEvents(syncCoordinator, clearForUnload) {
     this.registerEvent(
       this.app.workspace.on("file-open", (file) => {
         if (file === syncCoordinator.currentFile) return;
@@ -4591,10 +4558,6 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
         }
       })
     );
-    await this.loadInitialFile(syncCoordinator);
-    if (this.app.workspace.getActiveViewOfType(_VerticalWritingView) === this) {
-      this.pushEscScope();
-    }
   }
   async loadInitialFile(syncCoordinator) {
     const activeFile = this.app.workspace.getActiveFile();
@@ -4664,8 +4627,9 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
     }
   }
   async onClose() {
-    var _a, _b, _c;
+    var _a, _b, _c, _d;
     (_a = this.searchPanel) == null ? void 0 : _a.close();
+    (_b = this.searchPanel) == null ? void 0 : _b.destroy();
     this.popEscScope();
     if (this.selectionChangeRafId !== null) {
       window.cancelAnimationFrame(this.selectionChangeRafId);
@@ -4674,9 +4638,9 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
     this.commitToCm6();
     const p = this.saveCursorForQuit();
     if (p) await p;
-    (_b = this.syncCoordinator) == null ? void 0 : _b.dispose();
+    (_c = this.syncCoordinator) == null ? void 0 : _c.dispose();
     this.syncCoordinator = null;
-    (_c = this.virtualizer) == null ? void 0 : _c.detach();
+    (_d = this.virtualizer) == null ? void 0 : _d.detach();
     this.virtualizer = null;
     this.editorEl = null;
     this.lastCommittedContent = "";
@@ -4769,16 +4733,12 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
     this.onThisLeafActivated();
   }
   openSearch() {
-    const el = this.editorEl;
-    if (!el || !this.searchPanel) return;
-    if (el.isInlineExpanded()) {
-      const contentChanged = el.collapseForEnter();
-      if (contentChanged) this.commitToCm6();
-    }
-    const offset = el.getViewCursorOffset();
-    this.searchPanel.open(offset);
+    this.openSearchPanel(false);
   }
   openReplace() {
+    this.openSearchPanel(true);
+  }
+  openSearchPanel(expandReplace) {
     const el = this.editorEl;
     if (!el || !this.searchPanel) return;
     if (el.isInlineExpanded()) {
@@ -4786,7 +4746,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
       if (contentChanged) this.commitToCm6();
     }
     const offset = el.getViewCursorOffset();
-    this.searchPanel.open(offset, true);
+    this.searchPanel.open(offset, expandReplace);
   }
   closeSearch() {
     if (!this.searchPanel) return;
