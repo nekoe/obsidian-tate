@@ -2057,18 +2057,14 @@ var ParagraphVirtualizer = class {
     return cols * colWidthPx;
   }
   applyRightSpacer(newW) {
+    var _a;
     this.rightSpacerWidth = newW;
-    if (this.rightSpacer) {
-      if (newW > 0) this.rightSpacer.style.setProperty("width", `${newW}px`);
-      else this.rightSpacer.style.removeProperty("width");
-    }
+    (_a = this.rightSpacer) == null ? void 0 : _a.setCssProps({ "--tate-spacer-width": newW > 0 ? `${newW}px` : "" });
   }
   applyLeftSpacer(newW) {
+    var _a;
     this.leftSpacerWidth = newW;
-    if (this.leftSpacer) {
-      if (newW > 0) this.leftSpacer.style.setProperty("width", `${newW}px`);
-      else this.leftSpacer.style.removeProperty("width");
-    }
+    (_a = this.leftSpacer) == null ? void 0 : _a.setCssProps({ "--tate-spacer-width": newW > 0 ? `${newW}px` : "" });
   }
   // Starts scroll-based window management and inserts spacer divs.
   attach() {

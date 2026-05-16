@@ -105,18 +105,12 @@ export class ParagraphVirtualizer {
 
     private applyRightSpacer(newW: number): void {
         this.rightSpacerWidth = newW;
-        if (this.rightSpacer) {
-            if (newW > 0) this.rightSpacer.style.setProperty('width', `${newW}px`);
-            else this.rightSpacer.style.removeProperty('width');
-        }
+        this.rightSpacer?.setCssProps({ '--tate-spacer-width': newW > 0 ? `${newW}px` : '' });
     }
 
     private applyLeftSpacer(newW: number): void {
         this.leftSpacerWidth = newW;
-        if (this.leftSpacer) {
-            if (newW > 0) this.leftSpacer.style.setProperty('width', `${newW}px`);
-            else this.leftSpacer.style.removeProperty('width');
-        }
+        this.leftSpacer?.setCssProps({ '--tate-spacer-width': newW > 0 ? `${newW}px` : '' });
     }
 
     // Starts scroll-based window management and inserts spacer divs.

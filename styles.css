@@ -52,6 +52,7 @@
 .tate-editor > div.tate-spacer {
     pointer-events: none;
     user-select: none;
+    width: var(--tate-spacer-width, 0);
 }
 
 /* Loading spinner shown during file load + scroll restore. Hidden in rAF 1
