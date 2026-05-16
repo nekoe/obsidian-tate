@@ -28,8 +28,6 @@ __export(main_exports, {
   default: () => TatePlugin
 });
 module.exports = __toCommonJS(main_exports);
-var import_fs = require("fs");
-var import_path = require("path");
 var import_obsidian8 = require("obsidian");
 
 // src/view.ts
@@ -5179,21 +5177,12 @@ var TatePlugin = class extends import_obsidian8.Plugin {
     });
     this.addSettingTab(new TateSettingTab(this.app, this));
     this.registerEvent(
-      this.app.workspace.on("quit", (_tasks) => {
+      this.app.workspace.on("quit", (tasks) => {
         for (const leaf of this.app.workspace.getLeavesOfType(TATE_VIEW_TYPE)) {
           if (leaf.view instanceof VerticalWritingView) {
-            leaf.view.saveCursorForQuit();
+            const p = leaf.view.saveCursorForQuit();
+            if (p) tasks.add(() => p);
           }
-        }
-        const adapter = this.app.vault.adapter;
-        if (!(adapter instanceof import_obsidian8.FileSystemAdapter) || !this.manifest.dir) return;
-        try {
-          (0, import_fs.writeFileSync)(
-            (0, import_path.join)(adapter.getBasePath(), this.manifest.dir, "data.json"),
-            JSON.stringify({ settings: this.settings, cursorPositions: this.cursorPositions }),
-            "utf8"
-          );
-        } catch (e) {
         }
       })
     );
