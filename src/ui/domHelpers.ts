@@ -264,3 +264,19 @@ export function getExtraCharsFromAnnotation(rawText: string): string {
     }
     return '';
 }
+
+// Returns the direct DIV child of editorEl that contains node, or null if none found.
+// Traverses up from node, stopping at editorEl. Only direct children with tagName 'DIV'
+// are returned; callers that need to exclude spacers should check the result themselves.
+export function findParentDivInEditor(node: Node, editorEl: HTMLElement): HTMLElement | null {
+    let current: Node | null = node;
+    while (current && current !== editorEl) {
+        if (current.instanceOf(HTMLElement)
+                && current.parentElement === editorEl
+                && current.tagName === 'DIV') {
+            return current;
+        }
+        current = current.parentElement;
+    }
+    return null;
+}

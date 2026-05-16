@@ -1,7 +1,7 @@
 import { sanitizeHTMLToDom } from 'obsidian';
 import { buildSegmentMap } from './SegmentMap';
 import { parseInlineToHtml } from './AozoraParser';
-import { computeViewOffsetInDiv, computeDomPositionFromViewOff, findLastBaseTextInElement } from './domHelpers';
+import { computeViewOffsetInDiv, computeDomPositionFromViewOff, findLastBaseTextInElement, findParentDivInEditor } from './domHelpers';
 
 // CSS class applied to both spacer divs so DOM walkers can skip them.
 export const SPACER_CLASS = 'tate-spacer';
@@ -770,17 +770,8 @@ export class ParagraphVirtualizer {
 
     // Returns the direct paragraph div (non-spacer DIV child of editorEl) that contains node.
     private findParaDiv(node: Node): HTMLElement | null {
-        let el: Node | null = node;
-        while (el && el !== this.editorEl) {
-            if (el.instanceOf(HTMLElement)
-                    && el.parentElement === this.editorEl
-                    && el.tagName === 'DIV'
-                    && !el.classList.contains(SPACER_CLASS)) {
-                return el;
-            }
-            el = el.parentElement;
-        }
-        return null;
+        const div = findParentDivInEditor(node, this.editorEl);
+        return div && !div.classList.contains(SPACER_CLASS) ? div : null;
     }
 
     // Returns the paragraphRecords index for the given in-window div, or -1 if not found.

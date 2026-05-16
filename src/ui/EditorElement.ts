@@ -4,7 +4,7 @@ import { buildSegmentMap, srcToView, viewToSrc } from './SegmentMap';
 import { parseInlineToHtml, parseToHtml, serializeNode } from './AozoraParser';
 import { InlineEditor } from './InlineEditor';
 import { InputTransformer } from './InputTransformer';
-import { isEffectivelyEmpty, clearChildren, ensureBrPlaceholder, computeDivViewLen, isInsideRtNode, findCursorAnchorAncestor } from './domHelpers';
+import { isEffectivelyEmpty, clearChildren, ensureBrPlaceholder, computeDivViewLen, isInsideRtNode, findCursorAnchorAncestor, findParentDivInEditor } from './domHelpers';
 import type { ParagraphVirtualizer, VirtualSelection } from './ParagraphVirtualizer';
 import { SPACER_CLASS } from './ParagraphVirtualizer';
 
@@ -558,14 +558,7 @@ export class EditorElement {
 
     // Returns the direct <div> child of this.el that contains node, or null.
     private findParagraphDiv(node: Node): HTMLElement | null {
-        let current: Node | null = node;
-        while (current && current !== this.el) {
-            if (current.parentElement === this.el && current.instanceOf(HTMLElement) && current.tagName === 'DIV') {
-                return current;
-            }
-            current = current.parentElement;
-        }
-        return null;
+        return findParentDivInEditor(node, this.el);
     }
 
     // Restores a minimal <div><br></div> if Chrome deleted all paragraph divs (e.g., Backspace on last char).
