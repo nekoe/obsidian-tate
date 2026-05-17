@@ -3395,6 +3395,34 @@ var EditorElement = class {
   setViewCursorOffset(offset) {
     this.setVisibleOffset(offset);
   }
+  /** Places the cursor at the start of the paragraph at paragraphIndex. Used by OutlineView jump
+   *  to avoid the viewOffset ambiguity at paragraph boundaries (start of N == end of N-1). */
+  setViewCursorToParagraphIndex(idx) {
+    const sel = window.getSelection();
+    if (!sel) return;
+    this._cursorJumped = false;
+    const virt = this.virtualizer;
+    const N = virt && virt.domEnd >= 0 ? virt.paragraphRecords.length : this.el.children.length;
+    if (idx < 0 || idx >= N) return;
+    const child = virt && virt.domEnd >= 0 ? virt.getWindowDiv(idx) : this.el.children[idx];
+    if (!child) {
+      this._cursorJumped = true;
+      this.jumpWindowTo(idx);
+      this.setViewCursorToParagraphIndex(idx);
+      return;
+    }
+    const range = activeDocument.createRange();
+    const firstWalker = activeDocument.createTreeWalker(child, NodeFilter.SHOW_TEXT);
+    const firstNode = firstWalker.nextNode();
+    if (firstNode) {
+      range.setStart(firstNode, 0);
+    } else {
+      range.setStart(child, 0);
+    }
+    range.collapse(true);
+    sel.removeAllRanges();
+    sel.addRange(range);
+  }
   /** Scrolls the current cursor position into view. Defaults to centering; pass 'nearest' for minimal scroll. */
   scrollCursorIntoView(block = "center", _inline = "center") {
     const sel = window.getSelection();
@@ -4158,6 +4186,9 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
     // Deferred cursor offset: set when a file is loaded while the view is not active.
     // Applied (with scroll) on the next active-leaf-change for this view.
     this.pendingCursorOffset = null;
+    // Paragraph index set by jumpToParagraphIndex so onThisLeafActivated (triggered by revealLeaf)
+    // can restore the cursor via paragraph index instead of the ambiguous viewOffset.
+    this.pendingParagraphJump = null;
     // View offset passed to editorEl.loadContent() to center the initial DOM window.
     // Set before loadFile() so the SyncCoordinator callback can read it synchronously.
     this.pendingLoadViewOffset = 0;
@@ -4681,7 +4712,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
   // Body of the "this leaf became active" branch, shared between active-leaf-change
   // and notifyActivated() (called when revealLeaf doesn't fire active-leaf-change).
   onThisLeafActivated() {
-    var _a;
+    var _a, _b;
     this.pushEscScope();
     this.plugin.updateCharCount(countChars(this.lastCommittedContent));
     const el = this.editorEl;
@@ -4699,11 +4730,17 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
           el.setViewCursorOffset(offset);
           el.scrollCursorIntoView();
         });
+      } else if (this.pendingParagraphJump !== null) {
+        const idx = this.pendingParagraphJump;
+        this.pendingParagraphJump = null;
+        el.setViewCursorToParagraphIndex(idx);
+        this.lastKnownViewOffset = el.getViewCursorOffset();
+        void ((_a = this.syncCoordinator) == null ? void 0 : _a.checkAndApplyExternalChange());
       } else {
         if (this.lastKnownViewOffset !== null) {
           el.setViewCursorOffset(this.lastKnownViewOffset);
         }
-        void ((_a = this.syncCoordinator) == null ? void 0 : _a.checkAndApplyExternalChange());
+        void ((_b = this.syncCoordinator) == null ? void 0 : _b.checkAndApplyExternalChange());
       }
     }
   }
@@ -4759,6 +4796,24 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
     el.setViewCursorOffset(offset);
     this.lastKnownViewOffset = offset;
     el.scrollCursorIntoView();
+  }
+  /** Moves the editor cursor to the start of the paragraph at paragraphIndex and scrolls into view.
+   *  Uses paragraph index directly to avoid the viewOffset ambiguity at paragraph boundaries.
+   *  Sets pendingParagraphJump so that onThisLeafActivated (fired by revealLeaf) also restores
+   *  by index rather than re-applying the ambiguous lastKnownViewOffset. */
+  jumpToParagraphIndex(idx) {
+    const el = this.editorEl;
+    if (!el) return;
+    el.el.focus({ preventScroll: true });
+    el.setViewCursorToParagraphIndex(idx);
+    this.pendingParagraphJump = idx;
+    this.lastKnownViewOffset = el.getViewCursorOffset();
+    el.scrollCursorIntoView();
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        this.pendingParagraphJump = null;
+      });
+    });
   }
   /** Returns the current paragraphRecords for outline extraction. */
   getParagraphRecords() {
@@ -4970,7 +5025,7 @@ var OutlineView = class extends import_obsidian7.ItemView {
       return leaves.length > 0 && leaves[0].view instanceof VerticalWritingView ? leaves[0].view : null;
     })();
     if (!tateView) return;
-    tateView.jumpToViewOffset(entry.viewOffset);
+    tateView.jumpToParagraphIndex(entry.paragraphIndex);
     void this.app.workspace.revealLeaf(tateView.leaf);
   }
 };

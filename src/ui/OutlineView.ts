@@ -73,7 +73,7 @@ export class OutlineView extends ItemView {
                 ? leaves[0].view : null;
         })();
         if (!tateView) return;
-        tateView.jumpToViewOffset(entry.viewOffset);
+        tateView.jumpToParagraphIndex(entry.paragraphIndex);
         void this.app.workspace.revealLeaf(tateView.leaf);
     }
 }

@@ -981,6 +981,37 @@ export class EditorElement {
         this.setVisibleOffset(offset);
     }
 
+    /** Places the cursor at the start of the paragraph at paragraphIndex. Used by OutlineView jump
+     *  to avoid the viewOffset ambiguity at paragraph boundaries (start of N == end of N-1). */
+    setViewCursorToParagraphIndex(idx: number): void {
+        const sel = window.getSelection();
+        if (!sel) return;
+        this._cursorJumped = false;
+        const virt = this.virtualizer;
+        const N = virt && virt.domEnd >= 0 ? virt.paragraphRecords.length : this.el.children.length;
+        if (idx < 0 || idx >= N) return;
+
+        const child = virt && virt.domEnd >= 0
+            ? virt.getWindowDiv(idx)
+            : (this.el.children[idx] as HTMLElement);
+
+        if (!child) {
+            this._cursorJumped = true;
+            this.jumpWindowTo(idx);
+            this.setViewCursorToParagraphIndex(idx);
+            return;
+        }
+
+        const range = activeDocument.createRange();
+        const firstWalker = activeDocument.createTreeWalker(child, NodeFilter.SHOW_TEXT);
+        const firstNode = firstWalker.nextNode() as Text | null;
+        if (firstNode) { range.setStart(firstNode, 0); }
+        else            { range.setStart(child, 0); }
+        range.collapse(true);
+        sel.removeAllRanges();
+        sel.addRange(range);
+    }
+
     /** Scrolls the current cursor position into view. Defaults to centering; pass 'nearest' for minimal scroll. */
     scrollCursorIntoView(block: ScrollLogicalPosition = 'center', _inline: ScrollLogicalPosition = 'center'): void {
         const sel = window.getSelection();

@@ -24,6 +24,9 @@ export class VerticalWritingView extends ItemView {
     // Deferred cursor offset: set when a file is loaded while the view is not active.
     // Applied (with scroll) on the next active-leaf-change for this view.
     private pendingCursorOffset: number | null = null;
+    // Paragraph index set by jumpToParagraphIndex so onThisLeafActivated (triggered by revealLeaf)
+    // can restore the cursor via paragraph index instead of the ambiguous viewOffset.
+    private pendingParagraphJump: number | null = null;
     // View offset passed to editorEl.loadContent() to center the initial DOM window.
     // Set before loadFile() so the SyncCoordinator callback can read it synchronously.
     private pendingLoadViewOffset = 0;
@@ -717,6 +720,14 @@ export class VerticalWritingView extends ItemView {
                     el.setViewCursorOffset(offset);
                     el.scrollCursorIntoView();
                 });
+            } else if (this.pendingParagraphJump !== null) {
+                // Outline jump: revealLeaf triggered active-leaf-change before the safety-clear
+                // rAF fired. Restore by paragraph index to avoid the viewOffset boundary ambiguity.
+                const idx = this.pendingParagraphJump;
+                this.pendingParagraphJump = null;
+                el.setViewCursorToParagraphIndex(idx);
+                this.lastKnownViewOffset = el.getViewCursorOffset();
+                void this.syncCoordinator?.checkAndApplyExternalChange();
             } else {
                 // Normal tab switch: restore cursor, then check for external file changes
                 // made while this view was inactive (e.g. edits in MarkdownView).
@@ -786,6 +797,27 @@ export class VerticalWritingView extends ItemView {
         el.setViewCursorOffset(offset);
         this.lastKnownViewOffset = offset;
         el.scrollCursorIntoView();
+    }
+
+    /** Moves the editor cursor to the start of the paragraph at paragraphIndex and scrolls into view.
+     *  Uses paragraph index directly to avoid the viewOffset ambiguity at paragraph boundaries.
+     *  Sets pendingParagraphJump so that onThisLeafActivated (fired by revealLeaf) also restores
+     *  by index rather than re-applying the ambiguous lastKnownViewOffset. */
+    jumpToParagraphIndex(idx: number): void {
+        const el = this.editorEl;
+        if (!el) return;
+        el.el.focus({ preventScroll: true });
+        el.setViewCursorToParagraphIndex(idx);
+        this.pendingParagraphJump = idx;
+        this.lastKnownViewOffset = el.getViewCursorOffset();
+        el.scrollCursorIntoView();
+        // Safety clear: if active-leaf-change never fires (tate view already active),
+        // clear the pending index after two frames so it doesn't affect later tab switches.
+        window.requestAnimationFrame(() => {
+            window.requestAnimationFrame(() => {
+                this.pendingParagraphJump = null;
+            });
+        });
     }
 
     /** Returns the current paragraphRecords for outline extraction. */
