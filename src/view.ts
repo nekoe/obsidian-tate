@@ -404,8 +404,9 @@ export class VerticalWritingView extends ItemView {
                     return;
                 }
             }
-            // ArrowUp/ArrowDown inside a tcy span: move left/right within the horizontal text
-            if (!e.isComposing && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+            // ArrowUp/ArrowDown inside a tcy span: move left/right within the horizontal text.
+            // Skip when Shift is held: let the browser extend the selection naturally instead.
+            if (!e.isComposing && !e.shiftKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
                 if (editorEl.handleTcyNavigation(e.key)) {
                     e.preventDefault();
                     if (this.commitTimer !== null) this.commitToCm6();

@@ -4469,7 +4469,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
           return;
         }
       }
-      if (!e.isComposing && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
+      if (!e.isComposing && !e.shiftKey && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
         if (editorEl.handleTcyNavigation(e.key)) {
           e.preventDefault();
           if (this.commitTimer !== null) this.commitToCm6();
