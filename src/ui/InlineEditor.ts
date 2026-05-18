@@ -129,6 +129,11 @@ export class InlineEditor {
             }
 
             // Cursor moved outside the expanded span — collapse, then restore the intended position
+            // B2: selection extends before the span while anchor (endContainer) remains inside —
+            // keep the span expanded and let the selection stand (symmetric with B3/Shift+Down).
+            if (this.expandedEl && !range.collapsed && this.expandedEl.contains(range.endContainer)) {
+                return contentChanged;
+            }
             if (this.expandedEl) {
                 const savedNode = range.startContainer;
                 const savedOffset = range.startOffset;
@@ -155,6 +160,13 @@ export class InlineEditor {
             if (sel.rangeCount === 0) return contentChanged;
             const currentRange = sel.getRangeAt(0);
             if (!this.el.contains(currentRange.startContainer)) return contentChanged;
+
+            // Suppress expansion and anchor-skip while the user has an active selection.
+            // Clear pendingAnchorSkip so stale skip directions don't fire after selection ends.
+            if (!currentRange.collapsed) {
+                this.anchorManager.clearPendingSkip();
+                return contentChanged;
+            }
 
             // If cursor is inside a U+200B-only anchor span and a navigation key was just pressed,
             // skip in the recorded direction to make the invisible placeholder transparent.

@@ -990,6 +990,11 @@ var CursorAnchorManager = class {
     else if (key === "ArrowUp") this.pendingAnchorSkip = "backward";
     else this.pendingAnchorSkip = null;
   }
+  // Clears the pending skip direction without consuming it through handleAnchorPosition.
+  // Called when a non-collapsed selection suppresses anchor handling to prevent stale skips.
+  clearPendingSkip() {
+    this.pendingAnchorSkip = null;
+  }
   // If the placed anchor is at end-of-line, clears the pending skip so the cursor rests there.
   // If content follows, the skip is kept and fires on the next selectionchange.
   clearSkipIfEndOfLine(placedAnchor) {
@@ -1441,6 +1446,9 @@ var InlineEditor = class {
         if (parentEl) this.placeCursorAfterCollapse(nextSib, parentEl, sel);
         return contentChanged;
       }
+      if (this.expandedEl && !range.collapsed && this.expandedEl.contains(range.endContainer)) {
+        return contentChanged;
+      }
       if (this.expandedEl) {
         const savedNode = range.startContainer;
         const savedOffset = range.startOffset;
@@ -1461,6 +1469,10 @@ var InlineEditor = class {
       if (sel.rangeCount === 0) return contentChanged;
       const currentRange = sel.getRangeAt(0);
       if (!this.el.contains(currentRange.startContainer)) return contentChanged;
+      if (!currentRange.collapsed) {
+        this.anchorManager.clearPendingSkip();
+        return contentChanged;
+      }
       if (this.anchorManager.handleAnchorPosition(currentRange, sel)) {
         return contentChanged;
       }

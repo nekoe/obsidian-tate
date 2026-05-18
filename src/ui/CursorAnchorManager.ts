@@ -23,6 +23,12 @@ export class CursorAnchorManager {
         else this.pendingAnchorSkip = null;
     }
 
+    // Clears the pending skip direction without consuming it through handleAnchorPosition.
+    // Called when a non-collapsed selection suppresses anchor handling to prevent stale skips.
+    clearPendingSkip(): void {
+        this.pendingAnchorSkip = null;
+    }
+
     // If the placed anchor is at end-of-line, clears the pending skip so the cursor rests there.
     // If content follows, the skip is kept and fires on the next selectionchange.
     clearSkipIfEndOfLine(placedAnchor: HTMLElement): void {
