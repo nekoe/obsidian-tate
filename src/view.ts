@@ -405,13 +405,17 @@ export class VerticalWritingView extends ItemView {
                 }
             }
             // ArrowUp/ArrowDown inside a tcy span: move left/right within the horizontal text.
-            // Skip when Shift is held: let the browser extend the selection naturally instead.
-            if (!e.isComposing && !e.shiftKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
-                if (editorEl.handleTcyNavigation(e.key)) {
+            // With Shift, jump the selection focus past the span (browser gets stuck inside its
+            // horizontal layout); in that case fall through so the navigation-keys block runs.
+            if (!e.isComposing && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+                if (editorEl.handleTcyNavigation(e.key, e.shiftKey)) {
                     e.preventDefault();
-                    if (this.commitTimer !== null) this.commitToCm6();
-                    editorEl.afterNavigation();
-                    return;
+                    if (!e.shiftKey) {
+                        if (this.commitTimer !== null) this.commitToCm6();
+                        editorEl.afterNavigation();
+                        return;
+                    }
+                    // Shift: fall through to the navigation-keys block for notifyNavigationKey etc.
                 }
             }
             // Navigation keys are commit points only when there are uncommitted changes

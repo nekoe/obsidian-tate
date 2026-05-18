@@ -1092,8 +1092,8 @@ export class EditorElement {
 
     // Intercepts ArrowUp/ArrowDown inside a tcy span and moves the cursor left/right instead.
     // Returns true if the key was consumed (caller should call preventDefault).
-    handleTcyNavigation(key: string): boolean {
-        return this.inlineEditor.handleTcyNavigation(key);
+    handleTcyNavigation(key: string, shiftKey = false): boolean {
+        return this.inlineEditor.handleTcyNavigation(key, shiftKey);
     }
 
     // ---- Cursor operations (offset managed in visible character count, excluding <rt> and U+200B) ----

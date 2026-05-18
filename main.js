@@ -1599,13 +1599,26 @@ var InlineEditor = class {
   // Handles ArrowUp (→ move left) and ArrowDown (→ move right) when cursor is inside a tcy span.
   // In vertical writing mode the tcy element is laid out horizontally, so the vertical arrow keys
   // should navigate within the tcy text rather than jumping to the adjacent line.
+  // With shiftKey=true, jumps the selection focus past the span instead of moving within it,
+  // because the browser gets stuck inside the horizontal layout when extending a selection.
   // Returns true if the key was consumed (caller should call preventDefault).
-  handleTcyNavigation(key) {
+  handleTcyNavigation(key, shiftKey = false) {
     var _a;
     if (key !== "ArrowUp" && key !== "ArrowDown") return false;
     const sel = window.getSelection();
     if (!sel || sel.rangeCount === 0) return false;
     const range = sel.getRangeAt(0);
+    if (shiftKey) {
+      if (!sel.focusNode) return false;
+      const tcySpan2 = findTcyAncestor(sel.focusNode, this.el);
+      if (!tcySpan2) return false;
+      const r2 = activeDocument.createRange();
+      if (key === "ArrowUp") r2.setStartBefore(tcySpan2);
+      else r2.setStartAfter(tcySpan2);
+      r2.collapse(true);
+      sel.setBaseAndExtent(sel.anchorNode, sel.anchorOffset, r2.startContainer, r2.startOffset);
+      return true;
+    }
     const tcySpan = findTcyAncestor(range.startContainer, this.el);
     if (!tcySpan) return false;
     const moveLeft = key === "ArrowUp";
@@ -3493,8 +3506,8 @@ var EditorElement = class {
   }
   // Intercepts ArrowUp/ArrowDown inside a tcy span and moves the cursor left/right instead.
   // Returns true if the key was consumed (caller should call preventDefault).
-  handleTcyNavigation(key) {
-    return this.inlineEditor.handleTcyNavigation(key);
+  handleTcyNavigation(key, shiftKey = false) {
+    return this.inlineEditor.handleTcyNavigation(key, shiftKey);
   }
   // ---- Cursor operations (offset managed in visible character count, excluding <rt> and U+200B) ----
   getVisibleOffset() {
@@ -4469,12 +4482,14 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
           return;
         }
       }
-      if (!e.isComposing && !e.shiftKey && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
-        if (editorEl.handleTcyNavigation(e.key)) {
+      if (!e.isComposing && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
+        if (editorEl.handleTcyNavigation(e.key, e.shiftKey)) {
           e.preventDefault();
-          if (this.commitTimer !== null) this.commitToCm6();
-          editorEl.afterNavigation();
-          return;
+          if (!e.shiftKey) {
+            if (this.commitTimer !== null) this.commitToCm6();
+            editorEl.afterNavigation();
+            return;
+          }
         }
       }
       if (!e.isComposing && [
