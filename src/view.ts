@@ -381,24 +381,28 @@ export class VerticalWritingView extends ItemView {
                 if (virtualizer.paragraphRecords.length > 0) virtualizer.setVirtualSelectAll();
                 return;
             }
-            // Cmd+↑ / Cmd+↓ (macOS): jump to document start / end
-            // Ctrl+Home / Ctrl+End (Windows/Linux): jump to document start / end
-            if (!e.isComposing && !e.altKey && !e.shiftKey) {
-                const jumpToStart = Platform.isMacOS
+            // Cmd+↑/↓ (macOS) / Ctrl+Home/End (Windows/Linux): jump or extend selection to document boundary.
+            // Without Shift: collapse cursor to start/end. With Shift: extend selection from anchor.
+            if (!e.isComposing && !e.altKey) {
+                const toStart = Platform.isMacOS
                     ? e.metaKey && e.key === 'ArrowUp'
                     : e.ctrlKey && e.key === 'Home';
-                const jumpToEnd = Platform.isMacOS
+                const toEnd = Platform.isMacOS
                     ? e.metaKey && e.key === 'ArrowDown'
                     : e.ctrlKey && e.key === 'End';
-                if (jumpToStart || jumpToEnd) {
+                if (toStart || toEnd) {
                     e.preventDefault();
-                    virtualizer.clearVirtualSelection();
                     if (this.commitTimer !== null) this.commitToCm6();
-                    if (jumpToStart) {
-                        this.jumpToViewOffset(0);
+                    if (e.shiftKey) {
+                        virtualizer.extendSelectionToDocumentBoundary(toStart);
                     } else {
-                        const totalLen = virtualizer.paragraphRecords.reduce((sum, r) => sum + r.viewLen, 0);
-                        this.jumpToViewOffset(totalLen);
+                        virtualizer.clearVirtualSelection();
+                        if (toStart) {
+                            this.jumpToViewOffset(0);
+                        } else {
+                            const totalLen = virtualizer.paragraphRecords.reduce((sum, r) => sum + r.viewLen, 0);
+                            this.jumpToViewOffset(totalLen);
+                        }
                     }
                     editorEl.afterNavigation();
                     return;

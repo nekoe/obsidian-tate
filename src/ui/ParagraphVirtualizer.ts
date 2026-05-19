@@ -626,6 +626,50 @@ export class ParagraphVirtualizer {
         this.syncDomRangeToVirtual();
     }
 
+    // Extends the selection from the current anchor to the document start (toStart=true)
+    // or end (toStart=false), and scrolls the scroll area to make the target boundary visible.
+    // If VS is already active the existing anchor is preserved; otherwise the anchor is read
+    // from the DOM selection so the user's cursor position becomes the selection anchor.
+    //
+    // Uses teleportWindowTo (same as jumpWindowTo for cursor jumps) to place the DOM window
+    // directly at the target boundary, then re-syncs the VS. This avoids the incremental
+    // adjustWindowOnScroll path, which cannot efficiently shrink across a large scroll gap:
+    // the while(domEnd > domStart+2) guard stops the left-shrink when domEnd reaches
+    // domStart+3, and the right-expand then widens the window from the other side without
+    // triggering a second left-shrink pass, leaving far too many paragraph divs in the DOM.
+    extendSelectionToDocumentBoundary(toStart: boolean): void {
+        const N = this.paragraphRecords.length;
+        if (N === 0) return;
+
+        let anchorParaIdx: number;
+        let anchorViewOff: number;
+
+        if (this.virtualSelection) {
+            anchorParaIdx = this.virtualSelection.anchorParaIdx;
+            anchorViewOff = this.virtualSelection.anchorViewOff;
+        } else {
+            const sel = window.getSelection();
+            if (!sel || !sel.anchorNode) return;
+            const anchorDiv = this.findParaDiv(sel.anchorNode);
+            if (!anchorDiv) return;
+            anchorParaIdx = this.getParagraphIndex(anchorDiv);
+            if (anchorParaIdx < 0) return;
+            anchorViewOff = computeViewOffsetInDiv(anchorDiv, this.editorEl, sel.anchorNode, sel.anchorOffset);
+        }
+
+        const focusParaIdx = toStart ? 0 : N - 1;
+        const focusViewOff = toStart ? 0 : this.paragraphRecords[N - 1].viewLen;
+        this.virtualSelection = { anchorParaIdx, anchorViewOff, focusParaIdx, focusViewOff };
+
+        this.teleportWindowTo(focusParaIdx);
+        this.syncDomRangeToVirtual();
+
+        this.scrollArea.scrollLeft = toStart
+            ? this.scrollArea.scrollWidth - this.scrollArea.clientWidth
+            : 0;
+        this.adjustWindowOnScroll();
+    }
+
     // Called from selectionchange when VS is active and the event is not programmatic.
     // Reads the new focus position from the DOM and updates VS.focusParaIdx/focusViewOff.
     // Returns true if VS was changed (caller should then call syncDomRangeToVirtual()).
