@@ -432,7 +432,37 @@ export class VerticalWritingView extends ItemView {
                 // Without Shift: the selection is being moved (not extended), so any
                 // gap-spanning VS is no longer relevant. Clear it so the next selectionchange
                 // does not try to re-sync the DOM Range to stale VS endpoints.
-                if (!e.shiftKey) virtualizer.clearVirtualSelection();
+                if (!e.shiftKey) {
+                    // When VS is active and a plain Arrow key collapses the selection, the
+                    // browser collapses to the anchor PROXY (a window-boundary div), which
+                    // triggers adjustWindowOnScroll to expand the DOM window toward the real
+                    // anchor. Intercept and explicitly jump to the correct VS endpoint instead.
+                    const vs = !e.altKey && !e.metaKey && !e.ctrlKey
+                        ? virtualizer.getVirtualSelection() : null;
+                    if (vs && (e.key === 'ArrowLeft' || e.key === 'ArrowRight' ||
+                               e.key === 'ArrowUp'   || e.key === 'ArrowDown')) {
+                        e.preventDefault();
+                        // vertical-rl: ArrowLeft/ArrowDown moves toward later paragraphs (end).
+                        //              ArrowRight/ArrowUp moves toward earlier paragraphs (start).
+                        const towardEnd = e.key === 'ArrowLeft' || e.key === 'ArrowDown';
+                        const anchorIsEnd = vs.anchorParaIdx > vs.focusParaIdx ||
+                            (vs.anchorParaIdx === vs.focusParaIdx &&
+                             vs.anchorViewOff >= vs.focusViewOff);
+                        // Collapse toward the end of the selection (whichever endpoint is "more
+                        // in the direction of movement"), matching standard browser behavior.
+                        const useAnchor = towardEnd ? anchorIsEnd : !anchorIsEnd;
+                        const paraIdx = useAnchor ? vs.anchorParaIdx : vs.focusParaIdx;
+                        const viewOff = useAnchor ? vs.anchorViewOff : vs.focusViewOff;
+                        virtualizer.clearVirtualSelection();
+                        if (this.commitTimer !== null) this.commitToCm6();
+                        const abs = virtualizer.paragraphRecords
+                            .slice(0, paraIdx).reduce((s, r) => s + r.viewLen, 0) + viewOff;
+                        this.jumpToViewOffset(abs);
+                        editorEl.afterNavigation();
+                        return;
+                    }
+                    virtualizer.clearVirtualSelection();
+                }
                 if (this.commitTimer !== null) this.commitToCm6();
                 editorEl.afterNavigation();
             }

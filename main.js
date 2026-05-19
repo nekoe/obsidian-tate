@@ -4543,7 +4543,24 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
         "PageDown"
       ].includes(e.key)) {
         editorEl.notifyNavigationKey(e.key);
-        if (!e.shiftKey) virtualizer.clearVirtualSelection();
+        if (!e.shiftKey) {
+          const vs = !e.altKey && !e.metaKey && !e.ctrlKey ? virtualizer.getVirtualSelection() : null;
+          if (vs && (e.key === "ArrowLeft" || e.key === "ArrowRight" || e.key === "ArrowUp" || e.key === "ArrowDown")) {
+            e.preventDefault();
+            const towardEnd = e.key === "ArrowLeft" || e.key === "ArrowDown";
+            const anchorIsEnd = vs.anchorParaIdx > vs.focusParaIdx || vs.anchorParaIdx === vs.focusParaIdx && vs.anchorViewOff >= vs.focusViewOff;
+            const useAnchor = towardEnd ? anchorIsEnd : !anchorIsEnd;
+            const paraIdx = useAnchor ? vs.anchorParaIdx : vs.focusParaIdx;
+            const viewOff = useAnchor ? vs.anchorViewOff : vs.focusViewOff;
+            virtualizer.clearVirtualSelection();
+            if (this.commitTimer !== null) this.commitToCm6();
+            const abs = virtualizer.paragraphRecords.slice(0, paraIdx).reduce((s, r) => s + r.viewLen, 0) + viewOff;
+            this.jumpToViewOffset(abs);
+            editorEl.afterNavigation();
+            return;
+          }
+          virtualizer.clearVirtualSelection();
+        }
         if (this.commitTimer !== null) this.commitToCm6();
         editorEl.afterNavigation();
       }
