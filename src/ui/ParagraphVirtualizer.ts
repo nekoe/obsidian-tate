@@ -833,15 +833,24 @@ export class ParagraphVirtualizer {
         const viewW      = this.scrollArea.clientWidth;
         const W          = this.scrollArea.scrollWidth;
 
+        // Hard cap on expansions per call: enough to cover viewport + both margins, with a
+        // small buffer. Prevents O(N) expansion when scrollLeft lands exactly at a document
+        // boundary (e.g. after scrollIntoView on an anchor at x=0) where the expand condition
+        // stays true for every remaining paragraph.
+        const colWidthPx = Math.max(1, this.fontSizePx * VERTICAL_LINE_HEIGHT);
+        const maxExpands = Math.ceil((viewW + EXPAND_MARGIN * 2) / colWidthPx) + 5;
+
         // ---- Left boundary (domEnd) ----
         // Expand: window's left edge (leftWindowOffset) within EXPAND_MARGIN of viewport's
         // left edge. leftWindowOffset accounts for leftAnchor + midLeftSpacer when active.
         // Using leftWindowOffset alone (without + domEnd.width) ensures the value decreases
         // with each expandLeft call, preventing the condition from being a constant that
         // would otherwise cause O(N) expansion when scrollLeft is at the document boundary.
-        while (this.domEnd < this.paragraphRecords.length - 1) {
+        let leftExpCount = 0;
+        while (this.domEnd < this.paragraphRecords.length - 1 && leftExpCount < maxExpands) {
             if (this.leftWindowOffset > scrollLeft - EXPAND_MARGIN) {
                 this.expandLeft();
+                leftExpCount++;
             } else break;
         }
         // Shrink: domEnd's right edge more than SHRINK_MARGIN behind viewport's left edge.
@@ -858,11 +867,13 @@ export class ParagraphVirtualizer {
         // ---- Right boundary (domStart) ----
         // Expand: domStart's left edge within EXPAND_MARGIN of viewport's right edge.
         // rightWindowOffset accounts for rightAnchor + midRightSpacer when active.
-        while (this.domStart > 0) {
+        let rightExpCount = 0;
+        while (this.domStart > 0 && rightExpCount < maxExpands) {
             const rec = this.paragraphRecords[this.domStart];
             const w   = rec.width > 0 ? rec.width : this.estimateWidth(rec.viewLen);
             if (W - this.rightWindowOffset - w < scrollLeft + viewW + EXPAND_MARGIN) {
                 this.expandRight();
+                rightExpCount++;
             } else break;
         }
         // Shrink: domStart's left edge more than SHRINK_MARGIN past viewport's right edge.
@@ -1100,6 +1111,22 @@ export class ParagraphVirtualizer {
             focusEl = this.getWindowDiv(vs.focusParaIdx);
         }
         focusEl?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    }
+
+    // Scrolls the anchor island whose paraIdx matches prevFocusParaIdx into view.
+    // Returns true if an anchor was found and scrolled to.
+    // Called when focus moves away from an anchor island so the user sees the anchor
+    // (document boundary) before the selection shrinks from there.
+    scrollPreviousFocusAnchorIntoView(prevFocusParaIdx: number): boolean {
+        if (this.leftAnchor && this.leftAnchor.paraIdx === prevFocusParaIdx) {
+            this.leftAnchor.div.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+            return true;
+        }
+        if (this.rightAnchor && this.rightAnchor.paraIdx === prevFocusParaIdx) {
+            this.rightAnchor.div.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+            return true;
+        }
+        return false;
     }
 
     // Sets the DOM Range to proxy positions derived from the current VS, so that native
