@@ -154,6 +154,14 @@ export class ParagraphVirtualizer {
         return off;
     }
 
+    // True when a right anchor island is currently pinned in the DOM.
+    // Used by EditorElement.getValue() to account for the extra anchor + mid-spacer children.
+    get hasRightAnchor(): boolean { return this.rightAnchor !== null; }
+
+    // True when a left anchor island is currently pinned in the DOM.
+    // Used by EditorElement.getValue() to account for the extra anchor + mid-spacer children.
+    get hasLeftAnchor(): boolean { return this.leftAnchor !== null; }
+
     // x-offset of the leftmost window div's left edge in the scroll container.
     // When leftAnchor is active, includes leftAnchor width + midLeftSpacer width.
     private get leftWindowOffset(): number {

@@ -51,8 +51,11 @@ export class EditorElement {
         // syncWindowSrcs runs, creating a transient mismatch between domEnd and the DOM.
         // Reading paragraphRecords.length times would miss the extra div (Enter) or read a
         // spacer as a paragraph (Backspace), producing wrong CM6-committed content.
-        const spacerOffset  = virt.rightSpacer ? 1 : 0;
-        const spacerCount   = virt.rightSpacer ? 2 : 0;
+        // Account for anchor island divs + mid-spacers that live between rightSpacer and the
+        // window (or between the window and leftSpacer). Each active anchor occupies 2 children
+        // (anchorDiv + midSpacer), neither of which is a window paragraph.
+        const spacerOffset  = (virt.rightSpacer ? 1 : 0) + (virt.hasRightAnchor ? 2 : 0);
+        const spacerCount   = (virt.rightSpacer ? 2 : 0) + (virt.hasRightAnchor ? 2 : 0) + (virt.hasLeftAnchor ? 2 : 0);
         const actualDivCount = this.el.children.length - spacerCount;
         const nBefore = virt.domStart;
         // Off-window records after the window start at domEnd+1; their indices are stable
@@ -847,7 +850,7 @@ export class EditorElement {
     private paragraphChildIndex(i: number): number {
         const virt = this.virtualizer;
         const windowOffset = virt && virt.domEnd >= 0 ? virt.domStart : 0;
-        return (i - windowOffset) + (virt?.rightSpacer ? 1 : 0);
+        return (i - windowOffset) + (virt?.rightSpacer ? 1 : 0) + (virt?.hasRightAnchor ? 2 : 0);
     }
 
     // Updates paragraph divs to match nextContent, replacing only divs whose line changed.

@@ -2120,6 +2120,16 @@ var ParagraphVirtualizer = class {
     if (this.rightAnchor) off += 2;
     return off;
   }
+  // True when a right anchor island is currently pinned in the DOM.
+  // Used by EditorElement.getValue() to account for the extra anchor + mid-spacer children.
+  get hasRightAnchor() {
+    return this.rightAnchor !== null;
+  }
+  // True when a left anchor island is currently pinned in the DOM.
+  // Used by EditorElement.getValue() to account for the extra anchor + mid-spacer children.
+  get hasLeftAnchor() {
+    return this.leftAnchor !== null;
+  }
   // x-offset of the leftmost window div's left edge in the scroll container.
   // When leftAnchor is active, includes leftAnchor width + midLeftSpacer width.
   get leftWindowOffset() {
@@ -3037,8 +3047,8 @@ var EditorElement = class {
     if (!virt || virt.domEnd < 0) {
       return Array.from(this.el.childNodes).map((n) => serializeNode(n, this.el)).join("");
     }
-    const spacerOffset = virt.rightSpacer ? 1 : 0;
-    const spacerCount = virt.rightSpacer ? 2 : 0;
+    const spacerOffset = (virt.rightSpacer ? 1 : 0) + (virt.hasRightAnchor ? 2 : 0);
+    const spacerCount = (virt.rightSpacer ? 2 : 0) + (virt.hasRightAnchor ? 2 : 0) + (virt.hasLeftAnchor ? 2 : 0);
     const actualDivCount = this.el.children.length - spacerCount;
     const nBefore = virt.domStart;
     const nAfter = Math.max(0, virt.paragraphRecords.length - (virt.domEnd + 1));
@@ -3671,7 +3681,7 @@ var EditorElement = class {
   paragraphChildIndex(i) {
     const virt = this.virtualizer;
     const windowOffset = virt && virt.domEnd >= 0 ? virt.domStart : 0;
-    return i - windowOffset + ((virt == null ? void 0 : virt.rightSpacer) ? 1 : 0);
+    return i - windowOffset + ((virt == null ? void 0 : virt.rightSpacer) ? 1 : 0) + ((virt == null ? void 0 : virt.hasRightAnchor) ? 2 : 0);
   }
   // Updates paragraph divs to match nextContent, replacing only divs whose line changed.
   // Returns the changed/added divs, or null if hasCleanDivStructure failed (full rebuild).
