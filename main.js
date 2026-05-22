@@ -2353,6 +2353,7 @@ var ParagraphVirtualizer = class {
   // Used by Cmd-A (select-all) so the selection can span the entire activeDocument.
   // Performs a single replaceChildren call to minimise layout thrashing.
   expandWindowToFull() {
+    this.forceRemoveAllAnchors();
     const frag = activeDocument.createDocumentFragment();
     for (const rec of this.paragraphRecords) {
       const div = activeDocument.createElement("div");
@@ -2370,8 +2371,22 @@ var ParagraphVirtualizer = class {
     this.applyRightSpacer(0);
     this.applyLeftSpacer(0);
   }
-  // Called on selectionchange. Window management is scroll-driven, so this is a no-op.
+  // Called on selectionchange. Absorbs cursor-type anchor islands when the cursor has moved
+  // away from them, so the anchor does not persist indefinitely after the user clicks elsewhere.
+  // Selection-type anchors (created by Cmd-A) are left untouched; they are released by
+  // clearVirtualSelection() when the VS is cleared.
   ensureWindowAroundCursor() {
+    var _a, _b;
+    const sel = window.getSelection();
+    if (!sel) return;
+    const cursorNode = sel.anchorNode;
+    if (!cursorNode) return;
+    if (((_a = this.rightAnchor) == null ? void 0 : _a.type) === "cursor" && !this.rightAnchor.div.contains(cursorNode)) {
+      this.absorbRightAnchor();
+    }
+    if (((_b = this.leftAnchor) == null ? void 0 : _b.type) === "cursor" && !this.leftAnchor.div.contains(cursorNode)) {
+      this.absorbLeftAnchor();
+    }
   }
   // ---- Anchor island management ----
   // Pins paragraph paraIdx as a right anchor island between rightSpacer and the main window.

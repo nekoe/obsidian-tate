@@ -440,6 +440,12 @@ export class ParagraphVirtualizer {
     // Used by Cmd-A (select-all) so the selection can span the entire activeDocument.
     // Performs a single replaceChildren call to minimise layout thrashing.
     expandWindowToFull(): void {
+        // Anchor islands and mid-spacers must be removed before replaceChildren so that
+        // rightAnchor / midRightSpacer references do not go stale. If they remained non-null
+        // after replaceChildren, windowChildOffset would still return 3, causing every
+        // subsequent getWindowDiv() / shrink / expand call to index editorEl.children by the
+        // wrong offset.
+        this.forceRemoveAllAnchors();
         const frag = activeDocument.createDocumentFragment();
         for (const rec of this.paragraphRecords) {
             const div = activeDocument.createElement('div');
@@ -458,8 +464,22 @@ export class ParagraphVirtualizer {
         this.applyLeftSpacer(0);
     }
 
-    // Called on selectionchange. Window management is scroll-driven, so this is a no-op.
-    ensureWindowAroundCursor(): void {}
+    // Called on selectionchange. Absorbs cursor-type anchor islands when the cursor has moved
+    // away from them, so the anchor does not persist indefinitely after the user clicks elsewhere.
+    // Selection-type anchors (created by Cmd-A) are left untouched; they are released by
+    // clearVirtualSelection() when the VS is cleared.
+    ensureWindowAroundCursor(): void {
+        const sel = window.getSelection();
+        if (!sel) return;
+        const cursorNode = sel.anchorNode;
+        if (!cursorNode) return;
+        if (this.rightAnchor?.type === 'cursor' && !this.rightAnchor.div.contains(cursorNode)) {
+            this.absorbRightAnchor();
+        }
+        if (this.leftAnchor?.type === 'cursor' && !this.leftAnchor.div.contains(cursorNode)) {
+            this.absorbLeftAnchor();
+        }
+    }
 
     // ---- Anchor island management ----
 
