@@ -833,15 +833,25 @@ export class ParagraphVirtualizer {
         const viewW      = this.scrollArea.clientWidth;
         const W          = this.scrollArea.scrollWidth;
 
+        // Per-call expansion cap: bounds the number of expandLeft/expandRight iterations
+        // to at most (viewport + one margin) worth of paragraphs. Without this cap, the
+        // expand condition is unreachable when scrollLeft < EXPAND_MARGIN (leftWindowOffset
+        // can never reach the negative threshold), causing O(N) DOM insertions in one call.
+        // This cap is safe because callers (scroll events) fire frequently enough to catch up.
+        const colW = Math.max(1, this.fontSizePx * VERTICAL_LINE_HEIGHT);
+        const maxExpands = Math.ceil((viewW + EXPAND_MARGIN) / colW);
+
         // ---- Left boundary (domEnd) ----
         // Expand: window's left edge (leftWindowOffset) within EXPAND_MARGIN of viewport's
         // left edge. leftWindowOffset accounts for leftAnchor + midLeftSpacer when active.
         // Using leftWindowOffset alone (without + domEnd.width) ensures the value decreases
         // with each expandLeft call, preventing the condition from being a constant that
         // would otherwise cause O(N) expansion when scrollLeft is at the document boundary.
-        while (this.domEnd < this.paragraphRecords.length - 1) {
+        let leftExp = 0;
+        while (this.domEnd < this.paragraphRecords.length - 1 && leftExp < maxExpands) {
             if (this.leftWindowOffset > scrollLeft - EXPAND_MARGIN) {
                 this.expandLeft();
+                leftExp++;
             } else break;
         }
         // Shrink: domEnd's right edge more than SHRINK_MARGIN behind viewport's left edge.
@@ -858,11 +868,13 @@ export class ParagraphVirtualizer {
         // ---- Right boundary (domStart) ----
         // Expand: domStart's left edge within EXPAND_MARGIN of viewport's right edge.
         // rightWindowOffset accounts for rightAnchor + midRightSpacer when active.
-        while (this.domStart > 0) {
+        let rightExp = 0;
+        while (this.domStart > 0 && rightExp < maxExpands) {
             const rec = this.paragraphRecords[this.domStart];
             const w   = rec.width > 0 ? rec.width : this.estimateWidth(rec.viewLen);
             if (W - this.rightWindowOffset - w < scrollLeft + viewW + EXPAND_MARGIN) {
                 this.expandRight();
+                rightExp++;
             } else break;
         }
         // Shrink: domStart's left edge more than SHRINK_MARGIN past viewport's right edge.
@@ -1084,6 +1096,19 @@ export class ParagraphVirtualizer {
         return true;
     }
 
+    // Scrolls el into view within scrollArea using direct scrollLeft assignment (always instant,
+    // regardless of CSS scroll-behavior). Implements `inline: 'nearest'` semantics: scroll the
+    // minimum amount horizontally to bring el into the visible area; do nothing if already visible.
+    private scrollIntoViewNow(el: HTMLElement): void {
+        const elRect   = el.getBoundingClientRect();
+        const areaRect = this.scrollArea.getBoundingClientRect();
+        if (elRect.left < areaRect.left) {
+            this.scrollArea.scrollLeft += elRect.left - areaRect.left;
+        } else if (elRect.right > areaRect.right) {
+            this.scrollArea.scrollLeft += elRect.right - areaRect.right;
+        }
+    }
+
     // Scrolls the paragraph containing the VS focus into view. Called after
     // syncDomRangeToVirtual() since programmatic setBaseAndExtent does not trigger browser
     // auto-scroll. Also called when focus escapes into a spacer, to prevent the browser from
@@ -1099,7 +1124,56 @@ export class ParagraphVirtualizer {
         } else {
             focusEl = this.getWindowDiv(vs.focusParaIdx);
         }
-        focusEl?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+        if (focusEl) this.scrollIntoViewNow(focusEl);
+    }
+
+    // Called from selectionchange when VS is active. Detects when a Shift+Arrow key moved
+    // the DOM focus from a selection-type anchor island into the adjacent mid-spacer — meaning
+    // the user is shrinking the VS one paragraph away from the document boundary.
+    //
+    // When detected, teleports the DOM window to the anchor area (so the new focus paragraph
+    // is a real DOM node), re-syncs the VS, and jumps the viewport to show the anchor.
+    // Returns true if handled (caller should skip the normal tryUpdateFocusFromDom flow).
+    handleMidSpacerFocusEscape(sel: Selection): boolean {
+        const vs = this.virtualSelection;
+        if (!vs) return false;
+        const focusNode = sel.focusNode;
+        if (!focusNode) return false;
+
+        let anchorParaIdx = -1;
+        let newFocusParaIdx = -1;
+
+        if (this.midLeftSpacer?.contains(focusNode) && vs.focusParaIdx === this.leftAnchor?.paraIdx) {
+            // Focus escaped from leftAnchor into midLeftSpacer (Shift+Right from document end).
+            newFocusParaIdx = vs.focusParaIdx - 1;
+            anchorParaIdx   = this.leftAnchor.paraIdx;
+        } else if (this.midRightSpacer?.contains(focusNode) && vs.focusParaIdx === this.rightAnchor?.paraIdx) {
+            // Focus escaped from rightAnchor into midRightSpacer (Shift+Left from document start).
+            newFocusParaIdx = vs.focusParaIdx + 1;
+            anchorParaIdx   = this.rightAnchor.paraIdx;
+        }
+
+        if (anchorParaIdx < 0) return false;
+        if (newFocusParaIdx < 0 || newFocusParaIdx >= this.paragraphRecords.length) return false;
+        if (newFocusParaIdx === vs.anchorParaIdx) return false; // would collapse selection
+
+        const newViewOff = this.paragraphRecords[newFocusParaIdx]?.viewLen ?? 0;
+        this.virtualSelection = { ...vs, focusParaIdx: newFocusParaIdx, focusViewOff: newViewOff };
+
+        // Teleport the DOM window to be centred on the anchor paragraph so the new
+        // focus paragraph is a real DOM node (not a boundary proxy). Anchors are cleared
+        // by teleportWindowTo → forceRemoveAllAnchors; the spacer widths are recomputed
+        // by resetWindow inside teleportWindowTo.
+        this.teleportWindowTo(anchorParaIdx);
+        this.syncDomRangeToVirtual();
+
+        // Scroll the viewport to show the anchor (document end or start) instantly.
+        const isDocEnd = (anchorParaIdx === this.paragraphRecords.length - 1);
+        this.scrollArea.scrollLeft = isDocEnd
+            ? 0
+            : this.scrollArea.scrollWidth - this.scrollArea.clientWidth;
+        this.adjustWindowOnScroll();
+        return true;
     }
 
     // Sets the DOM Range to proxy positions derived from the current VS, so that native
