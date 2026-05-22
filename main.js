@@ -2359,28 +2359,6 @@ var ParagraphVirtualizer = class {
     this.buildDomWindow(this.paragraphRecords.slice(lo, hi + 1).map((r) => r.src));
     this.resetWindow(lo, hi);
   }
-  // Replaces all paragraph divs with the full document content (one div per record).
-  // Used by Cmd-A (select-all) so the selection can span the entire activeDocument.
-  // Performs a single replaceChildren call to minimise layout thrashing.
-  expandWindowToFull() {
-    this.forceRemoveAllAnchors();
-    const frag = activeDocument.createDocumentFragment();
-    for (const rec of this.paragraphRecords) {
-      const div = activeDocument.createElement("div");
-      div.replaceChildren((0, import_obsidian3.sanitizeHTMLToDom)(parseInlineToHtml(rec.src) || "<br>"));
-      frag.appendChild(div);
-    }
-    const nodes = Array.from(frag.childNodes);
-    if (this.rightSpacer && this.leftSpacer) {
-      this.editorEl.replaceChildren(this.rightSpacer, ...nodes, this.leftSpacer);
-    } else {
-      this.editorEl.replaceChildren(...nodes);
-    }
-    this.domStart = 0;
-    this.domEnd = this.paragraphRecords.length - 1;
-    this.applyRightSpacer(0);
-    this.applyLeftSpacer(0);
-  }
   // Called on selectionchange. Absorbs cursor-type anchor islands when the cursor has moved
   // away from them, so the anchor does not persist indefinitely after the user clicks elsewhere.
   // Selection-type anchors (created by Cmd-A) are left untouched; they are released by
