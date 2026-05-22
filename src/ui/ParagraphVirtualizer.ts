@@ -834,12 +834,13 @@ export class ParagraphVirtualizer {
         const W          = this.scrollArea.scrollWidth;
 
         // ---- Left boundary (domEnd) ----
-        // Expand: domEnd's right edge within EXPAND_MARGIN of viewport's left edge.
-        // leftWindowOffset accounts for leftAnchor + midLeftSpacer when active.
+        // Expand: window's left edge (leftWindowOffset) within EXPAND_MARGIN of viewport's
+        // left edge. leftWindowOffset accounts for leftAnchor + midLeftSpacer when active.
+        // Using leftWindowOffset alone (without + domEnd.width) ensures the value decreases
+        // with each expandLeft call, preventing the condition from being a constant that
+        // would otherwise cause O(N) expansion when scrollLeft is at the document boundary.
         while (this.domEnd < this.paragraphRecords.length - 1) {
-            const rec = this.paragraphRecords[this.domEnd];
-            const w   = rec.width > 0 ? rec.width : this.estimateWidth(rec.viewLen);
-            if (this.leftWindowOffset + w > scrollLeft - EXPAND_MARGIN) {
+            if (this.leftWindowOffset > scrollLeft - EXPAND_MARGIN) {
                 this.expandLeft();
             } else break;
         }
@@ -1021,12 +1022,22 @@ export class ParagraphVirtualizer {
 
     // Called from selectionchange when VS is active and the event is not programmatic.
     // Reads the new focus position from the DOM and updates VS.focusParaIdx/focusViewOff.
-    // Returns true if VS was changed (caller should then call syncDomRangeToVirtual()).
+    // Returns true if the DOM range should be re-synced (caller should then call
+    // syncDomRangeToVirtual() and scrollFocusIntoView()).
+    // Returns true WITHOUT updating VS when the focus escaped into an outer spacer — the
+    // spacer-escape triggers re-sync and scroll-into-view, preventing browser auto-scroll to
+    // the document boundary (which would otherwise cause O(N) DOM expansion).
     tryUpdateFocusFromDom(sel: Selection): boolean {
         const vs = this.virtualSelection;
         if (!vs) return false;
         const focusNode = sel.focusNode;
         if (!focusNode) return false;
+
+        // Focus escaped into an outer spacer (document-start or document-end boundary).
+        // Re-sync without updating VS so syncDomRangeToVirtual re-clamps to the valid position.
+        if ((this.rightSpacer?.contains(focusNode)) || (this.leftSpacer?.contains(focusNode))) {
+            return true;
+        }
 
         // If the DOM focus is at the proxy position that syncDomRangeToVirtual would set,
         // this selectionchange was triggered by our own setBaseAndExtent (not by the user).
@@ -1046,6 +1057,24 @@ export class ParagraphVirtualizer {
         if (focusParaIdx === vs.focusParaIdx && newFocusViewOff === vs.focusViewOff) return false;
         this.virtualSelection = { ...vs, focusParaIdx, focusViewOff: newFocusViewOff };
         return true;
+    }
+
+    // Scrolls the paragraph containing the VS focus into view. Called after
+    // syncDomRangeToVirtual() since programmatic setBaseAndExtent does not trigger browser
+    // auto-scroll. Also called when focus escapes into a spacer, to prevent the browser from
+    // auto-scrolling to the document boundary (which would trigger O(N) DOM expansion).
+    scrollFocusIntoView(): void {
+        const vs = this.virtualSelection;
+        if (!vs) return;
+        let focusEl: HTMLElement | null = null;
+        if (this.leftAnchor?.paraIdx === vs.focusParaIdx) {
+            focusEl = this.leftAnchor.div;
+        } else if (this.rightAnchor?.paraIdx === vs.focusParaIdx) {
+            focusEl = this.rightAnchor.div;
+        } else {
+            focusEl = this.getWindowDiv(vs.focusParaIdx);
+        }
+        focusEl?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
     }
 
     // Sets the DOM Range to proxy positions derived from the current VS, so that native
