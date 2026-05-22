@@ -328,12 +328,10 @@ export class VerticalWritingView extends ItemView {
                         if (sel.isCollapsed) {
                             virtualizer.clearVirtualSelection();
                         } else {
-                            if (!virtualizer.handleMidSpacerFocusEscape(sel)) {
-                                const changed = virtualizer.tryUpdateFocusFromDom(sel);
-                                if (changed) {
-                                    virtualizer.syncDomRangeToVirtual();
-                                    virtualizer.scrollFocusIntoView();
-                                }
+                            const changed = virtualizer.tryUpdateFocusFromDom(sel);
+                            if (changed) {
+                                virtualizer.syncDomRangeToVirtual();
+                                virtualizer.scrollFocusIntoView();
                             }
                         }
                     } else if (!sel.isCollapsed && virtualizer.tryInitVsFromDomSelection(sel)) {
