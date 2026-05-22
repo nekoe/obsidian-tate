@@ -334,6 +334,11 @@ export class VerticalWritingView extends ItemView {
                                 virtualizer.scrollFocusIntoView();
                             }
                         }
+                    } else if (!sel.isCollapsed && virtualizer.tryInitVsFromDomSelection(sel)) {
+                        // DOM selection crosses an anchor island: initialize VS so that
+                        // copy/cut use the VS-aware code path (correct paragraph range)
+                        // rather than cloneContents() which includes spacer divs.
+                        virtualizer.syncDomRangeToVirtual();
                     }
                 }
             }

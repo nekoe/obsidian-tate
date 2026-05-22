@@ -1020,6 +1020,31 @@ export class ParagraphVirtualizer {
         this.adjustWindowOnScroll();
     }
 
+    // Called from selectionchange when VS is null and the DOM selection is non-collapsed.
+    // If one or both endpoints are in anchor island divs, initializes VS from the real
+    // paragraph indices and returns true. The caller should then call syncDomRangeToVirtual()
+    // to normalize the DOM selection to proxy positions.
+    // Without this, copy/cut would fall back to cloneContents() which includes spacer divs
+    // and out-of-window paragraphs in the wrong order, producing corrupted clipboard content.
+    tryInitVsFromDomSelection(sel: Selection): boolean {
+        if (this.virtualSelection || sel.isCollapsed) return false;
+        const anchorDiv = this.findParaDiv(sel.anchorNode!);
+        const focusDiv  = this.findParaDiv(sel.focusNode!);
+        const anchorIdx = anchorDiv ? this.getParagraphIndex(anchorDiv) : -1;
+        const focusIdx  = focusDiv  ? this.getParagraphIndex(focusDiv)  : -1;
+        if (anchorIdx < 0 || focusIdx < 0) return false;
+        const anchorIsIsland = this.rightAnchor?.div === anchorDiv || this.leftAnchor?.div === anchorDiv;
+        const focusIsIsland  = this.rightAnchor?.div === focusDiv  || this.leftAnchor?.div === focusDiv;
+        if (!anchorIsIsland && !focusIsIsland) return false;
+        this.virtualSelection = {
+            anchorParaIdx: anchorIdx,
+            anchorViewOff: computeViewOffsetInDiv(anchorDiv!, this.editorEl, sel.anchorNode!, sel.anchorOffset),
+            focusParaIdx:  focusIdx,
+            focusViewOff:  computeViewOffsetInDiv(focusDiv!, this.editorEl, sel.focusNode!, sel.focusOffset),
+        };
+        return true;
+    }
+
     // Called from selectionchange when VS is active and the event is not programmatic.
     // Reads the new focus position from the DOM and updates VS.focusParaIdx/focusViewOff.
     // Returns true if the DOM range should be re-synced (caller should then call
