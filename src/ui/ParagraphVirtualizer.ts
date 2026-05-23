@@ -897,8 +897,17 @@ export class ParagraphVirtualizer {
         this.correctSpacerAfterExpand(domStartBefore, domEndBefore);
 
         // Re-sync the DOM Range to the VS proxy positions after the window has settled.
-        // Without this, the selection appears stuck at the old proxy boundary div.
-        if (this.virtualSelection) this.syncDomRangeToVirtual();
+        // Before resetting, capture any focus movement (e.g., Shift+Arrow into a mid-spacer)
+        // that occurred between the browser's selection update and this scroll event firing.
+        if (this.virtualSelection) {
+            const sel = window.getSelection();
+            if (sel && !sel.isCollapsed) {
+                const focusUpdated = this.tryUpdateFocusFromDom(sel);
+                if (focusUpdated) this.scrollFocusIntoView();
+            }
+            this.syncDomRangeToVirtual();
+        }
+
     }
 
     // Reads the actual rendered widths of all in-window paragraph divs and updates
@@ -1064,9 +1073,9 @@ export class ParagraphVirtualizer {
     // Reads the new focus position from the DOM and updates VS.focusParaIdx/focusViewOff.
     // Returns true if the DOM range should be re-synced (caller should then call
     // syncDomRangeToVirtual() and scrollFocusIntoView()).
-    // Returns true WITHOUT updating VS when the focus escaped into an outer spacer — the
-    // spacer-escape triggers re-sync and scroll-into-view, preventing browser auto-scroll to
-    // the document boundary (which would otherwise cause O(N) DOM expansion).
+    // Returns true WITHOUT updating VS when the focus escaped into an outer or mid spacer —
+    // the escape triggers re-sync and scroll-into-view, which drives a large auto-scroll that
+    // in turn triggers the teleport-on-jump path in adjustWindowOnScroll.
     tryUpdateFocusFromDom(sel: Selection): boolean {
         const vs = this.virtualSelection;
         if (!vs) return false;
@@ -1076,6 +1085,15 @@ export class ParagraphVirtualizer {
         // Focus escaped into an outer spacer (document-start or document-end boundary).
         // Re-sync without updating VS so syncDomRangeToVirtual re-clamps to the valid position.
         if ((this.rightSpacer?.contains(focusNode)) || (this.leftSpacer?.contains(focusNode))) {
+            return true;
+        }
+
+        // Focus escaped into a mid-spacer (gap between anchor island and window edge).
+        // This happens when Shift+Arrow moves focus from an anchor island div into the
+        // adjacent mid-spacer. Treat like outer spacer: VS is unchanged but return true so
+        // scrollFocusIntoView fires, driving a large scroll that triggers the
+        // teleport-on-jump path (same mechanism as the outer-spacer escape).
+        if ((this.midLeftSpacer?.contains(focusNode)) || (this.midRightSpacer?.contains(focusNode))) {
             return true;
         }
 

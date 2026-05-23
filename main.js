@@ -2733,7 +2733,14 @@ var ParagraphVirtualizer = class {
       } else break;
     }
     this.correctSpacerAfterExpand(domStartBefore, domEndBefore);
-    if (this.virtualSelection) this.syncDomRangeToVirtual();
+    if (this.virtualSelection) {
+      const sel = window.getSelection();
+      if (sel && !sel.isCollapsed) {
+        const focusUpdated = this.tryUpdateFocusFromDom(sel);
+        if (focusUpdated) this.scrollFocusIntoView();
+      }
+      this.syncDomRangeToVirtual();
+    }
   }
   // Reads the actual rendered widths of all in-window paragraph divs and updates
   // paragraphRecords[i].width. A single layout flush — no DOM mutations between reads.
@@ -2880,16 +2887,19 @@ var ParagraphVirtualizer = class {
   // Reads the new focus position from the DOM and updates VS.focusParaIdx/focusViewOff.
   // Returns true if the DOM range should be re-synced (caller should then call
   // syncDomRangeToVirtual() and scrollFocusIntoView()).
-  // Returns true WITHOUT updating VS when the focus escaped into an outer spacer — the
-  // spacer-escape triggers re-sync and scroll-into-view, preventing browser auto-scroll to
-  // the document boundary (which would otherwise cause O(N) DOM expansion).
+  // Returns true WITHOUT updating VS when the focus escaped into an outer or mid spacer —
+  // the escape triggers re-sync and scroll-into-view, which drives a large auto-scroll that
+  // in turn triggers the teleport-on-jump path in adjustWindowOnScroll.
   tryUpdateFocusFromDom(sel) {
-    var _a, _b;
+    var _a, _b, _c, _d;
     const vs = this.virtualSelection;
     if (!vs) return false;
     const focusNode = sel.focusNode;
     if (!focusNode) return false;
     if (((_a = this.rightSpacer) == null ? void 0 : _a.contains(focusNode)) || ((_b = this.leftSpacer) == null ? void 0 : _b.contains(focusNode))) {
+      return true;
+    }
+    if (((_c = this.midLeftSpacer) == null ? void 0 : _c.contains(focusNode)) || ((_d = this.midRightSpacer) == null ? void 0 : _d.contains(focusNode))) {
       return true;
     }
     const expectedFocusProxy = this.proxyForEndpoint(vs.focusParaIdx, vs.focusViewOff);
