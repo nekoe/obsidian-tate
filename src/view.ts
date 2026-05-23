@@ -351,7 +351,12 @@ export class VerticalWritingView extends ItemView {
                 if (this.selectionChangeRafId !== null) window.cancelAnimationFrame(this.selectionChangeRafId);
                 this.selectionChangeRafId = window.requestAnimationFrame(() => {
                     this.selectionChangeRafId = null;
-                    if (activeDocument.activeElement === editorEl.el && !editorEl.isInlineExpanded()) {
+                    // Skip while a VirtualSelection is active: the DOM Range is placed on an
+                    // anchor island div, causing getViewCursorOffset() to walk past all paragraphs
+                    // and return the total file length.  The pre-VS cursor position (saved just
+                    // before Cmd-A) is the correct restore target; do not overwrite it.
+                    if (activeDocument.activeElement === editorEl.el && !editorEl.isInlineExpanded()
+                            && !virtualizer.getVirtualSelection()) {
                         this.lastKnownViewOffset = editorEl.getViewCursorOffset();
                     }
                 });
@@ -780,8 +785,20 @@ export class VerticalWritingView extends ItemView {
                 // made while this view was inactive (e.g. edits in MarkdownView).
                 // Skipped when pendingCursorOffset is set: the file was just loaded from vault
                 // by loadFile(), so its content is already current.
+                //
+                // Clear any active VS before restoring the cursor.  When the user switches
+                // away, the VS/anchor state becomes misaligned with the restored browser
+                // selection, causing syncDomRangeToVirtual → tryUpdateFocusFromDom to fire
+                // stale proxies and scroll to the wrong position.  The pre-VS cursor position
+                // (preserved by the VS guard in the selectionchange rAF) is the correct
+                // restore target; the VS selection is treated as dismissed by the tab switch.
+                this.virtualizer?.clearVirtualSelection();
                 if (this.lastKnownViewOffset !== null) {
                     el.setViewCursorOffset(this.lastKnownViewOffset);
+                    // When the cursor paragraph was outside the DOM window, setViewCursorOffset
+                    // teleported the window but left the viewport at its pre-switch position.
+                    // Scroll to re-align; center when the window jumped far, nearest otherwise.
+                    if (el.cursorJumped) el.scrollCursorIntoView('center');
                 }
                 void this.syncCoordinator?.checkAndApplyExternalChange();
             }

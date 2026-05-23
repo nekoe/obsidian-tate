@@ -4802,7 +4802,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
         if (this.selectionChangeRafId !== null) window.cancelAnimationFrame(this.selectionChangeRafId);
         this.selectionChangeRafId = window.requestAnimationFrame(() => {
           this.selectionChangeRafId = null;
-          if (activeDocument.activeElement === editorEl.el && !editorEl.isInlineExpanded()) {
+          if (activeDocument.activeElement === editorEl.el && !editorEl.isInlineExpanded() && !virtualizer.getVirtualSelection()) {
             this.lastKnownViewOffset = editorEl.getViewCursorOffset();
           }
         });
@@ -5124,7 +5124,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
   // Body of the "this leaf became active" branch, shared between active-leaf-change
   // and notifyActivated() (called when revealLeaf doesn't fire active-leaf-change).
   onThisLeafActivated() {
-    var _a, _b;
+    var _a, _b, _c;
     this.pushEscScope();
     this.plugin.updateCharCount(countChars(this.lastCommittedContent));
     const el = this.editorEl;
@@ -5149,10 +5149,12 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
         this.lastKnownViewOffset = el.getViewCursorOffset();
         void ((_a = this.syncCoordinator) == null ? void 0 : _a.checkAndApplyExternalChange());
       } else {
+        (_b = this.virtualizer) == null ? void 0 : _b.clearVirtualSelection();
         if (this.lastKnownViewOffset !== null) {
           el.setViewCursorOffset(this.lastKnownViewOffset);
+          if (el.cursorJumped) el.scrollCursorIntoView("center");
         }
-        void ((_b = this.syncCoordinator) == null ? void 0 : _b.checkAndApplyExternalChange());
+        void ((_c = this.syncCoordinator) == null ? void 0 : _c.checkAndApplyExternalChange());
       }
     }
   }
