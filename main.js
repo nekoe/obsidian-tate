@@ -5214,9 +5214,11 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
    *  Sets pendingParagraphJump so that onThisLeafActivated (fired by revealLeaf) also restores
    *  by index rather than re-applying the ambiguous lastKnownViewOffset. */
   jumpToParagraphIndex(idx) {
+    var _a;
     const el = this.editorEl;
     if (!el) return;
     el.el.focus({ preventScroll: true });
+    (_a = this.virtualizer) == null ? void 0 : _a.clearVirtualSelection();
     el.setViewCursorToParagraphIndex(idx);
     this.pendingParagraphJump = idx;
     this.lastKnownViewOffset = el.getViewCursorOffset();
