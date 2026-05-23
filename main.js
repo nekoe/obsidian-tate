@@ -4802,7 +4802,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
         if (this.selectionChangeRafId !== null) window.cancelAnimationFrame(this.selectionChangeRafId);
         this.selectionChangeRafId = window.requestAnimationFrame(() => {
           this.selectionChangeRafId = null;
-          if (activeDocument.activeElement === editorEl.el && !editorEl.isInlineExpanded() && !virtualizer.getVirtualSelection()) {
+          if (activeDocument.activeElement === editorEl.el && !editorEl.isInlineExpanded()) {
             this.lastKnownViewOffset = editorEl.getViewCursorOffset();
           }
         });
@@ -5129,8 +5129,8 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
     this.plugin.updateCharCount(countChars(this.lastCommittedContent));
     const el = this.editorEl;
     if (el) {
-      el.el.focus({ preventScroll: true });
       if (this.pendingCursorOffset !== null) {
+        el.el.focus({ preventScroll: true });
         const gen = this.scrollRestoringGeneration;
         const offset = this.pendingCursorOffset;
         this.pendingCursorOffset = null;
@@ -5143,6 +5143,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
           el.scrollCursorIntoView();
         });
       } else if (this.pendingParagraphJump !== null) {
+        el.el.focus({ preventScroll: true });
         const idx = this.pendingParagraphJump;
         this.pendingParagraphJump = null;
         el.setViewCursorToParagraphIndex(idx);
@@ -5150,10 +5151,6 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
         void ((_a = this.syncCoordinator) == null ? void 0 : _a.checkAndApplyExternalChange());
       } else {
         (_b = this.virtualizer) == null ? void 0 : _b.clearVirtualSelection();
-        if (this.lastKnownViewOffset !== null) {
-          el.setViewCursorOffset(this.lastKnownViewOffset);
-          if (el.cursorJumped) el.scrollCursorIntoView("center");
-        }
         void ((_c = this.syncCoordinator) == null ? void 0 : _c.checkAndApplyExternalChange());
       }
     }

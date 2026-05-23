@@ -351,12 +351,7 @@ export class VerticalWritingView extends ItemView {
                 if (this.selectionChangeRafId !== null) window.cancelAnimationFrame(this.selectionChangeRafId);
                 this.selectionChangeRafId = window.requestAnimationFrame(() => {
                     this.selectionChangeRafId = null;
-                    // Skip while a VirtualSelection is active: the DOM Range is placed on an
-                    // anchor island div, causing getViewCursorOffset() to walk past all paragraphs
-                    // and return the total file length.  The pre-VS cursor position (saved just
-                    // before Cmd-A) is the correct restore target; do not overwrite it.
-                    if (activeDocument.activeElement === editorEl.el && !editorEl.isInlineExpanded()
-                            && !virtualizer.getVirtualSelection()) {
+                    if (activeDocument.activeElement === editorEl.el && !editorEl.isInlineExpanded()) {
                         this.lastKnownViewOffset = editorEl.getViewCursorOffset();
                     }
                 });
@@ -753,12 +748,12 @@ export class VerticalWritingView extends ItemView {
         this.plugin.updateCharCount(countChars(this.lastCommittedContent));
         const el = this.editorEl;
         if (el) {
-            // focus() resets the caret to the start; restore it immediately after.
-            el.el.focus({ preventScroll: true });
             if (this.pendingCursorOffset !== null) {
                 // New file was loaded in the background: restore the saved offset and scroll.
+                // focus() is called first so the caret can be placed immediately after.
                 // Defer hide + scroll to rAF 1 so the spinner is visible on the first
                 // paint when the tab becomes active (matches restoreViewOffset active path).
+                el.el.focus({ preventScroll: true });
                 const gen = this.scrollRestoringGeneration; // snapshot for rAF guard
                 const offset = this.pendingCursorOffset;
                 this.pendingCursorOffset = null;
@@ -775,31 +770,21 @@ export class VerticalWritingView extends ItemView {
             } else if (this.pendingParagraphJump !== null) {
                 // Outline jump: revealLeaf triggered active-leaf-change before the safety-clear
                 // rAF fired. Restore by paragraph index to avoid the viewOffset boundary ambiguity.
+                el.el.focus({ preventScroll: true });
                 const idx = this.pendingParagraphJump;
                 this.pendingParagraphJump = null;
                 el.setViewCursorToParagraphIndex(idx);
                 this.lastKnownViewOffset = el.getViewCursorOffset();
                 void this.syncCoordinator?.checkAndApplyExternalChange();
             } else {
-                // Normal tab switch: restore cursor, then check for external file changes
-                // made while this view was inactive (e.g. edits in MarkdownView).
-                // Skipped when pendingCursorOffset is set: the file was just loaded from vault
-                // by loadFile(), so its content is already current.
-                //
-                // Clear any active VS before restoring the cursor.  When the user switches
-                // away, the VS/anchor state becomes misaligned with the restored browser
-                // selection, causing syncDomRangeToVirtual → tryUpdateFocusFromDom to fire
-                // stale proxies and scroll to the wrong position.  The pre-VS cursor position
-                // (preserved by the VS guard in the selectionchange rAF) is the correct
-                // restore target; the VS selection is treated as dismissed by the tab switch.
+                // Normal tab switch: preserve the scroll position exactly as the user left it.
+                // focus() is intentionally skipped — calling it restores the browser's last
+                // selection (which may be a VS proxy), triggering unwanted scroll.  The caret
+                // is lost until the user clicks or types, which is an acceptable trade-off for
+                // keeping the viewport stable.
+                // Clear any active VS so anchor island divs are removed from the DOM before
+                // checkAndApplyExternalChange() may rebuild it.
                 this.virtualizer?.clearVirtualSelection();
-                if (this.lastKnownViewOffset !== null) {
-                    el.setViewCursorOffset(this.lastKnownViewOffset);
-                    // When the cursor paragraph was outside the DOM window, setViewCursorOffset
-                    // teleported the window but left the viewport at its pre-switch position.
-                    // Scroll to re-align; center when the window jumped far, nearest otherwise.
-                    if (el.cursorJumped) el.scrollCursorIntoView('center');
-                }
                 void this.syncCoordinator?.checkAndApplyExternalChange();
             }
         }
