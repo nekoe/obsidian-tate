@@ -104,6 +104,9 @@ export class ParagraphVirtualizer {
     // Updated by setFontSize() when plugin settings change.
     private fontSizePx = 22; // matches DEFAULT_SETTINGS.fontSize
 
+    // Last observed scrollLeft; used to detect large jumps in adjustWindowOnScroll.
+    private prevScrollLeft = -1;
+
     constructor(
         private readonly editorEl: HTMLElement,
         private readonly scrollArea: HTMLElement,
@@ -831,7 +834,19 @@ export class ParagraphVirtualizer {
         // Read layout properties once before any mutations to avoid thrashing.
         const scrollLeft = this.scrollArea.scrollLeft;
         const viewW      = this.scrollArea.clientWidth;
-        const W          = this.scrollArea.scrollWidth;
+        let W            = this.scrollArea.scrollWidth; // 'let': may be updated after teleport
+
+        // When a virtual selection is active and the viewport jumps by more than 10 screen
+        // widths, the browser has auto-scrolled to reveal a selection endpoint (e.g. after
+        // Cmd-A → Shift+Arrow). Incremental expand/shrink would be O(N) DOM mutations;
+        // teleport the window directly to the VS focus paragraph instead.
+        const prevScrollLeft = this.prevScrollLeft;
+        this.prevScrollLeft  = scrollLeft;
+        if (this.virtualSelection && prevScrollLeft >= 0 &&
+                Math.abs(scrollLeft - prevScrollLeft) > viewW * 10) {
+            this.teleportWindowTo(this.virtualSelection.focusParaIdx);
+            W = this.scrollArea.scrollWidth; // re-read after teleport mutations
+        }
 
         // ---- Left boundary (domEnd) ----
         // Expand: window's left edge (leftWindowOffset) within EXPAND_MARGIN of viewport's
