@@ -1,6 +1,7 @@
 # Anchor Island: Pinned Paragraph Divs Outside the DOM Window
 
-Created: 2026-05-22
+Created: 2026-05-22  
+Updated: 2026-05-24 (inner anchor islands for multi-paragraph Bug I)
 
 ## Problem
 
@@ -25,13 +26,26 @@ started extending from the proxy position (a window boundary paragraph), not fro
 or last paragraph. This gave unexpected behavior — the selection appeared to shrink from the wrong
 edge.
 
+### 3. Multi-paragraph selection stalls window shrinking (Bug I)
+
+When a non-collapsed selection spans two adjacent paragraphs (anchor para A, focus para B) and the
+user scrolls so that both paragraphs leave the window on the same side:
+
+1. The first eviction attempt promotes para A (the one at the window edge) to an outer anchor island.
+2. The next eviction attempt finds para B (the adjacent inner paragraph) still at the window
+   boundary with a selection endpoint in it — so shrink returns early again, blocking indefinitely.
+
+The window grows unboundedly because the "inner" endpoint permanently guards the window boundary.
+
 ---
 
 ## Solution: Anchor Islands
 
 An **anchor island** is a paragraph div kept in the DOM *outside* the main window `[domStart,
-domEnd]`. It is accompanied by a **mid-spacer** that accounts for the width of any paragraphs
-between the anchor and the window edge:
+domEnd]`. It is accompanied by spacers that account for the width of any paragraphs between the
+island and the window edge.
+
+### Single anchor (one endpoint outside window)
 
 ```
 DOM order:
@@ -40,11 +54,24 @@ DOM order:
   [?midLeftSpacer]  [?leftAnchor.div]  [leftSpacer]
 ```
 
+### Double anchor (both endpoints outside window on same side)
+
+When both selection endpoints have left the window on the same side, a secondary **inner** anchor
+island is added between the outer anchor and the window edge:
+
+```
+Right side:
+  [rightSpacer] [rightAnchor(outer)] [midRightOuterSpacer] [rightAnchorInner(inner)] [midRightSpacer] [window]
+
+Left side:
+  [window] [midLeftSpacer] [leftAnchorInner(inner)] [midLeftOuterSpacer] [leftAnchor(outer)] [leftSpacer]
+```
+
 Two types of anchor exist:
 
 | Type | Created by | Released by |
 |---|---|---|
-| `'cursor'` | `shrinkRight` / `shrinkLeft` when cursor is in the evicted div | `ensureWindowAroundCursor()` when cursor moves away |
+| `'cursor'` | `shrinkRight` / `shrinkLeft` when cursor/selection endpoint is in the evicted div | `ensureWindowAroundCursor()` when cursor moves away |
 | `'selection'` | `setVirtualSelectAll()` for para 0 and para N-1 | `clearVirtualSelection()` |
 
 ---
@@ -63,12 +90,21 @@ State added to `ParagraphVirtualizer`:
 
 | Field | Type | Purpose |
 |---|---|---|
-| `rightAnchor` | `AnchorIsland \| null` | Right-side island (low paraIdx, right of window) |
-| `leftAnchor` | `AnchorIsland \| null` | Left-side island (high paraIdx, left of window) |
-| `midRightSpacer` | `HTMLElement \| null` | Spacer between rightAnchor and domStart |
-| `midLeftSpacer` | `HTMLElement \| null` | Spacer between domEnd and leftAnchor |
+| `rightAnchor` | `AnchorIsland \| null` | Right-side outer island (lower paraIdx, right of window) |
+| `leftAnchor` | `AnchorIsland \| null` | Left-side outer island (higher paraIdx, left of window) |
+| `rightAnchorInner` | `AnchorIsland \| null` | Right-side inner island (between outer and window) |
+| `leftAnchorInner` | `AnchorIsland \| null` | Left-side inner island (between window and outer) |
+| `midRightSpacer` | `HTMLElement \| null` | Spacer between innermost right island and domStart |
+| `midLeftSpacer` | `HTMLElement \| null` | Spacer between domEnd and innermost left island |
+| `midRightOuterSpacer` | `HTMLElement \| null` | Spacer between right outer and inner islands |
+| `midLeftOuterSpacer` | `HTMLElement \| null` | Spacer between left inner and outer islands |
 | `midRightSpacerWidth` | `number` | Pixel width of midRightSpacer |
 | `midLeftSpacerWidth` | `number` | Pixel width of midLeftSpacer |
+| `midRightOuterSpacerWidth` | `number` | Pixel width of midRightOuterSpacer |
+| `midLeftOuterSpacerWidth` | `number` | Pixel width of midLeftOuterSpacer |
+
+Inner anchors can only exist when the corresponding outer anchor also exists. Inner anchors are
+always `'cursor'` type (created by `shrinkRight`/`shrinkLeft`).
 
 ---
 
@@ -97,6 +133,23 @@ A new div is created from `paragraphRecords[paraIdx].src`:
 
 ---
 
+## `setRightAnchorInner` — Case A only
+
+Inner anchors are always Case A (the blocking div is always at the current window edge):
+
+1. `anchorDiv = getWindowDiv(domStart)` — the current window's rightmost div.
+2. Add `ANCHOR_CLASS` to the div.
+3. Rename: `midRightOuterSpacer = midRightSpacer` (the outer→window spacer becomes outer→inner).
+4. `midRightOuterSpacerWidth = midRightSpacerWidth`.
+5. Create a new `midRightSpacer` (inner→window, width = 0) inserted after `anchorDiv`.
+6. `domStart++`.
+
+After this, `windowChildOffset` increases by 2 and the window can shrink past the new `domStart`.
+
+`setLeftAnchorInner` is the symmetric operation for the left side.
+
+---
+
 ## `absorbRightAnchor` — Two Cases
 
 ### Adjacent case (`midRightSpacerWidth == 0`)
@@ -107,30 +160,56 @@ Anchor and window are directly adjacent; anchor div can rejoin the window:
 2. `anchorDiv.classList.remove(ANCHOR_CLASS)`.
 3. `domStart = rightAnchor.paraIdx`.
 
-The anchor div is now the new rightmost window div with no layout change.
-
 ### Gap case (`midRightSpacerWidth > 0`)
 
 Paragraphs still exist between the anchor and the window. The anchor cannot be cleanly folded back:
 
 1. `anchorDiv.remove()`.
 2. `midRightSpacer.remove()`.
-3. `rightSpacerWidth += anchorWidth + midRightSpacerWidth` (spacer reclaims the full region).
+3. `rightSpacerWidth += anchorWidth + midRightSpacerWidth`.
 
-`domStart` is **unchanged** — the anchor's paragraph reverts to being represented only by the
-spacer. The next `expandRight()` call will create a fresh div for it when needed.
+`absorbRightAnchor` always calls `absorbRightAnchorInner()` first if an inner anchor is present, so
+that `midRightSpacer` is restored to the outer→window role before the outer absorb logic runs.
 
 `absorbLeftAnchor` is the symmetric operation.
 
 ---
 
+## `absorbRightAnchorInner` — Two Cases
+
+### Adjacent case (`midRightSpacerWidth == 0`)
+
+1. Remove the inner→window `midRightSpacer`.
+2. `anchorDiv.classList.remove(ANCHOR_CLASS)` — inner div rejoins window.
+3. `midRightSpacer = midRightOuterSpacer` (outer→inner spacer becomes outer→window).
+4. `midRightSpacerWidth = midRightOuterSpacerWidth`.
+5. `domStart = rightAnchorInner.paraIdx`.
+
+### Gap case (`midRightSpacerWidth > 0`)
+
+The window has shrunk further since the inner anchor was created:
+
+1. `innerW = paragraphRecords[inner.paraIdx].width`.
+2. `oldInnerSpacerW = midRightSpacerWidth`.
+3. `inner.div.remove()`, `midRightSpacer.remove()` (inner→window spacer).
+4. `midRightSpacer = midRightOuterSpacer`.
+5. `applyMidRightSpacer(midRightOuterSpacerWidth + innerW + oldInnerSpacerW)`.
+
+The combined width folds the inner anchor's position back into the outer→window spacer.
+
+`absorbLeftAnchorInner` is the symmetric operation.
+
+---
+
 ## Cursor Anchor Lifecycle
+
+### Single-endpoint case (one paragraph selected)
 
 ```
 idle scroll
   │
   ▼  shrinkRight() — cursor is in children[windowChildOffset]
-  │  rightAnchor exists? → return (no second anchor)
+  │  rightAnchor exists? → return (no more anchors possible)
   │  no rightAnchor?     → setRightAnchor(domStart, 'cursor')  [Case A, midW=0]
   │                         domStart++
   │
@@ -145,9 +224,34 @@ idle scroll
          → absorbRightAnchor()   [gap case if gap grew]
 ```
 
-Key invariant: only one right anchor and one left anchor exist at any time. If a second anchor
-would be needed (edge case: cursor in first window div when a selection anchor is already present),
-`shrinkRight` simply returns without creating a second anchor.
+### Multi-endpoint case (both selection endpoints on same side) — Bug I fix
+
+```
+left scroll, anchor=A focus=B (A < B, both right of window)
+  │
+  ▼  shrinkRight() — para B is in children[windowChildOffset]
+  │  no rightAnchor → setRightAnchor(B, 'cursor')   [Case A]
+  │                   domStart = B+1
+  │
+  ▼  shrinkRight() — para A is now at new windowChildOffset
+  │  rightAnchor exists, no rightAnchorInner → setRightAnchorInner(A, 'cursor')
+  │                                             domStart = A+1
+  │
+  ▼  further scrolling
+  │  shrinkRight() — neither A nor B is in first window div
+  │  → normal eviction, midRightSpacerWidth grows
+  │
+  ▼  user moves cursor (selectionchange)
+     ensureWindowAroundCursor()
+       rightAnchor.type === 'cursor' && !contains?
+         → absorbRightAnchorInner()   [inner first]
+         → absorbRightAnchor()
+```
+
+Wait, note: the example above shows B as the outer anchor and A as the inner anchor, which matches
+the actual case C1L from the debug logs (anchor=518=A, focus=519=B, left scroll hits B first since
+B > A and shrinkRight starts at domStart=B when B is still in the window). The outer/inner
+assignment depends on which endpoint is at `domStart` at the moment the first anchor is created.
 
 ---
 
@@ -176,13 +280,14 @@ anchors are auto-absorbed on selectionchange.
 
 ## `windowChildOffset` and DOM Index Accounting
 
-Because the DOM has up to 2 extra children per anchor, all index-based DOM access must account for
-them:
+Because the DOM has up to 4 extra children per side (outer anchor + midOuter + inner anchor + mid),
+all index-based DOM access must account for them:
 
 ```typescript
 private get windowChildOffset(): number {
     let off = this.rightSpacer ? 1 : 0;
-    if (this.rightAnchor) off += 2;   // anchorDiv + midRightSpacer
+    if (this.rightAnchor)      off += 2;  // rightAnchor.div + midRightOuterSpacer (or midRightSpacer)
+    if (this.rightAnchorInner) off += 2;  // rightAnchorInner.div + midRightSpacer
     return off;
 }
 ```
@@ -193,36 +298,35 @@ private get windowChildOffset(): number {
 `SPACER_CLASS` and `ANCHOR_CLASS` guards to avoid mis-identifying a spacer or anchor as a
 paragraph.
 
-`expandRight()` inserts new divs before `children[windowChildOffset]` (= before the first window
-div, after the optional anchor+midSpacer block).
+`expandRight()` checks for inner anchor absorption before outer anchor absorption (inner is closer
+to the window) and inserts new divs before `children[windowChildOffset]`.
 
 ---
 
 ## Scroll Boundary Calculations
 
-`adjustWindowOnScroll()` used raw `rightSpacerWidth` / `leftSpacerWidth` for the expand/shrink
-threshold comparisons. With anchor islands, these no longer represent the full right/left
-offset — the anchor and mid-spacer widths must be included:
+`adjustWindowOnScroll()` uses `rightWindowOffset` / `leftWindowOffset` instead of raw spacer
+widths to account for all anchor and mid-spacer widths:
 
 ```typescript
 private get rightWindowOffset(): number {
-    return this.rightSpacerWidth
-        + (this.rightAnchor
-            ? (this.paragraphRecords[this.rightAnchor.paraIdx]?.width ?? 0)
-              + this.midRightSpacerWidth
-            : 0);
+    if (!this.rightAnchor) return this.rightSpacerWidth;
+    const outerW = this.paragraphRecords[this.rightAnchor.paraIdx]?.width ?? 0;
+    if (!this.rightAnchorInner) return this.rightSpacerWidth + outerW + this.midRightSpacerWidth;
+    const innerW = this.paragraphRecords[this.rightAnchorInner.paraIdx]?.width ?? 0;
+    return this.rightSpacerWidth + outerW + this.midRightOuterSpacerWidth + innerW + this.midRightSpacerWidth;
 }
 
 private get leftWindowOffset(): number {
-    return this.leftSpacerWidth
-        + (this.leftAnchor
-            ? (this.paragraphRecords[this.leftAnchor.paraIdx]?.width ?? 0)
-              + this.midLeftSpacerWidth
-            : 0);
+    if (!this.leftAnchor) return this.leftSpacerWidth;
+    const outerW = this.paragraphRecords[this.leftAnchor.paraIdx]?.width ?? 0;
+    if (!this.leftAnchorInner) return this.leftSpacerWidth + outerW + this.midLeftSpacerWidth;
+    const innerW = this.paragraphRecords[this.leftAnchorInner.paraIdx]?.width ?? 0;
+    return this.leftSpacerWidth + outerW + this.midLeftOuterSpacerWidth + innerW + this.midLeftSpacerWidth;
 }
 ```
 
-These getters replace the direct spacer-width reads in the expand/shrink conditions:
+Expand/shrink conditions (unchanged form, updated inputs):
 
 ```
 Expand right: W - rightWindowOffset - domStart.width < scrollLeft + viewW + EXPAND_MARGIN
@@ -231,8 +335,10 @@ Expand left:  leftWindowOffset + domEnd.width         > scrollLeft - EXPAND_MARG
 Shrink left:  leftWindowOffset + domEnd.width         < scrollLeft - SHRINK_MARGIN
 ```
 
-`correctSpacerAfterExpand()` adjusts `midRightSpacerWidth` (not `rightSpacerWidth`) when a right
-anchor is active, because the newly expanded divs came from the mid-spacer region.
+`correctSpacerAfterExpand()` adjusts `midRightSpacer` (not `rightSpacer`) when a right anchor is
+active, because the newly expanded divs came from the mid-spacer region. This remains correct with
+inner anchors: `this.rightAnchor !== null` implies a mid-spacer exists between the innermost right
+island and the window.
 
 ---
 
@@ -241,53 +347,49 @@ anchor is active, because the newly expanded divs came from the mid-spacer regio
 `EditorElement.getValue()` computes how many children of `editorEl` represent window paragraphs:
 
 ```typescript
-const spacerOffset  = (virt.rightSpacer ? 1 : 0) + (virt.hasRightAnchor ? 2 : 0);
-const spacerCount   = (virt.rightSpacer ? 2 : 0) + (virt.hasRightAnchor ? 2 : 0)
-                                                  + (virt.hasLeftAnchor  ? 2 : 0);
+const spacerOffset  = (virt.rightSpacer ? 1 : 0) + virt.rightAnchorChildCount;
+const spacerCount   = (virt.rightSpacer ? 2 : 0) + virt.rightAnchorChildCount + virt.leftAnchorChildCount;
 const actualDivCount = this.el.children.length - spacerCount;
 ```
 
-Without this fix, `spacerCount = 2` would cause anchor divs and mid-spacers to be treated as window
-paragraphs during serialization:
-- `children[1]` (anchorDiv) would be read as para `domStart` → anchor content at wrong position.
-- `children[2]` (midRightSpacer, empty) would be read as para `domStart+1` → empty line inserted.
-- All real window divs would shift 2 positions in the output.
+Where:
 
-This produced corrupted content in `commitToCm6()` without any visible editing action — merely
-scrolling to create an anchor, then any action that triggered a commit (typing, click, scheduled
-debounce timer).
+```typescript
+get rightAnchorChildCount(): number {
+    return (this.rightAnchor ? 2 : 0) + (this.rightAnchorInner ? 2 : 0);
+}
+get leftAnchorChildCount(): number {
+    return (this.leftAnchorInner ? 2 : 0) + (this.leftAnchor ? 2 : 0);
+}
+```
 
-`hasRightAnchor` and `hasLeftAnchor` are exposed as public getters on `ParagraphVirtualizer` for
-this purpose.
+Without correct accounting, anchor divs and mid-spacers would be serialized as window paragraphs,
+corrupting `commitToCm6()` output silently on the next typing event or debounced commit.
+
+The old `hasRightAnchor` / `hasLeftAnchor` boolean getters (which only counted a single anchor per
+side) have been replaced by `rightAnchorChildCount` / `leftAnchorChildCount` to handle both single
+and double anchor configurations.
 
 ---
 
 ## `spliceRecords` Anchor Index Maintenance
 
-When Undo/Redo splices the paragraph array, anchor `paraIdx` values must shift accordingly:
+When Undo/Redo splices the paragraph array, anchor `paraIdx` values must shift accordingly.
+Inner anchors are processed before outer anchors to keep mid-spacer state consistent:
 
 ```typescript
-if (this.rightAnchor) {
-    const idx = this.rightAnchor.paraIdx;
-    if (lo <= idx && idx < lo + deleteCount) {
-        // Anchor's paragraph was deleted — remove from DOM.
-        this.rightAnchor.div.remove();
-        this.midRightSpacer?.remove();
-        this.rightAnchor = null; ...
-    } else if (idx >= lo + deleteCount) {
-        // Anchor is past the deleted range — shift its index.
-        this.rightAnchor = { ...this.rightAnchor, paraIdx: idx + delta };
-    }
-    // idx < lo: anchor is before the splice — no change needed.
+// Inner right anchor
+if (this.rightAnchorInner) {
+    if (paragraph deleted) → remove inner, restore midRightOuterSpacer as midRightSpacer
+    else if shifted        → update paraIdx
 }
+// Outer right anchor
+if (this.rightAnchor) {
+    if (paragraph deleted) → clean up any remaining inner anchor, then remove outer
+    else if shifted        → update paraIdx
+}
+// (symmetric for left side)
 ```
-
-Note: the condition `idx >= lo + deleteCount` (not `idx >= lo`) ensures that if `lo == idx` with
-`deleteCount > 0`, the anchor's own paragraph is correctly treated as deleted rather than shifted.
-
-When `spliceWithinWindow = false` AND an anchor is active, spacer recomputation (`applyRightSpacer`,
-`applyLeftSpacer`) is intentionally skipped for the anchor and mid-spacer widths — those are
-accounted for separately and remain valid across splices that do not touch the anchor's paragraph.
 
 ---
 
@@ -295,14 +397,17 @@ accounted for separately and remain valid across splices that do not touch the a
 
 | Invariant | Enforced by |
 |---|---|
-| At most one right anchor and one left anchor at any time | `setRightAnchor` absorbs any existing anchor before creating a new one; `shrinkRight/Left` guard with `if (!this.rightAnchor)` |
-| `rightAnchor.paraIdx < domStart` always | Case A: domStart is incremented after promotion; Case B: paraIdx < domStart by precondition |
-| `leftAnchor.paraIdx > domEnd` always | Symmetric |
-| Cursor anchor auto-released when cursor moves | `ensureWindowAroundCursor()` on every selectionchange while editor has focus |
+| Inner anchor only exists when outer anchor exists | `setRightAnchorInner` / `setLeftAnchorInner` guard with `if (!this.rightAnchor)` / `if (!this.leftAnchor)` |
+| At most one outer + one inner per side | `setRightAnchorInner` absorbs any existing inner before creating a new one; shrink guard `if (!this.rightAnchorInner)` |
+| `rightAnchor.paraIdx < rightAnchorInner.paraIdx < domStart` | Case A promotions increment domStart after each anchor creation |
+| `domEnd < leftAnchorInner.paraIdx < leftAnchor.paraIdx` | Symmetric |
+| Inner absorb precedes outer absorb | `absorbRightAnchor` calls `absorbRightAnchorInner()` first; `ensureWindowAroundCursor` absorbs inner then outer |
+| `expandRight/Left` absorbs inner before outer | Inner anchor checked before outer anchor in the absorb path |
+| Cursor anchor auto-released when cursor moves | `ensureWindowAroundCursor()` on every selectionchange |
 | Selection anchor released only by clearVirtualSelection() | `ensureWindowAroundCursor()` checks `type === 'cursor'` before absorbing |
-| `windowChildOffset` is always accurate | Computed from `rightAnchor !== null` live state; no cached value to go stale |
-| `getValue()` serializes correct content when anchors are present | `spacerCount` and `spacerOffset` include anchor children via `hasRightAnchor` / `hasLeftAnchor` |
-| Anchor div never frozen or collapsed by patchParagraphs | `hasCleanDivStructure()` returns false when anchors are present → windowed rebuild path via `buildDomWindow` → `forceRemoveAllAnchors()` clears all anchors before rebuild |
+| `windowChildOffset` is always accurate | Computed live from `rightAnchor` and `rightAnchorInner` state |
+| `getValue()` serializes correct content when anchors are present | `spacerCount` uses `rightAnchorChildCount` / `leftAnchorChildCount` |
+| Anchor divs never frozen or collapsed by patchParagraphs | `hasCleanDivStructure()` returns false → `forceRemoveAllAnchors()` clears all anchors before rebuild |
 
 ---
 
@@ -322,29 +427,38 @@ with direct `absorbRightAnchor()` / `absorbLeftAnchor()` calls.
 `getValue()` used `spacerCount = virt.rightSpacer ? 2 : 0`, counting only the two outer spacers.
 With a right anchor, `actualDivCount` was inflated by 2, causing the anchor div and midSpacer to be
 serialized as window paragraphs. This silently committed incorrect content to CM6 on the next
-typing event or debounced commit, making the anchor paragraph's content appear at a different
-position in the file.
+typing event or debounced commit.
 
 **Fix**: exposed `hasRightAnchor` / `hasLeftAnchor` on `ParagraphVirtualizer` and incorporated them
-into `spacerOffset` and `spacerCount` in `getValue()`.
+into `spacerOffset` and `spacerCount` in `getValue()`. Later superseded by `rightAnchorChildCount`
+/ `leftAnchorChildCount` when inner anchors were added.
 
 ### B3 — `shrinkLeft` missing ANCHOR_CLASS guard
 
 `shrinkRight` already guarded against accidentally operating on a spacer or anchor div via
 `div.classList.contains(SPACER_CLASS) || div.classList.contains(ANCHOR_CLASS)`. `shrinkLeft` lacked
-the equivalent guard, allowing it to attempt eviction of the left anchor div when it happened to be
-at the computed child index.
+the equivalent guard.
 
 **Fix**: added the same SPACER_CLASS + ANCHOR_CLASS guard to `shrinkLeft`.
 
 ### B4 — `spliceRecords` incorrect anchor paraIdx boundary condition
 
-The condition `lo <= idx && idx < lo + deleteCount` used `lo <= idx` but should use `lo <= idx` for
-deletion detection and `idx >= lo + deleteCount` for shift detection. A splice at exactly `lo = idx`
-with `deleteCount > 0` would incorrectly fall into neither branch, leaving the anchor pointing to a
-deleted paragraph.
+A splice at exactly `lo = idx` with `deleteCount > 0` would incorrectly fall into neither the
+"deleted" nor the "shifted" branch, leaving the anchor pointing to a deleted paragraph.
 
 **Fix**: the three-case structure (deleted / shifted / before-splice) now correctly handles `lo == idx`.
+
+### B5 — Multi-paragraph Bug I: inner endpoint blocks shrink indefinitely
+
+When a non-collapsed selection spans two adjacent paragraphs and the user scrolls so both leave the
+window on the same side, the outer endpoint was correctly promoted to an outer anchor island, but
+the inner endpoint remained at the window boundary on every subsequent shrink attempt, permanently
+blocking window advancement.
+
+**Fix**: added inner anchor islands (`rightAnchorInner` / `leftAnchorInner`). When `shrinkRight`
+or `shrinkLeft` finds the outer anchor already set and the selection still collides, it promotes the
+blocking div to an inner anchor island. After both endpoints are captured, the window can shrink
+freely past them.
 
 ---
 
@@ -352,6 +466,6 @@ deleted paragraph.
 
 | File | Change |
 |---|---|
-| `src/ui/ParagraphVirtualizer.ts` | `AnchorIsland` type; `rightAnchor`, `leftAnchor`, `midRightSpacer`, `midLeftSpacer`, `midRightSpacerWidth`, `midLeftSpacerWidth` fields; `setRightAnchor`, `setLeftAnchor`, `absorbRightAnchor`, `absorbLeftAnchor`, `forceRemoveAllAnchors`; `windowChildOffset` extended; `leftWindowOffset`, `rightWindowOffset` getters; `expandRight/Left`, `shrinkRight/Left`, `premeasureWindowWidths`, `correctSpacerAfterExpand`, `spliceRecords` updated; `ensureWindowAroundCursor` rewritten; `setVirtualSelectAll` updated; `proxyForEndpoint` handles anchor divs; `hasRightAnchor`, `hasLeftAnchor` public getters added; `expandWindowToFull` removed (dead code) |
-| `src/ui/EditorElement.ts` | `getValue()`: `spacerOffset` and `spacerCount` account for `hasRightAnchor` / `hasLeftAnchor`; `paragraphChildIndex()`: offset includes `hasRightAnchor` |
+| `src/ui/ParagraphVirtualizer.ts` | `AnchorIsland` type; outer and inner anchor fields + spacer fields; `setRightAnchor`, `setLeftAnchor`, `absorbRightAnchor`, `absorbLeftAnchor`; `setRightAnchorInner`, `absorbRightAnchorInner`, `setLeftAnchorInner`, `absorbLeftAnchorInner` (new); `windowChildOffset` extended for inner anchors; `leftWindowOffset`, `rightWindowOffset` extended; `rightAnchorChildCount`, `leftAnchorChildCount` public getters (replace `hasRightAnchor`/`hasLeftAnchor`); `expandRight/Left`, `shrinkRight/Left`, `premeasureWindowWidths`, `correctSpacerAfterExpand`, `spliceRecords`, `ensureWindowAroundCursor`, `forceRemoveAllAnchors`, `proxyForEndpoint`, `getParagraphIndex`, `scrollFocusIntoView`, `tryInitVsFromDomSelection`, `tryUpdateFocusFromDom`, `syncWindowSrcs` updated |
+| `src/ui/EditorElement.ts` | `getValue()`: `spacerOffset` and `spacerCount` use `rightAnchorChildCount` / `leftAnchorChildCount`; `paragraphChildIndex()`: offset uses `rightAnchorChildCount` |
 | `src/ui/ParagraphVirtualizer.test.ts` | Removed `expandWindowToFull` test; removed stale `vi`/`afterEach` imports |
