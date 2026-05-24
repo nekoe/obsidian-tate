@@ -1054,18 +1054,17 @@ export class ParagraphVirtualizer {
         if (this.virtualSelection || sel.isCollapsed) return false;
         const anchorDiv = this.findParaDiv(sel.anchorNode!);
         const focusDiv  = this.findParaDiv(sel.focusNode!);
-        const anchorIdx = anchorDiv ? this.getParagraphIndex(anchorDiv) : -1;
-        const focusIdx  = focusDiv  ? this.getParagraphIndex(focusDiv)  : -1;
+        let anchorIdx = anchorDiv ? this.getParagraphIndex(anchorDiv) : -1;
+        let focusIdx  = focusDiv  ? this.getParagraphIndex(focusDiv)  : -1;
         if (anchorIdx < 0 || focusIdx < 0) return false;
         const anchorIsIsland = this.rightAnchor?.div === anchorDiv || this.leftAnchor?.div === anchorDiv;
         const focusIsIsland  = this.rightAnchor?.div === focusDiv  || this.leftAnchor?.div === focusDiv;
         if (!anchorIsIsland && !focusIsIsland) return false;
-        this.virtualSelection = {
-            anchorParaIdx: anchorIdx,
-            anchorViewOff: computeViewOffsetInDiv(anchorDiv!, this.editorEl, sel.anchorNode!, sel.anchorOffset),
-            focusParaIdx:  focusIdx,
-            focusViewOff:  computeViewOffsetInDiv(focusDiv!, this.editorEl, sel.focusNode!, sel.focusOffset),
-        };
+        let anchorViewOff = computeViewOffsetInDiv(anchorDiv!, this.editorEl, sel.anchorNode!, sel.anchorOffset);
+        let focusViewOff  = computeViewOffsetInDiv(focusDiv!,  this.editorEl, sel.focusNode!,  sel.focusOffset);
+        if (focusViewOff  === 0 && focusIdx  > 0 && sel.focusNode!.nodeType  !== Node.TEXT_NODE) { focusIdx--;  focusViewOff  = this.getViewLenByIndex(focusIdx);  }
+        if (anchorViewOff === 0 && anchorIdx > 0 && sel.anchorNode!.nodeType !== Node.TEXT_NODE) { anchorIdx--; anchorViewOff = this.getViewLenByIndex(anchorIdx); }
+        this.virtualSelection = { anchorParaIdx: anchorIdx, anchorViewOff, focusParaIdx: focusIdx, focusViewOff };
         return true;
     }
 
@@ -1109,9 +1108,10 @@ export class ParagraphVirtualizer {
 
         const focusDiv = this.findParaDiv(focusNode);
         if (!focusDiv) return false;
-        const focusParaIdx = this.getParagraphIndex(focusDiv);
+        let focusParaIdx = this.getParagraphIndex(focusDiv);
         if (focusParaIdx < 0) return false;
-        const newFocusViewOff = computeViewOffsetInDiv(focusDiv, this.editorEl, focusNode, sel.focusOffset);
+        let newFocusViewOff = computeViewOffsetInDiv(focusDiv, this.editorEl, focusNode, sel.focusOffset);
+        if (newFocusViewOff === 0 && focusParaIdx > 0 && focusNode.nodeType !== Node.TEXT_NODE) { focusParaIdx--; newFocusViewOff = this.getViewLenByIndex(focusParaIdx); }
         if (focusParaIdx === vs.focusParaIdx && newFocusViewOff === vs.focusViewOff) return false;
         this.virtualSelection = { ...vs, focusParaIdx, focusViewOff: newFocusViewOff };
         return true;
@@ -1195,15 +1195,20 @@ export class ParagraphVirtualizer {
         if (this.virtualSelection || sel.isCollapsed) return;
         const anchorDiv = this.findParaDiv(sel.anchorNode!);
         const focusDiv  = this.findParaDiv(sel.focusNode!);
-        const anchorIdx = anchorDiv ? this.getParagraphIndex(anchorDiv) : -1;
-        const focusIdx  = focusDiv  ? this.getParagraphIndex(focusDiv)  : -1;
+        let anchorIdx = anchorDiv ? this.getParagraphIndex(anchorDiv) : -1;
+        let focusIdx  = focusDiv  ? this.getParagraphIndex(focusDiv)  : -1;
         if (anchorIdx < 0 || focusIdx < 0) return;
-        this.virtualSelection = {
-            anchorParaIdx: anchorIdx,
-            anchorViewOff: computeViewOffsetInDiv(anchorDiv!, this.editorEl, sel.anchorNode!, sel.anchorOffset),
-            focusParaIdx:  focusIdx,
-            focusViewOff:  computeViewOffsetInDiv(focusDiv!, this.editorEl, sel.focusNode!, sel.focusOffset),
-        };
+        let anchorViewOff = computeViewOffsetInDiv(anchorDiv!, this.editorEl, sel.anchorNode!, sel.anchorOffset);
+        let focusViewOff  = computeViewOffsetInDiv(focusDiv!,  this.editorEl, sel.focusNode!,  sel.focusOffset);
+        // Normalize paragraph-boundary positions: (paraIdx, 0) for paraIdx > 0 is semantically
+        // identical to (paraIdx-1, viewLen(paraIdx-1)). Prefer the earlier paragraph so that
+        // eviction of the later paragraph div during scroll does not falsely trigger a collision.
+        // Only normalize for element nodes (div at offset=0 = trailing newline position). A text
+        // node at offset=0 means the cursor is genuinely at the start of the paragraph (e.g.
+        // triple-click anchor) and must NOT be remapped to end-of-previous-paragraph.
+        if (focusViewOff  === 0 && focusIdx  > 0 && sel.focusNode!.nodeType  !== Node.TEXT_NODE) { focusIdx--;  focusViewOff  = this.getViewLenByIndex(focusIdx);  }
+        if (anchorViewOff === 0 && anchorIdx > 0 && sel.anchorNode!.nodeType !== Node.TEXT_NODE) { anchorIdx--; anchorViewOff = this.getViewLenByIndex(anchorIdx); }
+        this.virtualSelection = { anchorParaIdx: anchorIdx, anchorViewOff, focusParaIdx: focusIdx, focusViewOff };
     }
 
     // Returns the direct paragraph div (non-spacer DIV child of editorEl) that contains node.

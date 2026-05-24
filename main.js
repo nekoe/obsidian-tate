@@ -359,6 +359,7 @@ function computeDivViewLen(div, rootEl) {
 }
 function computeViewOffsetInDiv(div, editorEl, targetNode, targetOffset) {
   var _a, _b;
+  if (targetNode === div && targetOffset === 0) return 0;
   let count = 0;
   const walker = activeDocument.createTreeWalker(div, NodeFilter.SHOW_TEXT);
   let node = walker.nextNode();
@@ -2869,18 +2870,23 @@ var ParagraphVirtualizer = class {
     if (this.virtualSelection || sel.isCollapsed) return false;
     const anchorDiv = this.findParaDiv(sel.anchorNode);
     const focusDiv = this.findParaDiv(sel.focusNode);
-    const anchorIdx = anchorDiv ? this.getParagraphIndex(anchorDiv) : -1;
-    const focusIdx = focusDiv ? this.getParagraphIndex(focusDiv) : -1;
+    let anchorIdx = anchorDiv ? this.getParagraphIndex(anchorDiv) : -1;
+    let focusIdx = focusDiv ? this.getParagraphIndex(focusDiv) : -1;
     if (anchorIdx < 0 || focusIdx < 0) return false;
     const anchorIsIsland = ((_a = this.rightAnchor) == null ? void 0 : _a.div) === anchorDiv || ((_b = this.leftAnchor) == null ? void 0 : _b.div) === anchorDiv;
     const focusIsIsland = ((_c = this.rightAnchor) == null ? void 0 : _c.div) === focusDiv || ((_d = this.leftAnchor) == null ? void 0 : _d.div) === focusDiv;
     if (!anchorIsIsland && !focusIsIsland) return false;
-    this.virtualSelection = {
-      anchorParaIdx: anchorIdx,
-      anchorViewOff: computeViewOffsetInDiv(anchorDiv, this.editorEl, sel.anchorNode, sel.anchorOffset),
-      focusParaIdx: focusIdx,
-      focusViewOff: computeViewOffsetInDiv(focusDiv, this.editorEl, sel.focusNode, sel.focusOffset)
-    };
+    let anchorViewOff = computeViewOffsetInDiv(anchorDiv, this.editorEl, sel.anchorNode, sel.anchorOffset);
+    let focusViewOff = computeViewOffsetInDiv(focusDiv, this.editorEl, sel.focusNode, sel.focusOffset);
+    if (focusViewOff === 0 && focusIdx > 0 && sel.focusNode.nodeType !== Node.TEXT_NODE) {
+      focusIdx--;
+      focusViewOff = this.getViewLenByIndex(focusIdx);
+    }
+    if (anchorViewOff === 0 && anchorIdx > 0 && sel.anchorNode.nodeType !== Node.TEXT_NODE) {
+      anchorIdx--;
+      anchorViewOff = this.getViewLenByIndex(anchorIdx);
+    }
+    this.virtualSelection = { anchorParaIdx: anchorIdx, anchorViewOff, focusParaIdx: focusIdx, focusViewOff };
     return true;
   }
   // Called from selectionchange when VS is active and the event is not programmatic.
@@ -2908,9 +2914,13 @@ var ParagraphVirtualizer = class {
     }
     const focusDiv = this.findParaDiv(focusNode);
     if (!focusDiv) return false;
-    const focusParaIdx = this.getParagraphIndex(focusDiv);
+    let focusParaIdx = this.getParagraphIndex(focusDiv);
     if (focusParaIdx < 0) return false;
-    const newFocusViewOff = computeViewOffsetInDiv(focusDiv, this.editorEl, focusNode, sel.focusOffset);
+    let newFocusViewOff = computeViewOffsetInDiv(focusDiv, this.editorEl, focusNode, sel.focusOffset);
+    if (newFocusViewOff === 0 && focusParaIdx > 0 && focusNode.nodeType !== Node.TEXT_NODE) {
+      focusParaIdx--;
+      newFocusViewOff = this.getViewLenByIndex(focusParaIdx);
+    }
     if (focusParaIdx === vs.focusParaIdx && newFocusViewOff === vs.focusViewOff) return false;
     this.virtualSelection = { ...vs, focusParaIdx, focusViewOff: newFocusViewOff };
     return true;
@@ -2987,15 +2997,20 @@ var ParagraphVirtualizer = class {
     if (this.virtualSelection || sel.isCollapsed) return;
     const anchorDiv = this.findParaDiv(sel.anchorNode);
     const focusDiv = this.findParaDiv(sel.focusNode);
-    const anchorIdx = anchorDiv ? this.getParagraphIndex(anchorDiv) : -1;
-    const focusIdx = focusDiv ? this.getParagraphIndex(focusDiv) : -1;
+    let anchorIdx = anchorDiv ? this.getParagraphIndex(anchorDiv) : -1;
+    let focusIdx = focusDiv ? this.getParagraphIndex(focusDiv) : -1;
     if (anchorIdx < 0 || focusIdx < 0) return;
-    this.virtualSelection = {
-      anchorParaIdx: anchorIdx,
-      anchorViewOff: computeViewOffsetInDiv(anchorDiv, this.editorEl, sel.anchorNode, sel.anchorOffset),
-      focusParaIdx: focusIdx,
-      focusViewOff: computeViewOffsetInDiv(focusDiv, this.editorEl, sel.focusNode, sel.focusOffset)
-    };
+    let anchorViewOff = computeViewOffsetInDiv(anchorDiv, this.editorEl, sel.anchorNode, sel.anchorOffset);
+    let focusViewOff = computeViewOffsetInDiv(focusDiv, this.editorEl, sel.focusNode, sel.focusOffset);
+    if (focusViewOff === 0 && focusIdx > 0 && sel.focusNode.nodeType !== Node.TEXT_NODE) {
+      focusIdx--;
+      focusViewOff = this.getViewLenByIndex(focusIdx);
+    }
+    if (anchorViewOff === 0 && anchorIdx > 0 && sel.anchorNode.nodeType !== Node.TEXT_NODE) {
+      anchorIdx--;
+      anchorViewOff = this.getViewLenByIndex(anchorIdx);
+    }
+    this.virtualSelection = { anchorParaIdx: anchorIdx, anchorViewOff, focusParaIdx: focusIdx, focusViewOff };
   }
   // Returns the direct paragraph div (non-spacer DIV child of editorEl) that contains node.
   // Anchor island divs are valid paragraph divs even though they carry ANCHOR_CLASS.

@@ -196,6 +196,11 @@ export function computeViewOffsetInDiv(
     div: HTMLElement, editorEl: HTMLElement,
     targetNode: Node, targetOffset: number,
 ): number {
+    // When the browser places a selection endpoint at the div element itself (offset=0),
+    // this represents the paragraph-boundary position before any content — return 0.
+    // The TreeWalker only visits text nodes, so it would never match an element node
+    // and would fall through to return the total text length instead of 0.
+    if (targetNode === div && targetOffset === 0) return 0;
     let count = 0;
     const walker = activeDocument.createTreeWalker(div, NodeFilter.SHOW_TEXT);
     let node = walker.nextNode() as Text | null;
