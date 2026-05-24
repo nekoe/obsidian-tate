@@ -5,6 +5,8 @@ import { computeViewOffsetInDiv, computeDomPositionFromViewOff, findLastBaseText
 
 // CSS class applied to both spacer divs so DOM walkers can skip them.
 export const SPACER_CLASS = 'tate-spacer';
+// CSS class applied to anchor island divs (real paragraph divs kept outside the main window).
+const ANCHOR_CLASS = 'tate-anchor';
 // CSS line-height value from .tate-editor. In vertical writing mode the column width
 // equals fontSize × lineHeight, so this ratio converts fontSizePx to column width.
 const VERTICAL_LINE_HEIGHT = 2;
@@ -34,6 +36,15 @@ export interface ParagraphRecord {
     src: string;     // Aozora source line
     viewLen: number; // visible character count (excluding annotation markers and rt text)
     width: number;   // measured or estimated pixel width; 0 = unknown (never in window)
+}
+
+// A paragraph div kept in the DOM outside the main window as a pinned anchor island.
+// type 'cursor': created when the cursor paragraph is evicted from the window edge.
+// type 'selection': created explicitly for Cmd-A (para 0 or para N-1).
+interface AnchorIsland {
+    paraIdx: number;
+    div: HTMLElement;
+    type: 'cursor' | 'selection';
 }
 
 // Manages DOM virtualization.
@@ -77,9 +88,38 @@ export class ParagraphVirtualizer {
     private rightSpacerWidth = 0;
     private leftSpacerWidth  = 0;
 
+    // Anchor islands: individual paragraph divs kept in the DOM outside the main window.
+    // Right anchor sits between rightSpacer and the window; left anchor between window and leftSpacer.
+    // Each anchor is accompanied by a mid-spacer that covers the gap to the window edge.
+    //
+    // DOM order: [rightSpacer] [?rightAnchor.div] [?midRightSpacer] [domStart..domEnd] [?midLeftSpacer] [?leftAnchor.div] [leftSpacer]
+    private rightAnchor: AnchorIsland | null = null;
+    private leftAnchor:  AnchorIsland | null = null;
+    private midRightSpacer: HTMLElement | null = null;
+    private midLeftSpacer:  HTMLElement | null = null;
+    private midRightSpacerWidth = 0;
+    private midLeftSpacerWidth  = 0;
+
+    // Inner anchor islands: when both selection endpoints have moved outside the window on
+    // the same side, the "inner" endpoint is promoted to a secondary anchor island so the
+    // window can advance past both. Inner anchors are nested between the outer anchor and
+    // the window edge.
+    //
+    // Right side DOM: [rightSpacer][rightAnchor(outer)][midRightOuterSpacer][rightAnchorInner][midRightSpacer][window]
+    // Left side DOM:  [window][midLeftSpacer][leftAnchorInner][midLeftOuterSpacer][leftAnchor(outer)][leftSpacer]
+    private rightAnchorInner: AnchorIsland | null = null;
+    private leftAnchorInner:  AnchorIsland | null = null;
+    private midRightOuterSpacer: HTMLElement | null = null;
+    private midLeftOuterSpacer:  HTMLElement | null = null;
+    private midRightOuterSpacerWidth = 0;
+    private midLeftOuterSpacerWidth  = 0;
+
     // Font size in px; used to estimate paragraph widths for off-window records.
     // Updated by setFontSize() when plugin settings change.
     private fontSizePx = 22; // matches DEFAULT_SETTINGS.fontSize
+
+    // Last observed scrollLeft; used to detect large jumps in adjustWindowOnScroll.
+    private prevScrollLeft = -1;
 
     constructor(
         private readonly editorEl: HTMLElement,
@@ -113,6 +153,102 @@ export class ParagraphVirtualizer {
         this.leftSpacer?.setCssProps({ '--tate-spacer-width': newW > 0 ? `${newW}px` : '' });
     }
 
+    private applyMidRightSpacer(newW: number): void {
+        this.midRightSpacerWidth = newW;
+        this.midRightSpacer?.setCssProps({ '--tate-spacer-width': newW > 0 ? `${newW}px` : '' });
+    }
+
+    private applyMidLeftSpacer(newW: number): void {
+        this.midLeftSpacerWidth = newW;
+        this.midLeftSpacer?.setCssProps({ '--tate-spacer-width': newW > 0 ? `${newW}px` : '' });
+    }
+
+    // Number of DOM children before the first window div.
+    // = 1 (rightSpacer) + 2 per active anchor island (anchor div + spacer).
+    private get windowChildOffset(): number {
+        let off = this.rightSpacer ? 1 : 0;
+        if (this.rightAnchor) off += 2;
+        if (this.rightAnchorInner) off += 2;
+        return off;
+    }
+
+    // Number of extra DOM children on the right side (anchor divs + mid-spacers).
+    // Used by EditorElement.getValue() and paragraphChildIndex() to skip non-window children.
+    get rightAnchorChildCount(): number {
+        return (this.rightAnchor ? 2 : 0) + (this.rightAnchorInner ? 2 : 0);
+    }
+
+    // Number of extra DOM children on the left side (mid-spacers + anchor divs).
+    get leftAnchorChildCount(): number {
+        return (this.leftAnchorInner ? 2 : 0) + (this.leftAnchor ? 2 : 0);
+    }
+
+    // x-offset of the leftmost window div's left edge in the scroll container.
+    // When anchor islands are active, includes all anchor widths and spacer widths.
+    private get leftWindowOffset(): number {
+        if (!this.leftAnchor) return this.leftSpacerWidth;
+        const outerW = this.paragraphRecords[this.leftAnchor.paraIdx]?.width ?? 0;
+        if (!this.leftAnchorInner) return this.leftSpacerWidth + outerW + this.midLeftSpacerWidth;
+        const innerW = this.paragraphRecords[this.leftAnchorInner.paraIdx]?.width ?? 0;
+        return this.leftSpacerWidth + outerW + this.midLeftOuterSpacerWidth + innerW + this.midLeftSpacerWidth;
+    }
+
+    // Combined right-side offset used in expand/shrink boundary calculations.
+    // When anchor islands are active, includes all anchor widths and spacer widths.
+    private get rightWindowOffset(): number {
+        if (!this.rightAnchor) return this.rightSpacerWidth;
+        const outerW = this.paragraphRecords[this.rightAnchor.paraIdx]?.width ?? 0;
+        if (!this.rightAnchorInner) return this.rightSpacerWidth + outerW + this.midRightSpacerWidth;
+        const innerW = this.paragraphRecords[this.rightAnchorInner.paraIdx]?.width ?? 0;
+        return this.rightSpacerWidth + outerW + this.midRightOuterSpacerWidth + innerW + this.midRightSpacerWidth;
+    }
+
+    // Immediately removes all anchor islands and mid-spacers from the DOM without adjusting
+    // spacer widths. Used before buildDomWindow / teleportWindowTo where resetWindow()
+    // will recompute spacer widths from scratch.
+    private forceRemoveAllAnchors(): void {
+        if (this.rightAnchorInner) {
+            this.rightAnchorInner.div.remove();
+            this.midRightSpacer?.remove();       // inner→window spacer
+            this.midRightOuterSpacer?.remove();  // outer→inner spacer
+            this.rightAnchorInner = null;
+            this.midRightSpacer = null;
+            this.midRightSpacerWidth = 0;
+            this.midRightOuterSpacer = null;
+            this.midRightOuterSpacerWidth = 0;
+            if (this.rightAnchor) {
+                this.rightAnchor.div.remove();
+                this.rightAnchor = null;
+            }
+        } else if (this.rightAnchor) {
+            this.rightAnchor.div.remove();
+            this.midRightSpacer?.remove();
+            this.rightAnchor = null;
+            this.midRightSpacer = null;
+            this.midRightSpacerWidth = 0;
+        }
+        if (this.leftAnchorInner) {
+            this.leftAnchorInner.div.remove();
+            this.midLeftSpacer?.remove();        // window→inner spacer
+            this.midLeftOuterSpacer?.remove();   // inner→outer spacer
+            this.leftAnchorInner = null;
+            this.midLeftSpacer = null;
+            this.midLeftSpacerWidth = 0;
+            this.midLeftOuterSpacer = null;
+            this.midLeftOuterSpacerWidth = 0;
+            if (this.leftAnchor) {
+                this.leftAnchor.div.remove();
+                this.leftAnchor = null;
+            }
+        } else if (this.leftAnchor) {
+            this.leftAnchor.div.remove();
+            this.midLeftSpacer?.remove();
+            this.leftAnchor = null;
+            this.midLeftSpacer = null;
+            this.midLeftSpacerWidth = 0;
+        }
+    }
+
     // Starts scroll-based window management and inserts spacer divs.
     attach(): void {
         if (this.rightSpacer) return; // already attached
@@ -136,6 +272,7 @@ export class ParagraphVirtualizer {
     // Stops window management, removes spacers.
     detach(): void {
         this.clearVirtualSelection();
+        this.forceRemoveAllAnchors();
         this.paragraphRecords.length = 0;
         this.domStart = 0;
         this.domEnd   = -1;
@@ -175,6 +312,7 @@ export class ParagraphVirtualizer {
     // Does NOT update spacer widths; callers must have already called resetWindow() (e.g. via
     // initRecords() or resetWindow() directly) so spacer widths are correct.
     buildDomWindow(sources: string[]): void {
+        this.forceRemoveAllAnchors();
         const windowNodes: Node[] = [];
         for (const src of sources) {
             const div = activeDocument.createElement('div');
@@ -224,7 +362,9 @@ export class ParagraphVirtualizer {
         // Guard: only when spacers are present (attach() has been called); without spacers
         // the editorEl.children count is unreliable for virtualization purposes.
         if (this.domEnd >= 0 && this.rightSpacer) {
-            const actualDivCount = this.editorEl.children.length - 2; // -2 for spacers
+            const anchorChildren = (this.rightAnchor ? 2 : 0) + (this.rightAnchorInner ? 2 : 0) +
+                (this.leftAnchorInner ? 2 : 0) + (this.leftAnchor ? 2 : 0);
+            const actualDivCount = this.editorEl.children.length - 2 - anchorChildren; // -2 for spacers
             const windowDivCount = this.domEnd - this.domStart + 1;
             if (actualDivCount !== windowDivCount) {
                 this.domEnd = Math.min(this.domStart + actualDivCount - 1, n - 1);
@@ -272,6 +412,85 @@ export class ParagraphVirtualizer {
             this.domEnd = Math.min(this.domEnd, this.paragraphRecords.length - 1);
         }
         this.domEnd = Math.max(this.domEnd, this.domStart);
+        // Update anchor paraIdx based on the splice range.
+        // When the splice deletes the anchor's own paragraph, remove the anchor from the DOM so
+        // that subsequent spacer-recomputation (below) can rebuild widths from scratch.
+        // Process inner anchors before outer anchors so mid-spacer state stays consistent.
+        if (this.rightAnchorInner) {
+            const idx = this.rightAnchorInner.paraIdx;
+            if (lo <= idx && idx < lo + deleteCount) {
+                this.rightAnchorInner.div.remove();
+                this.midRightSpacer?.remove();      // inner→window spacer
+                this.rightAnchorInner = null;
+                // Restore midRightOuterSpacer as outer→window spacer.
+                this.midRightSpacer = this.midRightOuterSpacer;
+                this.midRightSpacerWidth = this.midRightOuterSpacerWidth;
+                this.midRightOuterSpacer = null;
+                this.midRightOuterSpacerWidth = 0;
+            } else if (idx >= lo + deleteCount) {
+                this.rightAnchorInner = { ...this.rightAnchorInner, paraIdx: idx + delta };
+            }
+        }
+        if (this.rightAnchor) {
+            const idx = this.rightAnchor.paraIdx;
+            if (lo <= idx && idx < lo + deleteCount) {
+                // Outer anchor's paragraph deleted — clean up any remaining inner anchor first.
+                if (this.rightAnchorInner) {
+                    this.rightAnchorInner.div.remove();
+                    this.midRightSpacer?.remove();
+                    this.midRightOuterSpacer?.remove();
+                    this.rightAnchorInner = null;
+                    this.midRightSpacer = null;
+                    this.midRightSpacerWidth = 0;
+                    this.midRightOuterSpacer = null;
+                    this.midRightOuterSpacerWidth = 0;
+                }
+                this.rightAnchor.div.remove();
+                this.midRightSpacer?.remove();
+                this.rightAnchor = null;
+                this.midRightSpacer = null;
+                this.midRightSpacerWidth = 0;
+            } else if (idx >= lo + deleteCount) {
+                this.rightAnchor = { ...this.rightAnchor, paraIdx: idx + delta };
+            }
+        }
+        if (this.leftAnchorInner) {
+            const idx = this.leftAnchorInner.paraIdx;
+            if (lo <= idx && idx < lo + deleteCount) {
+                this.leftAnchorInner.div.remove();
+                this.midLeftSpacer?.remove();       // window→inner spacer
+                this.leftAnchorInner = null;
+                // Restore midLeftOuterSpacer as window→outer spacer.
+                this.midLeftSpacer = this.midLeftOuterSpacer;
+                this.midLeftSpacerWidth = this.midLeftOuterSpacerWidth;
+                this.midLeftOuterSpacer = null;
+                this.midLeftOuterSpacerWidth = 0;
+            } else if (idx >= lo + deleteCount) {
+                this.leftAnchorInner = { ...this.leftAnchorInner, paraIdx: idx + delta };
+            }
+        }
+        if (this.leftAnchor) {
+            const idx = this.leftAnchor.paraIdx;
+            if (lo <= idx && idx < lo + deleteCount) {
+                if (this.leftAnchorInner) {
+                    this.leftAnchorInner.div.remove();
+                    this.midLeftSpacer?.remove();
+                    this.midLeftOuterSpacer?.remove();
+                    this.leftAnchorInner = null;
+                    this.midLeftSpacer = null;
+                    this.midLeftSpacerWidth = 0;
+                    this.midLeftOuterSpacer = null;
+                    this.midLeftOuterSpacerWidth = 0;
+                }
+                this.leftAnchor.div.remove();
+                this.midLeftSpacer?.remove();
+                this.leftAnchor = null;
+                this.midLeftSpacer = null;
+                this.midLeftSpacerWidth = 0;
+            } else if (idx >= lo + deleteCount) {
+                this.leftAnchor = { ...this.leftAnchor, paraIdx: idx + delta };
+            }
+        }
         if (spliceWithinWindow) {
             // Off-screen paragraphs did not change; stored spacer widths remain correct.
             return;
@@ -308,15 +527,14 @@ export class ParagraphVirtualizer {
     }
 
     // Returns the DOM div for paragraph i, or null if i is outside the DOM window.
-    // spacerOffset is 1 when rightSpacer occupies children[0]; 0 otherwise.
     getWindowDiv(i: number): HTMLElement | null {
         if (!this.isInWindow(i)) return null;
-        const spacerOffset = this.rightSpacer ? 1 : 0;
-        return (this.editorEl.children[i - this.domStart + spacerOffset] as HTMLElement) ?? null;
+        return (this.editorEl.children[i - this.domStart + this.windowChildOffset] as HTMLElement) ?? null;
     }
 
     // Teleports the DOM window to be centered on paragraph `center` (± windowHalf).
     // Rebuilds the DOM from paragraphRecords without traversing intermediate paragraphs.
+    // Clears any anchor islands first so spacer widths are recomputed cleanly by resetWindow().
     // Used by EditorElement.jumpWindowTo() and SearchPanel navigation.
     teleportWindowTo(center: number, windowHalf = 50): void {
         const N = this.paragraphRecords.length;
@@ -327,30 +545,285 @@ export class ParagraphVirtualizer {
         this.resetWindow(lo, hi);
     }
 
-    // Replaces all paragraph divs with the full document content (one div per record).
-    // Used by Cmd-A (select-all) so the selection can span the entire activeDocument.
-    // Performs a single replaceChildren call to minimise layout thrashing.
-    expandWindowToFull(): void {
-        const frag = activeDocument.createDocumentFragment();
-        for (const rec of this.paragraphRecords) {
-            const div = activeDocument.createElement('div');
-            div.replaceChildren(sanitizeHTMLToDom(parseInlineToHtml(rec.src) || '<br>'));
-            frag.appendChild(div);
+    // Called on selectionchange. Absorbs cursor-type anchor islands when neither selection
+    // endpoint is inside them, so the anchor does not persist indefinitely after the user
+    // clicks elsewhere. Selection-type anchors (created by Cmd-A) are left untouched; they
+    // are released by clearVirtualSelection() when the VS is cleared.
+    ensureWindowAroundCursor(): void {
+        const sel = window.getSelection();
+        if (!sel) return;
+        const anchorNode = sel.anchorNode;
+        if (!anchorNode) return;
+        const focusNode = sel.focusNode;
+        if (this.rightAnchor?.type === 'cursor' &&
+            !this.rightAnchor.div.contains(anchorNode) &&
+            !(focusNode && this.rightAnchor.div.contains(focusNode))) {
+            // Absorb inner first (nested between outer anchor and window).
+            if (this.rightAnchorInner) this.absorbRightAnchorInner();
+            this.absorbRightAnchor();
         }
-        const nodes = Array.from(frag.childNodes);
-        if (this.rightSpacer && this.leftSpacer) {
-            this.editorEl.replaceChildren(this.rightSpacer, ...nodes, this.leftSpacer);
-        } else {
-            this.editorEl.replaceChildren(...nodes);
+        if (this.leftAnchor?.type === 'cursor' &&
+            !this.leftAnchor.div.contains(anchorNode) &&
+            !(focusNode && this.leftAnchor.div.contains(focusNode))) {
+            if (this.leftAnchorInner) this.absorbLeftAnchorInner();
+            this.absorbLeftAnchor();
         }
-        this.domStart = 0;
-        this.domEnd   = this.paragraphRecords.length - 1;
-        this.applyRightSpacer(0);
-        this.applyLeftSpacer(0);
     }
 
-    // Called on selectionchange. Window management is scroll-driven, so this is a no-op.
-    ensureWindowAroundCursor(): void {}
+    // ---- Anchor island management ----
+
+    // Pins paragraph paraIdx as a right anchor island between rightSpacer and the main window.
+    // Case A (domStart == paraIdx): promotes the current rightmost window div to anchor by
+    //   inserting a midRightSpacer after it and incrementing domStart.
+    // Case B (domStart > paraIdx): creates a new div for paraIdx from records and inserts it
+    //   with a midRightSpacer between rightSpacer and the window.
+    private setRightAnchor(paraIdx: number, type: 'cursor' | 'selection'): void {
+        if (this.rightAnchor?.paraIdx === paraIdx) {
+            this.rightAnchor.type = type;
+            return;
+        }
+        // Absorb any existing right anchor before setting a new one.
+        if (this.rightAnchor) this.absorbRightAnchor();
+
+        const rec = this.paragraphRecords[paraIdx];
+        if (!rec) return;
+        const anchorW = rec.width > 0 ? rec.width : this.estimateWidth(rec.viewLen);
+        rec.width = anchorW;
+
+        let anchorDiv: HTMLElement;
+        const midSpacer = activeDocument.createElement('div');
+        midSpacer.classList.add(SPACER_CLASS);
+
+        let midW: number;
+
+        if (this.domStart === paraIdx) {
+            // Case A: promote current window's rightmost div.
+            anchorDiv = this.getWindowDiv(paraIdx)!;
+            if (!anchorDiv) return;
+            anchorDiv.classList.add(ANCHOR_CLASS);
+            // Insert midSpacer immediately after anchorDiv (before the new domStart div).
+            anchorDiv.insertAdjacentElement('afterend', midSpacer);
+            midW = 0; // anchor and window are adjacent
+            this.domStart++;
+            // rightSpacerWidth is unchanged (still covers 0..paraIdx-1).
+        } else {
+            // Case B: paraIdx is in the rightSpacer region — create a new div.
+            anchorDiv = activeDocument.createElement('div');
+            anchorDiv.classList.add(ANCHOR_CLASS);
+            anchorDiv.replaceChildren(sanitizeHTMLToDom(parseInlineToHtml(rec.src) || '<br>'));
+            // Insert: [rightSpacer] → [anchorDiv] → [midSpacer] → [window]
+            const insertPoint = this.rightSpacer
+                ? this.editorEl.children[1] as ChildNode
+                : this.editorEl.firstChild;
+            this.editorEl.insertBefore(anchorDiv, insertPoint ?? null);
+            anchorDiv.insertAdjacentElement('afterend', midSpacer);
+            // midW = sum of para[paraIdx+1..domStart-1] widths.
+            midW = 0;
+            for (let k = paraIdx + 1; k < this.domStart; k++) {
+                const r = this.paragraphRecords[k];
+                midW += r.width > 0 ? r.width : this.estimateWidth(r.viewLen);
+            }
+            // rightSpacerWidth now covers only 0..paraIdx-1.
+            this.applyRightSpacer(Math.max(0, this.rightSpacerWidth - anchorW - midW));
+        }
+
+        this.rightAnchor = { paraIdx, div: anchorDiv, type };
+        this.midRightSpacer = midSpacer;
+        this.applyMidRightSpacer(midW);
+    }
+
+    // Symmetric counterpart of setRightAnchor for the left side.
+    private setLeftAnchor(paraIdx: number, type: 'cursor' | 'selection'): void {
+        if (this.leftAnchor?.paraIdx === paraIdx) {
+            this.leftAnchor.type = type;
+            return;
+        }
+        if (this.leftAnchor) this.absorbLeftAnchor();
+
+        const rec = this.paragraphRecords[paraIdx];
+        if (!rec) return;
+        const anchorW = rec.width > 0 ? rec.width : this.estimateWidth(rec.viewLen);
+        rec.width = anchorW;
+
+        let anchorDiv: HTMLElement;
+        const midSpacer = activeDocument.createElement('div');
+        midSpacer.classList.add(SPACER_CLASS);
+
+        let midW: number;
+
+        if (this.domEnd === paraIdx) {
+            // Case A: promote current window's leftmost div.
+            anchorDiv = this.getWindowDiv(paraIdx)!;
+            if (!anchorDiv) return;
+            anchorDiv.classList.add(ANCHOR_CLASS);
+            // Insert midSpacer immediately before anchorDiv (after the new domEnd div).
+            anchorDiv.insertAdjacentElement('beforebegin', midSpacer);
+            midW = 0;
+            this.domEnd--;
+            // leftSpacerWidth is unchanged.
+        } else {
+            // Case B: paraIdx is in the leftSpacer region — create a new div.
+            anchorDiv = activeDocument.createElement('div');
+            anchorDiv.classList.add(ANCHOR_CLASS);
+            anchorDiv.replaceChildren(sanitizeHTMLToDom(parseInlineToHtml(rec.src) || '<br>'));
+            // Insert: [window] → [midSpacer] → [anchorDiv] → [leftSpacer]
+            this.editorEl.insertBefore(anchorDiv, this.leftSpacer ?? null);
+            anchorDiv.insertAdjacentElement('beforebegin', midSpacer);
+            midW = 0;
+            for (let k = this.domEnd + 1; k < paraIdx; k++) {
+                const r = this.paragraphRecords[k];
+                midW += r.width > 0 ? r.width : this.estimateWidth(r.viewLen);
+            }
+            this.applyLeftSpacer(Math.max(0, this.leftSpacerWidth - anchorW - midW));
+        }
+
+        this.leftAnchor = { paraIdx, div: anchorDiv, type };
+        this.midLeftSpacer = midSpacer;
+        this.applyMidLeftSpacer(midW);
+    }
+
+    // Absorbs the right anchor back into the window or right spacer.
+    // When midRightSpacerWidth == 0 (anchor is adjacent to window): removes the mid-spacer
+    //   and decrements domStart so the anchor div becomes the new window right edge.
+    // When midRightSpacerWidth > 0 (anchor is separated): removes both the anchor div and
+    //   mid-spacer from the DOM and returns their widths to rightSpacer.
+    private absorbRightAnchor(): void {
+        if (!this.rightAnchor || !this.midRightSpacer) return;
+        // Inner anchor must be absorbed first to restore midRightSpacer to outer→window role.
+        if (this.rightAnchorInner) this.absorbRightAnchorInner();
+        if (this.midRightSpacerWidth === 0) {
+            // Adjacent — incorporate anchor into window.
+            this.midRightSpacer.remove();
+            this.rightAnchor.div.classList.remove(ANCHOR_CLASS);
+            this.domStart = this.rightAnchor.paraIdx;
+        } else {
+            // Gap present — return widths to rightSpacer.
+            const anchorW = this.paragraphRecords[this.rightAnchor.paraIdx]?.width ??
+                this.estimateWidth(this.paragraphRecords[this.rightAnchor.paraIdx]?.viewLen ?? 0);
+            this.rightAnchor.div.remove();
+            this.midRightSpacer.remove();
+            this.applyRightSpacer(this.rightSpacerWidth + anchorW + this.midRightSpacerWidth);
+        }
+        this.midRightSpacer = null;
+        this.midRightSpacerWidth = 0;
+        this.rightAnchor = null;
+    }
+
+    // Symmetric counterpart of absorbRightAnchor for the left side.
+    private absorbLeftAnchor(): void {
+        if (!this.leftAnchor || !this.midLeftSpacer) return;
+        if (this.leftAnchorInner) this.absorbLeftAnchorInner();
+        if (this.midLeftSpacerWidth === 0) {
+            this.midLeftSpacer.remove();
+            this.leftAnchor.div.classList.remove(ANCHOR_CLASS);
+            this.domEnd = this.leftAnchor.paraIdx;
+        } else {
+            const anchorW = this.paragraphRecords[this.leftAnchor.paraIdx]?.width ??
+                this.estimateWidth(this.paragraphRecords[this.leftAnchor.paraIdx]?.viewLen ?? 0);
+            this.leftAnchor.div.remove();
+            this.midLeftSpacer.remove();
+            this.applyLeftSpacer(this.leftSpacerWidth + anchorW + this.midLeftSpacerWidth);
+        }
+        this.midLeftSpacer = null;
+        this.midLeftSpacerWidth = 0;
+        this.leftAnchor = null;
+    }
+
+    // Pins paragraphRecords[paraIdx] as a secondary (inner) right anchor island between the
+    // outer rightAnchor and the main window. Called when shrinkRight finds rightAnchor already
+    // set and the inner endpoint blocks eviction again. Only Case A (domStart === paraIdx)
+    // is supported: promotes the current rightmost window div; domStart is incremented.
+    private setRightAnchorInner(paraIdx: number, type: 'cursor' | 'selection'): void {
+        if (this.rightAnchorInner?.paraIdx === paraIdx) { this.rightAnchorInner.type = type; return; }
+        if (this.rightAnchorInner) this.absorbRightAnchorInner();
+        if (!this.rightAnchor) return;
+        const anchorDiv = this.getWindowDiv(paraIdx);
+        if (!anchorDiv) return;
+        anchorDiv.classList.add(ANCHOR_CLASS);
+        // Existing midRightSpacer (outer→window) becomes midRightOuterSpacer (outer→inner).
+        this.midRightOuterSpacer = this.midRightSpacer;
+        this.midRightOuterSpacerWidth = this.midRightSpacerWidth;
+        // New midRightSpacer (inner→window) starts at width 0 (adjacent).
+        const newMid = activeDocument.createElement('div');
+        newMid.classList.add(SPACER_CLASS);
+        anchorDiv.insertAdjacentElement('afterend', newMid);
+        this.midRightSpacer = newMid;
+        this.midRightSpacerWidth = 0;
+        this.rightAnchorInner = { paraIdx, div: anchorDiv, type };
+        this.domStart++;
+    }
+
+    // Absorbs the inner right anchor back into the window (midRightSpacer == 0) or folds
+    // its width into midRightOuterSpacer (gap present). Restores midRightSpacer to the
+    // outer→window spacer role held by midRightOuterSpacer.
+    private absorbRightAnchorInner(): void {
+        if (!this.rightAnchorInner || !this.midRightSpacer || !this.midRightOuterSpacer) return;
+        const inner = this.rightAnchorInner;
+        if (this.midRightSpacerWidth === 0) {
+            this.midRightSpacer.remove();
+            inner.div.classList.remove(ANCHOR_CLASS);
+            this.midRightSpacer = this.midRightOuterSpacer;
+            this.midRightSpacerWidth = this.midRightOuterSpacerWidth;
+            this.domStart = inner.paraIdx;
+        } else {
+            const innerW = this.paragraphRecords[inner.paraIdx]?.width ??
+                this.estimateWidth(this.paragraphRecords[inner.paraIdx]?.viewLen ?? 0);
+            const oldInnerSpacerW = this.midRightSpacerWidth;
+            inner.div.remove();
+            this.midRightSpacer.remove();
+            this.midRightSpacer = this.midRightOuterSpacer;
+            this.applyMidRightSpacer(this.midRightOuterSpacerWidth + innerW + oldInnerSpacerW);
+        }
+        this.midRightOuterSpacer = null;
+        this.midRightOuterSpacerWidth = 0;
+        this.rightAnchorInner = null;
+    }
+
+    // Symmetric counterpart of setRightAnchorInner for the left side.
+    // Only Case A (domEnd === paraIdx) is supported; domEnd is decremented.
+    private setLeftAnchorInner(paraIdx: number, type: 'cursor' | 'selection'): void {
+        if (this.leftAnchorInner?.paraIdx === paraIdx) { this.leftAnchorInner.type = type; return; }
+        if (this.leftAnchorInner) this.absorbLeftAnchorInner();
+        if (!this.leftAnchor) return;
+        const anchorDiv = this.getWindowDiv(paraIdx);
+        if (!anchorDiv) return;
+        anchorDiv.classList.add(ANCHOR_CLASS);
+        // Existing midLeftSpacer (window→outer) becomes midLeftOuterSpacer (inner→outer).
+        this.midLeftOuterSpacer = this.midLeftSpacer;
+        this.midLeftOuterSpacerWidth = this.midLeftSpacerWidth;
+        // New midLeftSpacer (window→inner) starts at width 0 (adjacent).
+        const newMid = activeDocument.createElement('div');
+        newMid.classList.add(SPACER_CLASS);
+        anchorDiv.insertAdjacentElement('beforebegin', newMid);
+        this.midLeftSpacer = newMid;
+        this.midLeftSpacerWidth = 0;
+        this.leftAnchorInner = { paraIdx, div: anchorDiv, type };
+        this.domEnd--;
+    }
+
+    // Symmetric counterpart of absorbRightAnchorInner for the left side.
+    private absorbLeftAnchorInner(): void {
+        if (!this.leftAnchorInner || !this.midLeftSpacer || !this.midLeftOuterSpacer) return;
+        const inner = this.leftAnchorInner;
+        if (this.midLeftSpacerWidth === 0) {
+            this.midLeftSpacer.remove();
+            inner.div.classList.remove(ANCHOR_CLASS);
+            this.midLeftSpacer = this.midLeftOuterSpacer;
+            this.midLeftSpacerWidth = this.midLeftOuterSpacerWidth;
+            this.domEnd = inner.paraIdx;
+        } else {
+            const innerW = this.paragraphRecords[inner.paraIdx]?.width ??
+                this.estimateWidth(this.paragraphRecords[inner.paraIdx]?.viewLen ?? 0);
+            const oldInnerSpacerW = this.midLeftSpacerWidth;
+            inner.div.remove();
+            this.midLeftSpacer.remove();
+            this.midLeftSpacer = this.midLeftOuterSpacer;
+            this.applyMidLeftSpacer(this.midLeftOuterSpacerWidth + innerW + oldInnerSpacerW);
+        }
+        this.midLeftOuterSpacer = null;
+        this.midLeftOuterSpacerWidth = 0;
+        this.leftAnchorInner = null;
+    }
 
     // Measures newly expanded divs (those added since domStartBefore/domEndBefore were
     // captured) and corrects the corresponding spacer widths. All DOM mutations must be
@@ -372,7 +845,11 @@ export class ParagraphVirtualizer {
                 }
             }
             if (correction !== 0) {
-                this.applyRightSpacer(Math.max(0, this.rightSpacerWidth - correction));
+                if (this.rightAnchor) {
+                    this.applyMidRightSpacer(Math.max(0, this.midRightSpacerWidth - correction));
+                } else {
+                    this.applyRightSpacer(Math.max(0, this.rightSpacerWidth - correction));
+                }
             }
         }
         if (this.domEnd > domEndBefore) {
@@ -388,7 +865,11 @@ export class ParagraphVirtualizer {
                 }
             }
             if (correction !== 0) {
-                this.applyLeftSpacer(Math.max(0, this.leftSpacerWidth - correction));
+                if (this.leftAnchor) {
+                    this.applyMidLeftSpacer(Math.max(0, this.midLeftSpacerWidth - correction));
+                } else {
+                    this.applyLeftSpacer(Math.max(0, this.leftSpacerWidth - correction));
+                }
             }
         }
     }
@@ -396,83 +877,139 @@ export class ParagraphVirtualizer {
     // ---- Window expand / shrink helpers ----
 
     // Adds a div for paragraphRecords[domStart-1] at the right end of the window.
+    // When anchor islands are active and domStart-1 matches an anchor, absorbs it instead.
+    // Inner anchor is checked first (it is closer to the window than the outer anchor).
     private expandRight(): void {
         if (this.domStart <= 0) return;
         const i = this.domStart - 1;
+        if (this.rightAnchorInner && i === this.rightAnchorInner.paraIdx) {
+            this.absorbRightAnchorInner();
+            return;
+        }
+        if (this.rightAnchor && i === this.rightAnchor.paraIdx) {
+            this.absorbRightAnchor();
+            return;
+        }
         const rec = this.paragraphRecords[i];
         const div = activeDocument.createElement('div');
         div.replaceChildren(sanitizeHTMLToDom(parseInlineToHtml(rec.src) || '<br>'));
-        // Insert after rightSpacer (children[0]) → before the current first paragraph.
-        const firstPara = this.rightSpacer
-            ? this.editorEl.children[1] // first paragraph is after rightSpacer
-            : this.editorEl.firstChild as HTMLElement | null;
-        this.editorEl.insertBefore(div, firstPara ?? null);
-        // Shrink rightSpacer by the paragraph's estimated or measured width.
+        // Insert before the first window div (accounts for anchor + midSpacer offset).
+        const firstWindowDiv = this.editorEl.children[this.windowChildOffset] as HTMLElement | null;
+        this.editorEl.insertBefore(div, firstWindowDiv ?? null);
         const w = rec.width > 0 ? rec.width : this.estimateWidth(rec.viewLen);
-        this.applyRightSpacer(Math.max(0, this.rightSpacerWidth - w));
+        if (this.rightAnchor) {
+            // New div came from midRight region; shrink mid-spacer.
+            this.applyMidRightSpacer(Math.max(0, this.midRightSpacerWidth - w));
+        } else {
+            this.applyRightSpacer(Math.max(0, this.rightSpacerWidth - w));
+        }
         this.domStart--;
     }
 
     // Adds a div for paragraphRecords[domEnd+1] at the left end of the window.
+    // When anchor islands are active and domEnd+1 matches an anchor, absorbs it instead.
+    // Inner anchor is checked first (it is closer to the window than the outer anchor).
     private expandLeft(): void {
         if (this.domEnd >= this.paragraphRecords.length - 1) return;
         const i = this.domEnd + 1;
+        if (this.leftAnchorInner && i === this.leftAnchorInner.paraIdx) {
+            this.absorbLeftAnchorInner();
+            return;
+        }
+        if (this.leftAnchor && i === this.leftAnchor.paraIdx) {
+            this.absorbLeftAnchor();
+            return;
+        }
         const rec = this.paragraphRecords[i];
         const div = activeDocument.createElement('div');
         div.replaceChildren(sanitizeHTMLToDom(parseInlineToHtml(rec.src) || '<br>'));
-        // Insert before leftSpacer (last child) → after the current last paragraph.
-        this.editorEl.insertBefore(div, this.leftSpacer ?? null);
+        // Insert before midLeftSpacer (if anchor present) or leftSpacer.
+        const insertBefore = this.leftAnchor ? this.midLeftSpacer : this.leftSpacer;
+        this.editorEl.insertBefore(div, insertBefore ?? null);
         const w = rec.width > 0 ? rec.width : this.estimateWidth(rec.viewLen);
-        this.applyLeftSpacer(Math.max(0, this.leftSpacerWidth - w));
+        if (this.leftAnchor) {
+            this.applyMidLeftSpacer(Math.max(0, this.midLeftSpacerWidth - w));
+        } else {
+            this.applyLeftSpacer(Math.max(0, this.leftSpacerWidth - w));
+        }
         this.domEnd++;
     }
 
-    // Removes the leftmost div of the window (paragraphs[domEnd]) and grows leftSpacer.
-    // When the cursor (collapsed) is inside this div, removal is blocked to protect editing.
-    // When a non-collapsed selection endpoint is inside this div, clampSelectionOnShrink()
-    // moves the endpoint to a proxy position before removal so VS tracking stays intact.
+    // Removes the leftmost div of the window (paragraphs[domEnd]) and grows leftSpacer (or
+    // midLeftSpacer when a left anchor is active).
+    // When any selection endpoint (collapsed or not) is inside this div, promotes the div to a
+    // left anchor island instead of removing it, so the selection endpoint stays in the DOM.
     private shrinkLeft(): void {
         if (this.domEnd < this.domStart) return; // empty window guard
-        const spacerOffset = this.rightSpacer ? 1 : 0;
-        const div = this.editorEl.children[this.domEnd - this.domStart + spacerOffset] as HTMLElement;
-        if (!div) return;
+        const div = this.editorEl.children[this.domEnd - this.domStart + this.windowChildOffset] as HTMLElement;
+        if (!div || div.classList.contains(SPACER_CLASS) || div.classList.contains(ANCHOR_CLASS)) return;
         const sel = window.getSelection();
         if (sel) {
             const collidingAnchor = div.contains(sel.anchorNode);
             const collidingFocus  = div.contains(sel.focusNode);
-            if (sel.isCollapsed && collidingAnchor) return; // cursor in this div — protect
+            if (sel.isCollapsed && collidingAnchor) {
+                // Promote to anchor island instead of blocking removal.
+                if (!this.leftAnchor) this.setLeftAnchor(this.domEnd, 'cursor');
+                return;
+            }
             if (!sel.isCollapsed && (collidingAnchor || collidingFocus)) {
-                this.clampSelectionOnShrink(div, this.domEnd);
+                if (!this.leftAnchor) {
+                    this.initVsFromDomIfNeeded(sel);
+                    this.setLeftAnchor(this.domEnd, 'cursor');
+                } else if (!this.leftAnchorInner && this.virtualSelection) {
+                    this.setLeftAnchorInner(this.domEnd, 'cursor');
+                }
+                return;
             }
         }
         const rec = this.paragraphRecords[this.domEnd];
         const w = rec.width > 0 ? rec.width : this.estimateWidth(rec.viewLen);
         rec.width = w;
         div.remove();
-        this.applyLeftSpacer(this.leftSpacerWidth + w);
+        if (this.leftAnchor) {
+            this.applyMidLeftSpacer(this.midLeftSpacerWidth + w);
+        } else {
+            this.applyLeftSpacer(this.leftSpacerWidth + w);
+        }
         this.domEnd--;
     }
 
-    // Removes the rightmost div of the window (paragraphs[domStart]) and grows rightSpacer.
+    // Removes the rightmost div of the window (paragraphs[domStart]) and grows rightSpacer (or
+    // midRightSpacer when a right anchor is active).
+    // When any selection endpoint (collapsed or not) is inside this div, promotes the div to a
+    // right anchor island instead of removing it, so the selection endpoint stays in the DOM.
     private shrinkRight(): void {
         if (this.domEnd < this.domStart) return;
-        const spacerOffset = this.rightSpacer ? 1 : 0;
-        const div = this.editorEl.children[spacerOffset] as HTMLElement; // first paragraph
-        if (!div || div.classList.contains(SPACER_CLASS)) return;
+        const div = this.editorEl.children[this.windowChildOffset] as HTMLElement; // first window paragraph
+        if (!div || div.classList.contains(SPACER_CLASS) || div.classList.contains(ANCHOR_CLASS)) return;
         const sel = window.getSelection();
         if (sel) {
             const collidingAnchor = div.contains(sel.anchorNode);
             const collidingFocus  = div.contains(sel.focusNode);
-            if (sel.isCollapsed && collidingAnchor) return; // cursor in this div — protect
+            if (sel.isCollapsed && collidingAnchor) {
+                // Promote to anchor island instead of blocking removal.
+                if (!this.rightAnchor) this.setRightAnchor(this.domStart, 'cursor');
+                return;
+            }
             if (!sel.isCollapsed && (collidingAnchor || collidingFocus)) {
-                this.clampSelectionOnShrink(div, this.domStart);
+                if (!this.rightAnchor) {
+                    this.initVsFromDomIfNeeded(sel);
+                    this.setRightAnchor(this.domStart, 'cursor');
+                } else if (!this.rightAnchorInner && this.virtualSelection) {
+                    this.setRightAnchorInner(this.domStart, 'cursor');
+                }
+                return;
             }
         }
         const rec = this.paragraphRecords[this.domStart];
         const w = rec.width > 0 ? rec.width : this.estimateWidth(rec.viewLen);
         rec.width = w;
         div.remove();
-        this.applyRightSpacer(this.rightSpacerWidth + w);
+        if (this.rightAnchor) {
+            this.applyMidRightSpacer(this.midRightSpacerWidth + w);
+        } else {
+            this.applyRightSpacer(this.rightSpacerWidth + w);
+        }
         this.domStart++;
     }
 
@@ -508,14 +1045,28 @@ export class ParagraphVirtualizer {
         // Read layout properties once before any mutations to avoid thrashing.
         const scrollLeft = this.scrollArea.scrollLeft;
         const viewW      = this.scrollArea.clientWidth;
-        const W          = this.scrollArea.scrollWidth;
+        let W            = this.scrollArea.scrollWidth; // 'let': may be updated after teleport
+
+        // When a virtual selection is active and the viewport jumps by more than 10 screen
+        // widths, the browser has auto-scrolled to reveal a selection endpoint (e.g. after
+        // Cmd-A → Shift+Arrow). Incremental expand/shrink would be O(N) DOM mutations;
+        // teleport the window directly to the VS focus paragraph instead.
+        const prevScrollLeft = this.prevScrollLeft;
+        this.prevScrollLeft  = scrollLeft;
+        if (this.virtualSelection && prevScrollLeft >= 0 &&
+                Math.abs(scrollLeft - prevScrollLeft) > viewW * 10) {
+            this.teleportWindowTo(this.virtualSelection.focusParaIdx);
+            W = this.scrollArea.scrollWidth; // re-read after teleport mutations
+        }
 
         // ---- Left boundary (domEnd) ----
-        // Expand: domEnd's right edge within EXPAND_MARGIN of viewport's left edge.
+        // Expand: window's left edge (leftWindowOffset) within EXPAND_MARGIN of viewport's
+        // left edge. leftWindowOffset accounts for leftAnchor + midLeftSpacer when active.
+        // Using leftWindowOffset alone (without + domEnd.width) ensures the value decreases
+        // with each expandLeft call, preventing the condition from being a constant that
+        // would otherwise cause O(N) expansion when scrollLeft is at the document boundary.
         while (this.domEnd < this.paragraphRecords.length - 1) {
-            const rec = this.paragraphRecords[this.domEnd];
-            const w   = rec.width > 0 ? rec.width : this.estimateWidth(rec.viewLen);
-            if (this.leftSpacerWidth + w > scrollLeft - EXPAND_MARGIN) {
+            if (this.leftWindowOffset > scrollLeft - EXPAND_MARGIN) {
                 this.expandLeft();
             } else break;
         }
@@ -523,7 +1074,7 @@ export class ParagraphVirtualizer {
         while (this.domEnd > this.domStart + 2) {
             const rec = this.paragraphRecords[this.domEnd];
             const w   = rec.width > 0 ? rec.width : this.estimateWidth(rec.viewLen);
-            if (this.leftSpacerWidth + w < scrollLeft - SHRINK_MARGIN) {
+            if (this.leftWindowOffset + w < scrollLeft - SHRINK_MARGIN) {
                 const endBefore = this.domEnd;
                 this.shrinkLeft();
                 if (this.domEnd === endBefore) break; // blocked (e.g. selection overlap), stop
@@ -532,10 +1083,11 @@ export class ParagraphVirtualizer {
 
         // ---- Right boundary (domStart) ----
         // Expand: domStart's left edge within EXPAND_MARGIN of viewport's right edge.
+        // rightWindowOffset accounts for rightAnchor + midRightSpacer when active.
         while (this.domStart > 0) {
             const rec = this.paragraphRecords[this.domStart];
             const w   = rec.width > 0 ? rec.width : this.estimateWidth(rec.viewLen);
-            if (W - this.rightSpacerWidth - w < scrollLeft + viewW + EXPAND_MARGIN) {
+            if (W - this.rightWindowOffset - w < scrollLeft + viewW + EXPAND_MARGIN) {
                 this.expandRight();
             } else break;
         }
@@ -543,7 +1095,7 @@ export class ParagraphVirtualizer {
         while (this.domEnd > this.domStart + 2) {
             const rec = this.paragraphRecords[this.domStart];
             const w   = rec.width > 0 ? rec.width : this.estimateWidth(rec.viewLen);
-            if (W - this.rightSpacerWidth - w > scrollLeft + viewW + SHRINK_MARGIN) {
+            if (W - this.rightWindowOffset - w > scrollLeft + viewW + SHRINK_MARGIN) {
                 const startBefore = this.domStart;
                 this.shrinkRight();
                 if (this.domStart === startBefore) break; // blocked (e.g. selection overlap), stop
@@ -556,8 +1108,17 @@ export class ParagraphVirtualizer {
         this.correctSpacerAfterExpand(domStartBefore, domEndBefore);
 
         // Re-sync the DOM Range to the VS proxy positions after the window has settled.
-        // Without this, the selection appears stuck at the old proxy boundary div.
-        if (this.virtualSelection) this.syncDomRangeToVirtual();
+        // Before resetting, capture any focus movement (e.g., Shift+Arrow into a mid-spacer)
+        // that occurred between the browser's selection update and this scroll event firing.
+        if (this.virtualSelection) {
+            const sel = window.getSelection();
+            if (sel && !sel.isCollapsed) {
+                const focusUpdated = this.tryUpdateFocusFromDom(sel);
+                if (focusUpdated) this.scrollFocusIntoView();
+            }
+            this.syncDomRangeToVirtual();
+        }
+
     }
 
     // Reads the actual rendered widths of all in-window paragraph divs and updates
@@ -567,14 +1128,31 @@ export class ParagraphVirtualizer {
     // per shrink is zero, keeping the cursor in place (overflow-anchor: none).
     private premeasureWindowWidths(): void {
         if (!this.rightSpacer || this.domEnd < 0) return;
-        const spacerOffset = 1; // rightSpacer is always children[0]
+        const off = this.windowChildOffset;
         const children = this.editorEl.children;
         for (let i = this.domStart; i <= this.domEnd; i++) {
             const k = i - this.domStart;
-            const div = children[k + spacerOffset] as HTMLElement;
+            const div = children[k + off] as HTMLElement;
             if (!div || div.classList.contains(SPACER_CLASS)) continue;
             const w = div.getBoundingClientRect().width;
             if (w > 0) this.paragraphRecords[i].width = w;
+        }
+        // Also measure anchor divs so their widths are accurate for spacer accounting.
+        if (this.rightAnchor) {
+            const w = this.rightAnchor.div.getBoundingClientRect().width;
+            if (w > 0) this.paragraphRecords[this.rightAnchor.paraIdx].width = w;
+        }
+        if (this.rightAnchorInner) {
+            const w = this.rightAnchorInner.div.getBoundingClientRect().width;
+            if (w > 0) this.paragraphRecords[this.rightAnchorInner.paraIdx].width = w;
+        }
+        if (this.leftAnchorInner) {
+            const w = this.leftAnchorInner.div.getBoundingClientRect().width;
+            if (w > 0) this.paragraphRecords[this.leftAnchorInner.paraIdx].width = w;
+        }
+        if (this.leftAnchor) {
+            const w = this.leftAnchor.div.getBoundingClientRect().width;
+            if (w > 0) this.paragraphRecords[this.leftAnchor.paraIdx].width = w;
         }
     }
 
@@ -610,9 +1188,18 @@ export class ParagraphVirtualizer {
 
     getVirtualSelection(): VirtualSelection | null { return this.virtualSelection; }
 
-    clearVirtualSelection(): void { this.virtualSelection = null; }
+    clearVirtualSelection(): void {
+        if (this.virtualSelection) {
+            // Release selection-type anchor islands created for Cmd-A.
+            if (this.rightAnchor?.type === 'selection') this.absorbRightAnchor();
+            if (this.leftAnchor?.type === 'selection') this.absorbLeftAnchor();
+        }
+        this.virtualSelection = null;
+    }
 
     // Initializes VS to span the entire document and syncs the DOM Range to proxy positions.
+    // For N > 1: sets up anchor islands for para 0 (right anchor) and para N-1 (left anchor)
+    // so that the DOM selection uses real nodes rather than window-boundary proxies.
     // Called from the Cmd-A handler instead of expandWindowToFull().
     setVirtualSelectAll(): void {
         const N = this.paragraphRecords.length;
@@ -623,6 +1210,12 @@ export class ParagraphVirtualizer {
             focusParaIdx:  N - 1,
             focusViewOff:  this.paragraphRecords[N - 1].viewLen,
         };
+        if (N > 1) {
+            // Ensure para 0 is in DOM as right anchor (unless it is already in the window).
+            if (this.domStart > 0) this.setRightAnchor(0, 'selection');
+            // Ensure para N-1 is in DOM as left anchor (unless it is already in the window).
+            if (this.domEnd < N - 1) this.setLeftAnchor(N - 1, 'selection');
+        }
         this.syncDomRangeToVirtual();
     }
 
@@ -670,14 +1263,60 @@ export class ParagraphVirtualizer {
         this.adjustWindowOnScroll();
     }
 
+    // Called from selectionchange when VS is null and the DOM selection is non-collapsed.
+    // If one or both endpoints are in anchor island divs, initializes VS from the real
+    // paragraph indices and returns true. The caller should then call syncDomRangeToVirtual()
+    // to normalize the DOM selection to proxy positions.
+    // Without this, copy/cut would fall back to cloneContents() which includes spacer divs
+    // and out-of-window paragraphs in the wrong order, producing corrupted clipboard content.
+    tryInitVsFromDomSelection(sel: Selection): boolean {
+        if (this.virtualSelection || sel.isCollapsed) return false;
+        const anchorDiv = this.findParaDiv(sel.anchorNode!);
+        const focusDiv  = this.findParaDiv(sel.focusNode!);
+        let anchorIdx = anchorDiv ? this.getParagraphIndex(anchorDiv) : -1;
+        let focusIdx  = focusDiv  ? this.getParagraphIndex(focusDiv)  : -1;
+        if (anchorIdx < 0 || focusIdx < 0) return false;
+        const anchorIsIsland = this.rightAnchor?.div === anchorDiv || this.rightAnchorInner?.div === anchorDiv ||
+            this.leftAnchorInner?.div === anchorDiv || this.leftAnchor?.div === anchorDiv;
+        const focusIsIsland  = this.rightAnchor?.div === focusDiv  || this.rightAnchorInner?.div === focusDiv ||
+            this.leftAnchorInner?.div === focusDiv  || this.leftAnchor?.div === focusDiv;
+        if (!anchorIsIsland && !focusIsIsland) return false;
+        let anchorViewOff = computeViewOffsetInDiv(anchorDiv!, this.editorEl, sel.anchorNode!, sel.anchorOffset);
+        let focusViewOff  = computeViewOffsetInDiv(focusDiv!,  this.editorEl, sel.focusNode!,  sel.focusOffset);
+        if (focusViewOff  === 0 && focusIdx  > 0 && sel.focusNode!.nodeType  !== Node.TEXT_NODE) { focusIdx--;  focusViewOff  = this.getViewLenByIndex(focusIdx);  }
+        if (anchorViewOff === 0 && anchorIdx > 0 && sel.anchorNode!.nodeType !== Node.TEXT_NODE) { anchorIdx--; anchorViewOff = this.getViewLenByIndex(anchorIdx); }
+        this.virtualSelection = { anchorParaIdx: anchorIdx, anchorViewOff, focusParaIdx: focusIdx, focusViewOff };
+        return true;
+    }
+
     // Called from selectionchange when VS is active and the event is not programmatic.
     // Reads the new focus position from the DOM and updates VS.focusParaIdx/focusViewOff.
-    // Returns true if VS was changed (caller should then call syncDomRangeToVirtual()).
+    // Returns true if the DOM range should be re-synced (caller should then call
+    // syncDomRangeToVirtual() and scrollFocusIntoView()).
+    // Returns true WITHOUT updating VS when the focus escaped into an outer or mid spacer —
+    // the escape triggers re-sync and scroll-into-view, which drives a large auto-scroll that
+    // in turn triggers the teleport-on-jump path in adjustWindowOnScroll.
     tryUpdateFocusFromDom(sel: Selection): boolean {
         const vs = this.virtualSelection;
         if (!vs) return false;
         const focusNode = sel.focusNode;
         if (!focusNode) return false;
+
+        // Focus escaped into an outer spacer (document-start or document-end boundary).
+        // Re-sync without updating VS so syncDomRangeToVirtual re-clamps to the valid position.
+        if ((this.rightSpacer?.contains(focusNode)) || (this.leftSpacer?.contains(focusNode))) {
+            return true;
+        }
+
+        // Focus escaped into a mid-spacer (gap between anchor island and window edge).
+        // This happens when Shift+Arrow moves focus from an anchor island div into the
+        // adjacent mid-spacer. Treat like outer spacer: VS is unchanged but return true so
+        // scrollFocusIntoView fires, driving a large scroll that triggers the
+        // teleport-on-jump path (same mechanism as the outer-spacer escape).
+        if ((this.midLeftSpacer?.contains(focusNode)) || (this.midRightSpacer?.contains(focusNode)) ||
+            (this.midLeftOuterSpacer?.contains(focusNode)) || (this.midRightOuterSpacer?.contains(focusNode))) {
+            return true;
+        }
 
         // If the DOM focus is at the proxy position that syncDomRangeToVirtual would set,
         // this selectionchange was triggered by our own setBaseAndExtent (not by the user).
@@ -691,12 +1330,29 @@ export class ParagraphVirtualizer {
 
         const focusDiv = this.findParaDiv(focusNode);
         if (!focusDiv) return false;
-        const focusParaIdx = this.getParagraphIndex(focusDiv);
+        let focusParaIdx = this.getParagraphIndex(focusDiv);
         if (focusParaIdx < 0) return false;
-        const newFocusViewOff = computeViewOffsetInDiv(focusDiv, this.editorEl, focusNode, sel.focusOffset);
+        let newFocusViewOff = computeViewOffsetInDiv(focusDiv, this.editorEl, focusNode, sel.focusOffset);
+        if (newFocusViewOff === 0 && focusParaIdx > 0 && focusNode.nodeType !== Node.TEXT_NODE) { focusParaIdx--; newFocusViewOff = this.getViewLenByIndex(focusParaIdx); }
         if (focusParaIdx === vs.focusParaIdx && newFocusViewOff === vs.focusViewOff) return false;
         this.virtualSelection = { ...vs, focusParaIdx, focusViewOff: newFocusViewOff };
         return true;
+    }
+
+    // Scrolls the paragraph containing the VS focus into view. Called after
+    // syncDomRangeToVirtual() since programmatic setBaseAndExtent does not trigger browser
+    // auto-scroll. Also called when focus escapes into a spacer, to prevent the browser from
+    // auto-scrolling to the document boundary (which would trigger O(N) DOM expansion).
+    scrollFocusIntoView(): void {
+        const vs = this.virtualSelection;
+        if (!vs) return;
+        let focusEl: HTMLElement | null = null;
+        if (this.rightAnchor?.paraIdx === vs.focusParaIdx) focusEl = this.rightAnchor.div;
+        else if (this.rightAnchorInner?.paraIdx === vs.focusParaIdx) focusEl = this.rightAnchorInner.div;
+        else if (this.leftAnchorInner?.paraIdx === vs.focusParaIdx) focusEl = this.leftAnchorInner.div;
+        else if (this.leftAnchor?.paraIdx === vs.focusParaIdx) focusEl = this.leftAnchor.div;
+        else focusEl = this.getWindowDiv(vs.focusParaIdx);
+        focusEl?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
     }
 
     // Sets the DOM Range to proxy positions derived from the current VS, so that native
@@ -713,14 +1369,26 @@ export class ParagraphVirtualizer {
     }
 
     // Returns the DOM node/offset for the given (paraIdx, viewOff) endpoint.
-    // For off-window paragraphs, returns a proxy at the nearest window boundary div.
+    // When an anchor island exists for paraIdx, uses the actual anchor div so the DOM
+    // selection endpoint is a real node (not a window-boundary proxy).
+    // For other off-window paragraphs, falls back to the nearest window boundary proxy.
     private proxyForEndpoint(paraIdx: number, viewOff: number): { node: Node; offset: number } {
+        if (this.rightAnchor && paraIdx === this.rightAnchor.paraIdx)
+            return computeDomPositionFromViewOff(this.rightAnchor.div, this.editorEl, viewOff);
+        if (this.rightAnchorInner && paraIdx === this.rightAnchorInner.paraIdx)
+            return computeDomPositionFromViewOff(this.rightAnchorInner.div, this.editorEl, viewOff);
+        if (this.leftAnchorInner && paraIdx === this.leftAnchorInner.paraIdx)
+            return computeDomPositionFromViewOff(this.leftAnchorInner.div, this.editorEl, viewOff);
+        if (this.leftAnchor && paraIdx === this.leftAnchor.paraIdx)
+            return computeDomPositionFromViewOff(this.leftAnchor.div, this.editorEl, viewOff);
         if (paraIdx < this.domStart) {
-            // Off-right: proxy = start of domStart div (rightmost visible paragraph)
+            // Off-right (between rightAnchor and window, or beyond rightAnchor):
+            // proxy = start of domStart div (rightmost visible paragraph).
             const div = this.getWindowDiv(this.domStart);
             if (div) return { node: div, offset: 0 };
         } else if (paraIdx > this.domEnd) {
-            // Off-left: proxy = end of domEnd div (leftmost visible paragraph)
+            // Off-left (between window and leftAnchor, or beyond leftAnchor):
+            // proxy = end of domEnd div (leftmost visible paragraph).
             const div = this.getWindowDiv(this.domEnd);
             if (div) {
                 const last = findLastBaseTextInElement(div, this.editorEl);
@@ -728,7 +1396,7 @@ export class ParagraphVirtualizer {
                 return { node: div, offset: div.childNodes.length };
             }
         } else {
-            // In-window: actual DOM position
+            // In-window: actual DOM position.
             const div = this.getWindowDiv(paraIdx);
             if (div) return computeDomPositionFromViewOff(div, this.editorEl, viewOff);
         }
@@ -742,82 +1410,51 @@ export class ParagraphVirtualizer {
         window.setTimeout(() => { this.programmaticSelectionUpdates--; }, 0);
     }
 
-    // Saves the current selection into VS and moves DOM endpoints out of the div that is
-    // about to be removed. Called from shrinkLeft/shrinkRight when a non-collapsed selection
-    // endpoint is inside the div being evicted from the DOM window.
-    private clampSelectionOnShrink(div: HTMLElement, paraIdx: number): void {
-        const sel = window.getSelection();
-        if (!sel || sel.isCollapsed) return;
-        const anchorInDiv = div.contains(sel.anchorNode);
-        const focusInDiv  = div.contains(sel.focusNode);
-        if (!anchorInDiv && !focusInDiv) return;
-
-        // Initialize VS from DOM if not yet active
-        if (!this.virtualSelection) {
-            const anchorDiv = this.findParaDiv(sel.anchorNode!);
-            const focusDiv  = this.findParaDiv(sel.focusNode!);
-            const anchorIdx = anchorDiv ? this.getParagraphIndex(anchorDiv) : -1;
-            const focusIdx  = focusDiv  ? this.getParagraphIndex(focusDiv)  : -1;
-            if (anchorIdx < 0 || focusIdx < 0) return;
-            this.virtualSelection = {
-                anchorParaIdx: anchorIdx,
-                anchorViewOff: anchorDiv
-                    ? computeViewOffsetInDiv(anchorDiv, this.editorEl, sel.anchorNode!, sel.anchorOffset)
-                    : 0,
-                focusParaIdx:  focusIdx,
-                focusViewOff:  focusDiv
-                    ? computeViewOffsetInDiv(focusDiv, this.editorEl, sel.focusNode!, sel.focusOffset)
-                    : 0,
-            };
-        }
-
-        // Compute proxy for the endpoint(s) in the div being removed
-        let proxyNode: Node;
-        let proxyOffset: number;
-        if (paraIdx === this.domEnd) {
-            // shrinkLeft removes domEnd: proxy = end of domEnd-1
-            const safeDiv = this.getWindowDiv(this.domEnd - 1);
-            if (!safeDiv) return;
-            const last = findLastBaseTextInElement(safeDiv, this.editorEl);
-            if (last) { proxyNode = last.node; proxyOffset = last.offset; }
-            else { proxyNode = safeDiv; proxyOffset = safeDiv.childNodes.length; }
-        } else if (paraIdx === this.domStart) {
-            // shrinkRight removes domStart: proxy = start of domStart+1
-            const safeDiv = this.getWindowDiv(this.domStart + 1);
-            if (!safeDiv) return;
-            proxyNode = safeDiv; proxyOffset = 0;
-        } else {
-            return;
-        }
-
-        let newAnchorNode: Node, newAnchorOffset: number;
-        let newFocusNode:  Node, newFocusOffset:  number;
-        if (anchorInDiv && focusInDiv) {
-            newAnchorNode = proxyNode; newAnchorOffset = proxyOffset;
-            newFocusNode  = proxyNode; newFocusOffset  = proxyOffset;
-        } else if (anchorInDiv) {
-            newAnchorNode = proxyNode;        newAnchorOffset = proxyOffset;
-            newFocusNode  = sel.focusNode!;   newFocusOffset  = sel.focusOffset;
-        } else {
-            newAnchorNode = sel.anchorNode!;  newAnchorOffset = sel.anchorOffset;
-            newFocusNode  = proxyNode;        newFocusOffset  = proxyOffset;
-        }
-        this.markProgrammaticSelection();
-        sel.setBaseAndExtent(newAnchorNode, newAnchorOffset, newFocusNode, newFocusOffset);
+    // Initializes virtualSelection from the current DOM selection if VS is not yet active.
+    // Called before promoting a selection endpoint's paragraph to an anchor island, so VS
+    // captures the real paragraph indices before the div leaves the window.
+    private initVsFromDomIfNeeded(sel: Selection): void {
+        if (this.virtualSelection || sel.isCollapsed) return;
+        const anchorDiv = this.findParaDiv(sel.anchorNode!);
+        const focusDiv  = this.findParaDiv(sel.focusNode!);
+        let anchorIdx = anchorDiv ? this.getParagraphIndex(anchorDiv) : -1;
+        let focusIdx  = focusDiv  ? this.getParagraphIndex(focusDiv)  : -1;
+        if (anchorIdx < 0 || focusIdx < 0) return;
+        let anchorViewOff = computeViewOffsetInDiv(anchorDiv!, this.editorEl, sel.anchorNode!, sel.anchorOffset);
+        let focusViewOff  = computeViewOffsetInDiv(focusDiv!,  this.editorEl, sel.focusNode!,  sel.focusOffset);
+        // Normalize paragraph-boundary positions: (paraIdx, 0) for paraIdx > 0 is semantically
+        // identical to (paraIdx-1, viewLen(paraIdx-1)). Prefer the earlier paragraph so that
+        // eviction of the later paragraph div during scroll does not falsely trigger a collision.
+        // Only normalize for element nodes (div at offset=0 = trailing newline position). A text
+        // node at offset=0 means the cursor is genuinely at the start of the paragraph (e.g.
+        // triple-click anchor) and must NOT be remapped to end-of-previous-paragraph.
+        if (focusViewOff  === 0 && focusIdx  > 0 && sel.focusNode!.nodeType  !== Node.TEXT_NODE) { focusIdx--;  focusViewOff  = this.getViewLenByIndex(focusIdx);  }
+        if (anchorViewOff === 0 && anchorIdx > 0 && sel.anchorNode!.nodeType !== Node.TEXT_NODE) { anchorIdx--; anchorViewOff = this.getViewLenByIndex(anchorIdx); }
+        this.virtualSelection = { anchorParaIdx: anchorIdx, anchorViewOff, focusParaIdx: focusIdx, focusViewOff };
     }
 
     // Returns the direct paragraph div (non-spacer DIV child of editorEl) that contains node.
+    // Anchor island divs are valid paragraph divs even though they carry ANCHOR_CLASS.
     private findParaDiv(node: Node): HTMLElement | null {
         const div = findParentDivInEditor(node, this.editorEl);
-        return div && !div.classList.contains(SPACER_CLASS) ? div : null;
+        if (!div) return null;
+        if (div.classList.contains(SPACER_CLASS)) return null;
+        return div; // includes ANCHOR_CLASS divs
     }
 
-    // Returns the paragraphRecords index for the given in-window div, or -1 if not found.
+    // Returns the paragraphRecords index for the given div, or -1 if not found.
+    // Handles in-window divs, right anchor div, and left anchor div.
     private getParagraphIndex(div: HTMLElement): number {
-        const spacerOffset = this.rightSpacer ? 1 : 0;
+        if (this.rightAnchor      && div === this.rightAnchor.div)      return this.rightAnchor.paraIdx;
+        if (this.rightAnchorInner && div === this.rightAnchorInner.div) return this.rightAnchorInner.paraIdx;
+        if (this.leftAnchorInner  && div === this.leftAnchorInner.div)  return this.leftAnchorInner.paraIdx;
+        if (this.leftAnchor       && div === this.leftAnchor.div)       return this.leftAnchor.paraIdx;
+        const off = this.windowChildOffset;
         const children = this.editorEl.children;
-        for (let k = spacerOffset; k < children.length; k++) {
-            if (children[k] === div) return this.domStart + (k - spacerOffset);
+        for (let k = off; k < children.length; k++) {
+            const child = children[k];
+            if (child.classList.contains(SPACER_CLASS)) break; // past window end
+            if (child === div) return this.domStart + (k - off);
         }
         return -1;
     }

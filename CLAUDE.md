@@ -100,6 +100,7 @@ See the design documents in `docs/design/` for details:
 - [Proactive Layout Cache Refresh for content-visibility:auto (tate-layout-refreshing, two-rAF pattern)](docs/design/20260429_proactive_layout_cache_refresh.md)
 - [DOM Virtualization: Frozen Paragraph Placeholders (ParagraphVirtualizer, freeze/thaw lifecycle)](docs/design/20260504_dom_virtualization.md)
 - [Full DOM Virtualization: Design Notes and Future Feature Roadmap (replace, headings, outline)](docs/design/20260505_full_virtualization.md)
+- [Anchor Island: Pinned Paragraph Divs Outside the DOM Window (cursor stall fix, Cmd-A fix)](docs/design/20260522_anchor_island.md)
 
 ## Settings
 

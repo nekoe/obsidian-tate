@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { ParagraphVirtualizer, SPACER_CLASS } from './ParagraphVirtualizer';
 
 // ---- Helpers ----
@@ -309,38 +309,4 @@ describe('ParagraphVirtualizer', () => {
         });
     });
 
-    // ---- expandWindowToFull ----
-
-    describe('expandWindowToFull', () => {
-        let mockObserve: ReturnType<typeof vi.fn>;
-        let mockDisconnect: ReturnType<typeof vi.fn>;
-
-        beforeEach(() => {
-            mockObserve = vi.fn();
-            mockDisconnect = vi.fn();
-            vi.stubGlobal('IntersectionObserver', vi.fn(() => ({
-                observe: mockObserve,
-                unobserve: vi.fn(),
-                disconnect: mockDisconnect,
-            })));
-        });
-
-        afterEach(() => {
-            vi.unstubAllGlobals();
-        });
-
-        it('rebuilds all divs and resets domStart=0, domEnd=N-1', () => {
-            const virtIO = new ParagraphVirtualizer(editorEl, scrollArea);
-            virtIO.attach();
-            virtIO.initRecords(['a', 'b', 'c']);
-            virtIO.domStart = 1;
-            virtIO.domEnd   = 2;
-            virtIO.expandWindowToFull();
-            expect(virtIO.domStart).toBe(0);
-            expect(virtIO.domEnd).toBe(2);
-            // spacers + 3 paragraph divs
-            expect(editorEl.children.length).toBe(5);
-            virtIO.detach();
-        });
-    });
 });

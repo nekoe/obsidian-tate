@@ -329,8 +329,16 @@ export class VerticalWritingView extends ItemView {
                             virtualizer.clearVirtualSelection();
                         } else {
                             const changed = virtualizer.tryUpdateFocusFromDom(sel);
-                            if (changed) virtualizer.syncDomRangeToVirtual();
+                            if (changed) {
+                                virtualizer.syncDomRangeToVirtual();
+                                virtualizer.scrollFocusIntoView();
+                            }
                         }
+                    } else if (!sel.isCollapsed && virtualizer.tryInitVsFromDomSelection(sel)) {
+                        // DOM selection crosses an anchor island: initialize VS so that
+                        // copy/cut use the VS-aware code path (correct paragraph range)
+                        // rather than cloneContents() which includes spacer divs.
+                        virtualizer.syncDomRangeToVirtual();
                     }
                 }
             }
@@ -740,12 +748,12 @@ export class VerticalWritingView extends ItemView {
         this.plugin.updateCharCount(countChars(this.lastCommittedContent));
         const el = this.editorEl;
         if (el) {
-            // focus() resets the caret to the start; restore it immediately after.
-            el.el.focus({ preventScroll: true });
             if (this.pendingCursorOffset !== null) {
                 // New file was loaded in the background: restore the saved offset and scroll.
+                // focus() is called first so the caret can be placed immediately after.
                 // Defer hide + scroll to rAF 1 so the spinner is visible on the first
                 // paint when the tab becomes active (matches restoreViewOffset active path).
+                el.el.focus({ preventScroll: true });
                 const gen = this.scrollRestoringGeneration; // snapshot for rAF guard
                 const offset = this.pendingCursorOffset;
                 this.pendingCursorOffset = null;
@@ -762,19 +770,21 @@ export class VerticalWritingView extends ItemView {
             } else if (this.pendingParagraphJump !== null) {
                 // Outline jump: revealLeaf triggered active-leaf-change before the safety-clear
                 // rAF fired. Restore by paragraph index to avoid the viewOffset boundary ambiguity.
+                el.el.focus({ preventScroll: true });
                 const idx = this.pendingParagraphJump;
                 this.pendingParagraphJump = null;
                 el.setViewCursorToParagraphIndex(idx);
                 this.lastKnownViewOffset = el.getViewCursorOffset();
                 void this.syncCoordinator?.checkAndApplyExternalChange();
             } else {
-                // Normal tab switch: restore cursor, then check for external file changes
-                // made while this view was inactive (e.g. edits in MarkdownView).
-                // Skipped when pendingCursorOffset is set: the file was just loaded from vault
-                // by loadFile(), so its content is already current.
-                if (this.lastKnownViewOffset !== null) {
-                    el.setViewCursorOffset(this.lastKnownViewOffset);
-                }
+                // Normal tab switch: preserve the scroll position exactly as the user left it.
+                // focus() is intentionally skipped — calling it restores the browser's last
+                // selection (which may be a VS proxy), triggering unwanted scroll.  The caret
+                // is lost until the user clicks or types, which is an acceptable trade-off for
+                // keeping the viewport stable.
+                // Clear any active VS so anchor island divs are removed from the DOM before
+                // checkAndApplyExternalChange() may rebuild it.
+                this.virtualizer?.clearVirtualSelection();
                 void this.syncCoordinator?.checkAndApplyExternalChange();
             }
         }
@@ -846,6 +856,9 @@ export class VerticalWritingView extends ItemView {
         const el = this.editorEl;
         if (!el) return;
         el.el.focus({ preventScroll: true });
+        // Clear any active VS so the teleport-on-jump condition in adjustWindowOnScroll
+        // cannot fire with the old focusParaIdx and override the jump target.
+        this.virtualizer?.clearVirtualSelection();
         el.setViewCursorToParagraphIndex(idx);
         this.pendingParagraphJump = idx;
         this.lastKnownViewOffset = el.getViewCursorOffset();
