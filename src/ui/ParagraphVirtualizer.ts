@@ -536,7 +536,10 @@ export class ParagraphVirtualizer {
     // Rebuilds the DOM from paragraphRecords without traversing intermediate paragraphs.
     // Clears any anchor islands first so spacer widths are recomputed cleanly by resetWindow().
     // Used by EditorElement.jumpWindowTo() and SearchPanel navigation.
-    teleportWindowTo(center: number, windowHalf = 50): void {
+    // windowHalf=20 (41 divs max) rather than the INITIAL_WINDOW_HALF of 50: adjustWindowOnScroll
+    // corrects the window size on the next scroll event, so a large pre-built buffer is wasteful.
+    // 20 exceeds the ~10-paragraph expand margin and avoids an immediate expansion in all cases.
+    teleportWindowTo(center: number, windowHalf = 20): void {
         const N = this.paragraphRecords.length;
         if (N === 0) return;
         const lo = Math.max(0, center - windowHalf);
