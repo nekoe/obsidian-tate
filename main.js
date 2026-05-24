@@ -3989,11 +3989,13 @@ var EditorElement = class {
     return changedDivs;
   }
   // Returns true iff el.childNodes consists of the expected number of paragraph <div> elements
-  // (plus spacers). With virtualizer: checks against the window size (domEnd-domStart+1), since
-  // syncWindowSrcs keeps domEnd accurate. Without virtualizer: checks against expectedCount.
+  // (plus spacers and anchor island children). With virtualizer: checks against the window size
+  // (domEnd-domStart+1), since syncWindowSrcs keeps domEnd accurate. Without virtualizer: checks
+  // against expectedCount.
   hasCleanDivStructure(expectedCount) {
+    var _a, _b;
     const virt = this.virtualizer;
-    const spacerCount = (virt == null ? void 0 : virt.rightSpacer) ? 2 : 0;
+    const spacerCount = ((virt == null ? void 0 : virt.rightSpacer) ? 2 : 0) + ((_a = virt == null ? void 0 : virt.rightAnchorChildCount) != null ? _a : 0) + ((_b = virt == null ? void 0 : virt.leftAnchorChildCount) != null ? _b : 0);
     const expected = virt && virt.domEnd >= 0 ? virt.domEnd - virt.domStart + 1 : expectedCount;
     if (this.el.childNodes.length !== expected + spacerCount) return false;
     for (const node of Array.from(this.el.childNodes)) {

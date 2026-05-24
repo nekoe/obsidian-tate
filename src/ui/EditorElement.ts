@@ -954,11 +954,14 @@ export class EditorElement {
     }
 
     // Returns true iff el.childNodes consists of the expected number of paragraph <div> elements
-    // (plus spacers). With virtualizer: checks against the window size (domEnd-domStart+1), since
-    // syncWindowSrcs keeps domEnd accurate. Without virtualizer: checks against expectedCount.
+    // (plus spacers and anchor island children). With virtualizer: checks against the window size
+    // (domEnd-domStart+1), since syncWindowSrcs keeps domEnd accurate. Without virtualizer: checks
+    // against expectedCount.
     private hasCleanDivStructure(expectedCount: number): boolean {
         const virt = this.virtualizer;
-        const spacerCount = virt?.rightSpacer ? 2 : 0;
+        const spacerCount = (virt?.rightSpacer ? 2 : 0)
+            + (virt?.rightAnchorChildCount ?? 0)
+            + (virt?.leftAnchorChildCount ?? 0);
         const expected = virt && virt.domEnd >= 0
             ? (virt.domEnd - virt.domStart + 1)
             : expectedCount;
