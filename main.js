@@ -5106,7 +5106,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
       ].includes(e.key)) {
         editorEl.notifyNavigationKey(e.key);
         if (!e.shiftKey) {
-          const vs = !e.altKey && !e.metaKey && !e.ctrlKey ? virtualizer.getVirtualSelection() : null;
+          const vs = !e.altKey && !e.ctrlKey && (!e.metaKey || e.key === "ArrowLeft" || e.key === "ArrowRight") ? virtualizer.getVirtualSelection() : null;
           if (vs && (e.key === "ArrowLeft" || e.key === "ArrowRight" || e.key === "ArrowUp" || e.key === "ArrowDown")) {
             e.preventDefault();
             const towardEnd = e.key === "ArrowLeft" || e.key === "ArrowDown";

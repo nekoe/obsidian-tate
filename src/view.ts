@@ -441,11 +441,14 @@ export class VerticalWritingView extends ItemView {
                 // gap-spanning VS is no longer relevant. Clear it so the next selectionchange
                 // does not try to re-sync the DOM Range to stale VS endpoints.
                 if (!e.shiftKey) {
-                    // When VS is active and a plain Arrow key collapses the selection, the
+                    // When VS is active and an Arrow key collapses the selection, the
                     // browser collapses to the anchor PROXY (a window-boundary div), which
                     // triggers adjustWindowOnScroll to expand the DOM window toward the real
                     // anchor. Intercept and explicitly jump to the correct VS endpoint instead.
-                    const vs = !e.altKey && !e.metaKey && !e.ctrlKey
+                    // Cmd+Up/Down are handled earlier (extendSelectionToDocumentBoundary) and
+                    // return early, so only Cmd+Left/Right can reach here with metaKey set.
+                    const vs = !e.altKey && !e.ctrlKey &&
+                        (!e.metaKey || e.key === 'ArrowLeft' || e.key === 'ArrowRight')
                         ? virtualizer.getVirtualSelection() : null;
                     if (vs && (e.key === 'ArrowLeft' || e.key === 'ArrowRight' ||
                                e.key === 'ArrowUp'   || e.key === 'ArrowDown')) {
