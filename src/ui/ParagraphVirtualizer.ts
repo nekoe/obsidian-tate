@@ -1044,10 +1044,18 @@ export class ParagraphVirtualizer {
             const actualDivCount = this.editorEl.children.length - 2 - anchorChildren;
             const expected = this.domEnd - this.domStart + 1;
             if (actualDivCount !== expected) {
-                this.domEnd = Math.min(
+                const newDomEnd = Math.min(
                     this.domStart + actualDivCount - 1,
                     this.paragraphRecords.length - 1,
                 );
+                if (newDomEnd < this.domEnd) {
+                    // Divs were removed (e.g. Backspace merging paragraphs): splice out the
+                    // stale records so getValue() returns the correct paragraph count.
+                    // Without this, syncRecordsFromDom() sees delta=0 (because domEnd was
+                    // already reconciled) and leaves the orphaned record in place.
+                    this.paragraphRecords.splice(newDomEnd + 1, this.domEnd - newDomEnd);
+                }
+                this.domEnd = newDomEnd;
             }
         }
         // Premeasure: update rec.width with actual rendered widths before any mutations.

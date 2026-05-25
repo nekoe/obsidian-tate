@@ -2916,10 +2916,14 @@ var ParagraphVirtualizer = class {
       const actualDivCount = this.editorEl.children.length - 2 - anchorChildren;
       const expected = this.domEnd - this.domStart + 1;
       if (actualDivCount !== expected) {
-        this.domEnd = Math.min(
+        const newDomEnd = Math.min(
           this.domStart + actualDivCount - 1,
           this.paragraphRecords.length - 1
         );
+        if (newDomEnd < this.domEnd) {
+          this.paragraphRecords.splice(newDomEnd + 1, this.domEnd - newDomEnd);
+        }
+        this.domEnd = newDomEnd;
       }
     }
     this.premeasureWindowWidths();
