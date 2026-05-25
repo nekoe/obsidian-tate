@@ -960,6 +960,7 @@ export class VerticalWritingView extends ItemView {
             fromEndOld--;
             fromEndNew--;
         }
+
         cm6.replaceRange(
             content.slice(fromStart, fromEndNew),
             cm6.offsetToPos(fromStart),
@@ -1023,6 +1024,7 @@ export class VerticalWritingView extends ItemView {
         // Without this, onExternalModify() would misfire on the CM6 autosave modify event,
         // causing the tate view DOM to reset and the cursor to jump during input right after undo.
         this.lastCommittedContent = newContent;
+        this.syncCoordinator?.notifySelfWrite(newContent);
         this.plugin.updateCharCount(countChars(newContent));
         this.searchPanel?.onContentChanged();
     }

@@ -1042,6 +1042,19 @@ export class ParagraphVirtualizer {
     // EXPAND_MARGIN < SHRINK_MARGIN provides hysteresis that prevents oscillation.
     private adjustWindowOnScroll(): void {
         if (this.paragraphRecords.length === 0) return;
+        // Guard: when Enter adds a new div mid-window, actualDivCount exceeds the range
+        // [domStart..domEnd]. premeasureWindowWidths() would read widths at shifted
+        // positions (the new empty div displaces existing divs), causing shrinkLeft() to
+        // compute incorrect widths and target the wrong div. Return early here; the
+        // commitToCm6() call that follows Enter will commit correct content and
+        // syncWindowSrcs() will reconcile domEnd with the actual div count.
+        // Note: Backspace (actualDivCount < windowDivCount) is NOT guarded here; the
+        // existing SPACER_CLASS check in shrinkLeft/Right handles missing divs safely.
+        if (this.domEnd >= 0 && this.rightSpacer) {
+            const anchorChildren = this.rightAnchorChildCount + this.leftAnchorChildCount;
+            const actualDivCount = this.editorEl.children.length - 2 - anchorChildren;
+            if (actualDivCount > this.domEnd - this.domStart + 1) return;
+        }
         // Premeasure: update rec.width with actual rendered widths before any mutations.
         // Ensures shrink operations use accurate widths so the net scrollWidth change
         // per shrink is zero, and also updates widths for divs added since the last

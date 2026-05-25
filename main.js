@@ -87,7 +87,8 @@ var SyncCoordinator = class {
     const vaultContent = await this.vault.read(file);
     if (seq !== this.externalCheckSeq || this.currentFile === null) return;
     if (this.selfWriteChecksums.has(fnv1a32(vaultContent))) return;
-    if (vaultContent === this.getEditorValue()) return;
+    const editorValue = this.getEditorValue();
+    if (vaultContent === editorValue) return;
     this.setEditorValue(vaultContent, true);
   }
   // Reads the current file from vault and applies external changes if the content differs.
@@ -2906,6 +2907,11 @@ var ParagraphVirtualizer = class {
   // EXPAND_MARGIN < SHRINK_MARGIN provides hysteresis that prevents oscillation.
   adjustWindowOnScroll() {
     if (this.paragraphRecords.length === 0) return;
+    if (this.domEnd >= 0 && this.rightSpacer) {
+      const anchorChildren = this.rightAnchorChildCount + this.leftAnchorChildCount;
+      const actualDivCount = this.editorEl.children.length - 2 - anchorChildren;
+      if (actualDivCount > this.domEnd - this.domStart + 1) return;
+    }
     this.premeasureWindowWidths();
     const domStartBefore = this.domStart;
     const domEndBefore = this.domEnd;
@@ -5574,7 +5580,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
    *  cm6.getCursor() is not used: after undo, getCursor() returns the position set by the
    *  last setCursor() call before the undone transaction, which may be unrelated to the edit site. */
   doUndoRedo(editorEl, isRedo) {
-    var _a;
+    var _a, _b;
     const cm6 = this.getCm6Editor();
     if (!cm6) return;
     this.commitToCm6();
@@ -5597,8 +5603,9 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
       editorEl.scrollCursorIntoView(block, block);
     }
     this.lastCommittedContent = newContent;
+    (_a = this.syncCoordinator) == null ? void 0 : _a.notifySelfWrite(newContent);
     this.plugin.updateCharCount(countChars(newContent));
-    (_a = this.searchPanel) == null ? void 0 : _a.onContentChanged();
+    (_b = this.searchPanel) == null ? void 0 : _b.onContentChanged();
   }
   /** Derives the appropriate cursor position from the content diff before and after undo/redo.
    *  Returns the end of the changed region in next (offset in next).

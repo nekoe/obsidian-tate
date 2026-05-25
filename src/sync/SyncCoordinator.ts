@@ -71,7 +71,8 @@ export class SyncCoordinator {
         // Self-write: vault received a content whose checksum matches one we committed — ignore
         if (this.selfWriteChecksums.has(fnv1a32(vaultContent))) return;
         // Already current: vault and editor agree (race-free double-check)
-        if (vaultContent === this.getEditorValue()) return;
+        const editorValue = this.getEditorValue();
+        if (vaultContent === editorValue) return;
         this.setEditorValue(vaultContent, true);
     }
 
