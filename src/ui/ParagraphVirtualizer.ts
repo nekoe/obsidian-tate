@@ -121,6 +121,10 @@ export class ParagraphVirtualizer {
     // Last observed scrollLeft; used to detect large jumps in adjustWindowOnScroll.
     private prevScrollLeft = -1;
 
+    // Set by teleportWindowTo(); cleared on the next adjustWindowOnScroll() call.
+    // Used to detect stale scroll events that fired before the teleport settled.
+    private justTeleported = false;
+
     constructor(
         private readonly editorEl: HTMLElement,
         private readonly scrollArea: HTMLElement,
@@ -546,6 +550,7 @@ export class ParagraphVirtualizer {
         const hi = Math.min(N - 1, center + windowHalf);
         this.buildDomWindow(this.paragraphRecords.slice(lo, hi + 1).map(r => r.src));
         this.resetWindow(lo, hi);
+        this.justTeleported = true;
     }
 
     // Called on selectionchange. Absorbs cursor-type anchor islands when neither selection
@@ -1049,6 +1054,21 @@ export class ParagraphVirtualizer {
         const scrollLeft = this.scrollArea.scrollLeft;
         const viewW      = this.scrollArea.clientWidth;
         let W            = this.scrollArea.scrollWidth; // 'let': may be updated after teleport
+
+        // Discard stale scroll events that were queued before the most recent teleportWindowTo.
+        // After a teleport the window is centred on a new paragraph; a scroll event carrying the
+        // old scrollLeft position would otherwise drive O(N) expand/shrink back to the old spot.
+        // Threshold: SHRINK_MARGIN ensures the guard fires only when scrollLeft is actually
+        // outside the teleported window (not merely near its edge).
+        if (this.justTeleported) {
+            this.justTeleported = false;
+            const windowRight = W - this.rightWindowOffset;
+            const windowLeft  = this.leftWindowOffset;
+            if (scrollLeft > windowRight + SHRINK_MARGIN ||
+                    scrollLeft + viewW < windowLeft - SHRINK_MARGIN) {
+                return;
+            }
+        }
 
         // When a virtual selection is active and the viewport jumps by more than 10 screen
         // widths, the browser has auto-scrolled to reveal a selection endpoint (e.g. after

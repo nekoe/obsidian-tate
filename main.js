@@ -2089,6 +2089,9 @@ var ParagraphVirtualizer = class {
     // matches DEFAULT_SETTINGS.fontSize
     // Last observed scrollLeft; used to detect large jumps in adjustWindowOnScroll.
     this.prevScrollLeft = -1;
+    // Set by teleportWindowTo(); cleared on the next adjustWindowOnScroll() call.
+    // Used to detect stale scroll events that fired before the teleport settled.
+    this.justTeleported = false;
     // Arrow function so `this` is bound for addEventListener/removeEventListener.
     this.onScroll = () => {
       this.adjustWindowOnScroll();
@@ -2459,6 +2462,7 @@ var ParagraphVirtualizer = class {
     const hi = Math.min(N - 1, center + windowHalf);
     this.buildDomWindow(this.paragraphRecords.slice(lo, hi + 1).map((r) => r.src));
     this.resetWindow(lo, hi);
+    this.justTeleported = true;
   }
   // Called on selectionchange. Absorbs cursor-type anchor islands when neither selection
   // endpoint is inside them, so the anchor does not persist indefinitely after the user
@@ -2908,6 +2912,14 @@ var ParagraphVirtualizer = class {
     const scrollLeft = this.scrollArea.scrollLeft;
     const viewW = this.scrollArea.clientWidth;
     let W = this.scrollArea.scrollWidth;
+    if (this.justTeleported) {
+      this.justTeleported = false;
+      const windowRight = W - this.rightWindowOffset;
+      const windowLeft = this.leftWindowOffset;
+      if (scrollLeft > windowRight + SHRINK_MARGIN || scrollLeft + viewW < windowLeft - SHRINK_MARGIN) {
+        return;
+      }
+    }
     const prevScrollLeft = this.prevScrollLeft;
     this.prevScrollLeft = scrollLeft;
     if (this.virtualSelection && prevScrollLeft >= 0 && Math.abs(scrollLeft - prevScrollLeft) > viewW * 10) {
