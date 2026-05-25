@@ -3708,12 +3708,12 @@ var EditorElement = class {
   }
   // Restores a minimal <div><br></div> if Chrome deleted all paragraph divs (e.g., Backspace on last char).
   normalizeEmptyDom() {
-    var _a, _b;
-    const spacerCount = ((_a = this.virtualizer) == null ? void 0 : _a.rightSpacer) ? 2 : 0;
+    var _a, _b, _c, _d, _e, _f;
+    const spacerCount = (((_a = this.virtualizer) == null ? void 0 : _a.rightSpacer) ? 2 : 0) + ((_c = (_b = this.virtualizer) == null ? void 0 : _b.rightAnchorChildCount) != null ? _c : 0) + ((_e = (_d = this.virtualizer) == null ? void 0 : _d.leftAnchorChildCount) != null ? _e : 0);
     if (this.el.childNodes.length > spacerCount) return;
     const div = activeDocument.createElement("div");
     div.appendChild(activeDocument.createElement("br"));
-    const leftSpacer = (_b = this.virtualizer) == null ? void 0 : _b.leftSpacer;
+    const leftSpacer = (_f = this.virtualizer) == null ? void 0 : _f.leftSpacer;
     if (leftSpacer) this.el.insertBefore(div, leftSpacer);
     else this.el.appendChild(div);
     const range = activeDocument.createRange();

@@ -556,8 +556,10 @@ export class EditorElement {
 
     // Restores a minimal <div><br></div> if Chrome deleted all paragraph divs (e.g., Backspace on last char).
     normalizeEmptyDom(): void {
-        // Count paragraph divs (exclude spacers). If any exist, nothing to normalize.
-        const spacerCount = this.virtualizer?.rightSpacer ? 2 : 0;
+        // Count paragraph divs (exclude spacers and anchor island children). If any exist, nothing to normalize.
+        const spacerCount = (this.virtualizer?.rightSpacer ? 2 : 0)
+            + (this.virtualizer?.rightAnchorChildCount ?? 0)
+            + (this.virtualizer?.leftAnchorChildCount ?? 0);
         if (this.el.childNodes.length > spacerCount) return;
         const div = activeDocument.createElement('div');
         div.appendChild(activeDocument.createElement('br'));
