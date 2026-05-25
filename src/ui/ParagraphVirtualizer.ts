@@ -1034,6 +1034,22 @@ export class ParagraphVirtualizer {
     // EXPAND_MARGIN < SHRINK_MARGIN provides hysteresis that prevents oscillation.
     private adjustWindowOnScroll(): void {
         if (this.paragraphRecords.length === 0) return;
+        // Reconcile domEnd with the actual number of window divs before any measurements.
+        // The DOM may have gained or lost divs since the last commit (e.g. a scroll event
+        // arriving during the debounce window after Backspace/Enter). Reconciling here ensures
+        // premeasureWindowWidths reads the correct div positions and shrink/expand decisions
+        // are based on accurate data.
+        if (this.domEnd >= 0 && this.rightSpacer) {
+            const anchorChildren = this.rightAnchorChildCount + this.leftAnchorChildCount;
+            const actualDivCount = this.editorEl.children.length - 2 - anchorChildren;
+            const expected = this.domEnd - this.domStart + 1;
+            if (actualDivCount !== expected) {
+                this.domEnd = Math.min(
+                    this.domStart + actualDivCount - 1,
+                    this.paragraphRecords.length - 1,
+                );
+            }
+        }
         // Premeasure: update rec.width with actual rendered widths before any mutations.
         // Ensures shrink operations use accurate widths so the net scrollWidth change
         // per shrink is zero, and also updates widths for divs added since the last

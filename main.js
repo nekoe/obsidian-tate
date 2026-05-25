@@ -2911,6 +2911,17 @@ var ParagraphVirtualizer = class {
   // EXPAND_MARGIN < SHRINK_MARGIN provides hysteresis that prevents oscillation.
   adjustWindowOnScroll() {
     if (this.paragraphRecords.length === 0) return;
+    if (this.domEnd >= 0 && this.rightSpacer) {
+      const anchorChildren = this.rightAnchorChildCount + this.leftAnchorChildCount;
+      const actualDivCount = this.editorEl.children.length - 2 - anchorChildren;
+      const expected = this.domEnd - this.domStart + 1;
+      if (actualDivCount !== expected) {
+        this.domEnd = Math.min(
+          this.domStart + actualDivCount - 1,
+          this.paragraphRecords.length - 1
+        );
+      }
+    }
     this.premeasureWindowWidths();
     const domStartBefore = this.domStart;
     const domEndBefore = this.domEnd;
