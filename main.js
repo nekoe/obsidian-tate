@@ -5375,7 +5375,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
   // Body of the "this leaf became active" branch, shared between active-leaf-change
   // and notifyActivated() (called when revealLeaf doesn't fire active-leaf-change).
   onThisLeafActivated() {
-    var _a, _b, _c;
+    var _a, _b;
     this.pushEscScope();
     this.plugin.updateCharCount(countChars(this.lastCommittedContent));
     const el = this.editorEl;
@@ -5399,10 +5399,9 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
         this.pendingParagraphJump = null;
         el.setViewCursorToParagraphIndex(idx);
         this.lastKnownViewOffset = el.getViewCursorOffset();
-        void ((_a = this.syncCoordinator) == null ? void 0 : _a.checkAndApplyExternalChange());
       } else {
-        (_b = this.virtualizer) == null ? void 0 : _b.clearVirtualSelection();
-        void ((_c = this.syncCoordinator) == null ? void 0 : _c.checkAndApplyExternalChange());
+        (_a = this.virtualizer) == null ? void 0 : _a.clearVirtualSelection();
+        void ((_b = this.syncCoordinator) == null ? void 0 : _b.checkAndApplyExternalChange());
       }
     }
   }

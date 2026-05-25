@@ -773,12 +773,16 @@ export class VerticalWritingView extends ItemView {
             } else if (this.pendingParagraphJump !== null) {
                 // Outline jump: revealLeaf triggered active-leaf-change before the safety-clear
                 // rAF fired. Restore by paragraph index to avoid the viewOffset boundary ambiguity.
+                // Do NOT call checkAndApplyExternalChange() here: jumpToParagraphIndex already
+                // committed any pending changes to CM6, and the vault may not have been written yet
+                // (CM6 autosave is async). Calling it would see vault < editor and overwrite our
+                // just-committed content, creating a spurious CM6 history entry and causing Undo cycles.
+                // External file changes are handled in real-time by onModify, so no check is needed.
                 el.el.focus({ preventScroll: true });
                 const idx = this.pendingParagraphJump;
                 this.pendingParagraphJump = null;
                 el.setViewCursorToParagraphIndex(idx);
                 this.lastKnownViewOffset = el.getViewCursorOffset();
-                void this.syncCoordinator?.checkAndApplyExternalChange();
             } else {
                 // Normal tab switch: preserve the scroll position exactly as the user left it.
                 // focus() is intentionally skipped — calling it restores the browser's last
