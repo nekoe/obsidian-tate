@@ -5467,6 +5467,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
     var _a;
     const el = this.editorEl;
     if (!el) return;
+    this.commitToCm6();
     el.el.focus({ preventScroll: true });
     (_a = this.virtualizer) == null ? void 0 : _a.clearVirtualSelection();
     el.setViewCursorToParagraphIndex(idx);

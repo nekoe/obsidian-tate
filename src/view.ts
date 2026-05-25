@@ -858,6 +858,7 @@ export class VerticalWritingView extends ItemView {
     jumpToParagraphIndex(idx: number): void {
         const el = this.editorEl;
         if (!el) return;
+        this.commitToCm6(); // flush any uncommitted changes before jumping
         el.el.focus({ preventScroll: true });
         // Clear any active VS so the teleport-on-jump condition in adjustWindowOnScroll
         // cannot fire with the old focusParaIdx and override the jump target.
