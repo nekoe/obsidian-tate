@@ -155,43 +155,55 @@ describe('ParagraphVirtualizer', () => {
         });
     });
 
-    // ---- syncWindowSrcs ----
+    // ---- updateWindowRecords ----
 
-    describe('syncWindowSrcs', () => {
-        it('updates src and viewLen without resetting domStart/domEnd', () => {
-            virt.initRecords(['old0', 'old1', 'old2']);
-            // Simulate a shrunk window [1,2]
+    describe('updateWindowRecords', () => {
+        it('updates src/viewLen for window records without touching off-window records', () => {
+            virt.initRecords(['off0', 'win1', 'win2', 'off3']);
             virt.domStart = 1;
             virt.domEnd   = 2;
-            virt.syncWindowSrcs(['new0', 'new1', 'new2']);
-            expect(virt.paragraphRecords[0].src).toBe('new0');
-            expect(virt.paragraphRecords[1].src).toBe('new1');
-            expect(virt.paragraphRecords[2].src).toBe('new2');
-            // Window state must not be disturbed
-            expect(virt.domStart).toBe(1);
+            virt.updateWindowRecords(['new1', 'new2']);
+            expect(virt.paragraphRecords[0].src).toBe('off0');   // off-window: unchanged
+            expect(virt.paragraphRecords[1].src).toBe('new1');   // window: updated
+            expect(virt.paragraphRecords[2].src).toBe('new2');   // window: updated
+            expect(virt.paragraphRecords[3].src).toBe('off3');   // off-window: unchanged
+            expect(virt.domStart).toBe(1); // window bounds unchanged
             expect(virt.domEnd).toBe(2);
         });
 
-        it('grows the record array when lines > records', () => {
-            virt.initRecords(['a', 'b']);
-            virt.syncWindowSrcs(['a', 'b', 'c']);
-            expect(virt.paragraphRecords).toHaveLength(3);
-            expect(virt.getSrcByIndex(2)).toBe('c');
+        it('inserts new records at domEnd+1 when srcs has more entries (Enter)', () => {
+            virt.initRecords(['a', 'b', 'c', 'off4']);
+            virt.domStart = 1;
+            virt.domEnd   = 2; // window covers b,c
+            // Enter splits 'b' into 'b-first' + '' + keeps 'c'
+            virt.updateWindowRecords(['b-first', '', 'c']);
+            expect(virt.paragraphRecords).toHaveLength(5);
+            expect(virt.domEnd).toBe(3);
+            expect(virt.paragraphRecords[1].src).toBe('b-first');
+            expect(virt.paragraphRecords[2].src).toBe('');
+            expect(virt.paragraphRecords[3].src).toBe('c');
+            expect(virt.paragraphRecords[4].src).toBe('off4'); // shifted right
         });
 
-        it('shrinks the record array when lines < records and clamps domEnd', () => {
-            virt.initRecords(['a', 'b', 'c', 'd']);
-            virt.domEnd = 3;
-            virt.syncWindowSrcs(['a', 'b']);
-            expect(virt.paragraphRecords).toHaveLength(2);
+        it('removes records when srcs has fewer entries (Backspace merges)', () => {
+            virt.initRecords(['a', 'b', 'c', 'off4']);
+            virt.domStart = 1;
+            virt.domEnd   = 2; // window covers b,c
+            // Backspace merges 'b'+'c' → 'bc'
+            virt.updateWindowRecords(['bc']);
+            expect(virt.paragraphRecords).toHaveLength(3);
             expect(virt.domEnd).toBe(1);
+            expect(virt.paragraphRecords[1].src).toBe('bc');
+            expect(virt.paragraphRecords[2].src).toBe('off4'); // shifted left
         });
 
         it('preserves existing widths', () => {
             virt.initRecords(['a', 'b']);
             virt.paragraphRecords[0].width = 120;
-            virt.syncWindowSrcs(['x', 'y']);
+            virt.paragraphRecords[1].width = 200;
+            virt.updateWindowRecords(['x', 'y']);
             expect(virt.paragraphRecords[0].width).toBe(120);
+            expect(virt.paragraphRecords[1].width).toBe(200);
         });
     });
 

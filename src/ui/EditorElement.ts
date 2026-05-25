@@ -40,44 +40,35 @@ export class EditorElement {
         this.inlineEditor.setVirtualizer(v);
     }
 
+    // Reads all current window div contents from DOM and writes them into paragraphRecords
+    // via the virtualizer. Must be called before getValue() whenever the DOM and domEnd may
+    // be out of sync — e.g. after Enter/Backspace or a multi-line paste. After this call,
+    // getValue() reads only from records and is independent of transient DOM inconsistencies.
+    syncRecordsFromDom(): void {
+        const virt = this.virtualizer;
+        if (!virt || virt.domEnd < 0 || !virt.rightSpacer) return;
+        const spacerOffset   = (virt.rightSpacer ? 1 : 0) + virt.rightAnchorChildCount;
+        const spacerCount    = (virt.rightSpacer ? 2 : 0) + virt.rightAnchorChildCount + virt.leftAnchorChildCount;
+        const actualDivCount = this.el.children.length - spacerCount;
+        const srcs: string[] = [];
+        for (let k = 0; k < actualDivCount; k++) {
+            const div = this.el.children[k + spacerOffset] as HTMLElement;
+            srcs.push(Array.from(div.childNodes).map(n => serializeNode(n, this.el)).join(''));
+        }
+        virt.updateWindowRecords(srcs);
+    }
+
     getValue(): string {
         const virt = this.virtualizer;
-        // When records are not yet loaded (before first setValue), fall back to direct DOM walk.
+        // When records are not yet loaded (before first syncRecordsFromDom/setValue), fall
+        // back to a direct DOM walk. This path is only hit before the first file is opened.
         if (!virt || virt.domEnd < 0) {
             return Array.from(this.el.childNodes).map(n => serializeNode(n, this.el)).join('');
         }
-        // Use the actual DOM child count for the window region rather than domEnd-domStart+1.
-        // After Enter/Backspace the browser adds/removes a div inside the window before
-        // syncWindowSrcs runs, creating a transient mismatch between domEnd and the DOM.
-        // Reading paragraphRecords.length times would miss the extra div (Enter) or read a
-        // spacer as a paragraph (Backspace), producing wrong CM6-committed content.
-        // Account for anchor island divs + mid-spacers that live between rightSpacer and the
-        // window (or between the window and leftSpacer). Each active anchor occupies 2 children
-        // (anchorDiv + midSpacer), neither of which is a window paragraph.
-        const spacerOffset  = (virt.rightSpacer ? 1 : 0) + virt.rightAnchorChildCount;
-        const spacerCount   = (virt.rightSpacer ? 2 : 0) + virt.rightAnchorChildCount + virt.leftAnchorChildCount;
-        const actualDivCount = this.el.children.length - spacerCount;
-        const nBefore = virt.domStart;
-        // Off-window records after the window start at domEnd+1; their indices are stable
-        // even when the DOM window has gained/lost a div (before syncWindowSrcs).
-        const nAfter  = Math.max(0, virt.paragraphRecords.length - (virt.domEnd + 1));
-        const total   = nBefore + actualDivCount + nAfter;
-
-        const parts: string[] = [];
-        for (let i = 0; i < total; i++) {
-            let src: string;
-            if (i < nBefore) {
-                src = virt.paragraphRecords[i].src;
-            } else if (i < nBefore + actualDivCount) {
-                const domChild = this.el.children[(i - nBefore) + spacerOffset] as HTMLElement;
-                src = Array.from(domChild.childNodes).map(n => serializeNode(n, this.el)).join('');
-            } else {
-                const recIdx = (virt.domEnd + 1) + (i - nBefore - actualDivCount);
-                src = virt.paragraphRecords[recIdx]?.src ?? '';
-            }
-            parts.push(i === 0 ? src : '\n' + src);
-        }
-        return parts.join('');
+        // Records are always current: syncRecordsFromDom() is called at the start of every
+        // commitToCm6() and before getValue() in handlePaste(). Off-window records are
+        // unchanged since the last commit (off-window divs cannot be edited directly).
+        return virt.paragraphRecords.map((r, i) => (i === 0 ? r.src : '\n' + r.src)).join('');
     }
 
     // Replaces paragraph content while preserving rightSpacer and leftSpacer.
@@ -409,16 +400,15 @@ export class EditorElement {
 
         // For multi-line paste with the virtualizer active, all pasted lines are now in the
         // DOM as individual divs, which can spike memory for large pastes. Rebuild to a
-        // windowed DOM immediately: syncWindowSrcs brings domEnd in sync with the actual
-        // (temporarily full) DOM so that getVisibleOffset() can locate the cursor correctly,
-        // then initWindowFromLines replaces all inserted divs with a ~INITIAL_WINDOW_HALF
-        // window around the cursor.
+        // windowed DOM immediately: syncRecordsFromDom materialises all pasted divs into
+        // records so that getVisibleOffset() can locate the cursor correctly, then
+        // initWindowFromLines replaces all inserted divs with a ~INITIAL_WINDOW_HALF window.
         {
             const virt = this.virtualizer;
             if (lines.length > 1 && virt && !this.inlineEditor.isExpanded()) {
+                this.syncRecordsFromDom(); // read all pasted divs into records
                 const newContent = this.getValue();
                 const newLines = newContent.split('\n');
-                virt.syncWindowSrcs(newLines); // expand domEnd to full DOM
                 const cursorPos = this.getVisibleOffset();
                 const N = newLines.length;
                 const center = this.findCenterParagraph(newLines, cursorPos);

@@ -2041,7 +2041,7 @@ var ParagraphVirtualizer = class {
     this.editorEl = editorEl;
     this.scrollArea = scrollArea;
     // Per-paragraph data store indexed 1:1 with paragraphs (not DOM children).
-    // Maintained by initRecords() / spliceRecords() / syncWindowSrcs().
+    // Maintained by initRecords() / spliceRecords() / updateWindowRecords().
     this.paragraphRecords = [];
     // DOM window state. domStart and domEnd are inclusive indices into paragraphRecords.
     // domEnd = -1 signals "no records loaded yet" (initial state before first setValue).
@@ -2299,27 +2299,31 @@ var ParagraphVirtualizer = class {
     this.applyRightSpacer(this.paragraphRecords.slice(0, this.domStart).reduce((sum, r) => sum + r.width, 0));
     this.applyLeftSpacer(this.paragraphRecords.slice(this.domEnd + 1).reduce((sum, r) => sum + r.width, 0));
   }
-  // Updates src/viewLen for all records in-place WITHOUT touching domStart, domEnd, or spacer
-  // widths. Used by commitToCm6() to keep outline data current after typing, where the DOM
-  // window has already settled and a full initRecords() reset would corrupt getWindowDiv().
-  syncWindowSrcs(lines) {
-    const n = lines.length;
-    const cur = this.paragraphRecords;
-    while (cur.length < n) cur.push({ src: "", viewLen: 0, width: 0 });
-    while (cur.length > n) cur.pop();
-    for (let i = 0; i < n; i++) {
-      cur[i].src = lines[i];
-      cur[i].viewLen = this.buildParagraphVisibleText(lines[i]).length;
+  // Updates paragraphRecords for the window range from pre-serialized div sources.
+  // Inserts or removes records at the domEnd boundary to match srcs.length, then writes
+  // src/viewLen for each window paragraph. Called by EditorElement.syncRecordsFromDom()
+  // before getValue() to materialise the current DOM state into records so that getValue()
+  // can read from records alone without touching the DOM.
+  updateWindowRecords(srcs) {
+    if (this.domEnd < 0) return;
+    const oldWindowDivCount = this.domEnd - this.domStart + 1;
+    const delta = srcs.length - oldWindowDivCount;
+    if (delta > 0) {
+      const newRecs = Array.from(
+        { length: delta },
+        () => ({ src: "", viewLen: 0, width: 0 })
+      );
+      this.paragraphRecords.splice(this.domEnd + 1, 0, ...newRecs);
+      this.domEnd += delta;
+    } else if (delta < 0) {
+      this.paragraphRecords.splice(this.domEnd + delta + 1, -delta);
+      this.domEnd += delta;
     }
-    this.domEnd = Math.min(this.domEnd, n - 1);
-    this.domStart = Math.min(this.domStart, Math.max(0, n - 1));
-    if (this.domEnd >= 0 && this.rightSpacer) {
-      const anchorChildren = (this.rightAnchor ? 2 : 0) + (this.rightAnchorInner ? 2 : 0) + (this.leftAnchorInner ? 2 : 0) + (this.leftAnchor ? 2 : 0);
-      const actualDivCount = this.editorEl.children.length - 2 - anchorChildren;
-      const windowDivCount = this.domEnd - this.domStart + 1;
-      if (actualDivCount !== windowDivCount) {
-        this.domEnd = Math.min(this.domStart + actualDivCount - 1, n - 1);
-      }
+    for (let k = 0; k < srcs.length; k++) {
+      const rec = this.paragraphRecords[this.domStart + k];
+      if (!rec) continue;
+      rec.src = srcs[k];
+      rec.viewLen = this.buildParagraphVisibleText(srcs[k]).length;
     }
   }
   // Mirrors the DOM splice performed by patchParagraphs, keeping paragraphRecords in sync.
@@ -2907,11 +2911,6 @@ var ParagraphVirtualizer = class {
   // EXPAND_MARGIN < SHRINK_MARGIN provides hysteresis that prevents oscillation.
   adjustWindowOnScroll() {
     if (this.paragraphRecords.length === 0) return;
-    if (this.domEnd >= 0 && this.rightSpacer) {
-      const anchorChildren = this.rightAnchorChildCount + this.leftAnchorChildCount;
-      const actualDivCount = this.editorEl.children.length - 2 - anchorChildren;
-      if (actualDivCount > this.domEnd - this.domStart + 1) return;
-    }
     this.premeasureWindowWidths();
     const domStartBefore = this.domStart;
     const domEndBefore = this.domEnd;
@@ -3300,33 +3299,29 @@ var EditorElement = class {
     this.virtualizer = v;
     this.inlineEditor.setVirtualizer(v);
   }
+  // Reads all current window div contents from DOM and writes them into paragraphRecords
+  // via the virtualizer. Must be called before getValue() whenever the DOM and domEnd may
+  // be out of sync — e.g. after Enter/Backspace or a multi-line paste. After this call,
+  // getValue() reads only from records and is independent of transient DOM inconsistencies.
+  syncRecordsFromDom() {
+    const virt = this.virtualizer;
+    if (!virt || virt.domEnd < 0 || !virt.rightSpacer) return;
+    const spacerOffset = (virt.rightSpacer ? 1 : 0) + virt.rightAnchorChildCount;
+    const spacerCount = (virt.rightSpacer ? 2 : 0) + virt.rightAnchorChildCount + virt.leftAnchorChildCount;
+    const actualDivCount = this.el.children.length - spacerCount;
+    const srcs = [];
+    for (let k = 0; k < actualDivCount; k++) {
+      const div = this.el.children[k + spacerOffset];
+      srcs.push(Array.from(div.childNodes).map((n) => serializeNode(n, this.el)).join(""));
+    }
+    virt.updateWindowRecords(srcs);
+  }
   getValue() {
-    var _a, _b;
     const virt = this.virtualizer;
     if (!virt || virt.domEnd < 0) {
       return Array.from(this.el.childNodes).map((n) => serializeNode(n, this.el)).join("");
     }
-    const spacerOffset = (virt.rightSpacer ? 1 : 0) + virt.rightAnchorChildCount;
-    const spacerCount = (virt.rightSpacer ? 2 : 0) + virt.rightAnchorChildCount + virt.leftAnchorChildCount;
-    const actualDivCount = this.el.children.length - spacerCount;
-    const nBefore = virt.domStart;
-    const nAfter = Math.max(0, virt.paragraphRecords.length - (virt.domEnd + 1));
-    const total = nBefore + actualDivCount + nAfter;
-    const parts = [];
-    for (let i = 0; i < total; i++) {
-      let src;
-      if (i < nBefore) {
-        src = virt.paragraphRecords[i].src;
-      } else if (i < nBefore + actualDivCount) {
-        const domChild = this.el.children[i - nBefore + spacerOffset];
-        src = Array.from(domChild.childNodes).map((n) => serializeNode(n, this.el)).join("");
-      } else {
-        const recIdx = virt.domEnd + 1 + (i - nBefore - actualDivCount);
-        src = (_b = (_a = virt.paragraphRecords[recIdx]) == null ? void 0 : _a.src) != null ? _b : "";
-      }
-      parts.push(i === 0 ? src : "\n" + src);
-    }
-    return parts.join("");
+    return virt.paragraphRecords.map((r, i) => i === 0 ? r.src : "\n" + r.src).join("");
   }
   // Replaces paragraph content while preserving rightSpacer and leftSpacer.
   // The fragment's childNodes are moved into editorEl between the two spacers (if present).
@@ -3578,9 +3573,9 @@ var EditorElement = class {
     {
       const virt = this.virtualizer;
       if (lines.length > 1 && virt && !this.inlineEditor.isExpanded()) {
+        this.syncRecordsFromDom();
         const newContent = this.getValue();
         const newLines = newContent.split("\n");
-        virt.syncWindowSrcs(newLines);
         const cursorPos = this.getVisibleOffset();
         const N = newLines.length;
         const center = this.findCenterParagraph(newLines, cursorPos);
@@ -4986,13 +4981,14 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
         this.needsLayoutRepairOnFirstComposingInput = false;
       }
       if (!inputEvent.isComposing) {
-        virtualizer.adjustNow();
         if (inputEvent.inputType === "insertParagraph") {
           editorEl.handleParagraphInsert();
           this.commitToCm6();
+          virtualizer.adjustNow();
           (_a = this.searchPanel) == null ? void 0 : _a.onContentChanged();
           return;
         }
+        virtualizer.adjustNow();
         const annotated = editorEl.handleRubyCompletion() || editorEl.handleTcyCompletion() || editorEl.handleBoutenCompletion() || editorEl.handleHeadingCompletion();
         if (annotated) {
           this.commitToCm6();
@@ -5536,7 +5532,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
    *  Cursor sync is skipped while tate-editing is expanded (synced via selectionchange on collapse).
    *  Also cancels any pending debounce timer so immediate commit points preempt the timer. */
   commitToCm6() {
-    var _a, _b;
+    var _a;
     if (this.commitTimer !== null) {
       window.clearTimeout(this.commitTimer);
       this.commitTimer = null;
@@ -5545,6 +5541,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
     if (!el) return;
     const cm6 = this.getCm6Editor();
     if (!cm6) return;
+    el.syncRecordsFromDom();
     const content = el.getValue();
     const cm6Content = cm6.getValue();
     if (content === cm6Content) return;
@@ -5572,7 +5569,6 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
       cm6.setCursor(cm6.offsetToPos(viewToSrc(segs, viewOffset)));
     }
     el.afterCommit();
-    (_b = this.virtualizer) == null ? void 0 : _b.syncWindowSrcs(content.split("\n"));
     this.plugin.refreshOutline();
   }
   /** Delegates Undo (isRedo=false) or Redo (isRedo=true) to CM6 and restores

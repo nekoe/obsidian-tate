@@ -64,7 +64,7 @@ interface AnchorIsland {
 // "boundary is already in zone" from "boundary just entered zone".
 export class ParagraphVirtualizer {
     // Per-paragraph data store indexed 1:1 with paragraphs (not DOM children).
-    // Maintained by initRecords() / spliceRecords() / syncWindowSrcs().
+    // Maintained by initRecords() / spliceRecords() / updateWindowRecords().
     readonly paragraphRecords: ParagraphRecord[] = [];
 
     // DOM window state. domStart and domEnd are inclusive indices into paragraphRecords.
@@ -344,41 +344,33 @@ export class ParagraphVirtualizer {
             .slice(this.domEnd + 1).reduce((sum, r) => sum + r.width, 0));
     }
 
-    // Updates src/viewLen for all records in-place WITHOUT touching domStart, domEnd, or spacer
-    // widths. Used by commitToCm6() to keep outline data current after typing, where the DOM
-    // window has already settled and a full initRecords() reset would corrupt getWindowDiv().
-    syncWindowSrcs(lines: string[]): void {
-        const n = lines.length;
-        const cur = this.paragraphRecords;
-        // Resize in-place, preserving existing widths. New entries get width=0.
-        while (cur.length < n) cur.push({ src: '', viewLen: 0, width: 0 });
-        while (cur.length > n) cur.pop();
-        for (let i = 0; i < n; i++) {
-            cur[i].src     = lines[i];
-            cur[i].viewLen = this.buildParagraphVisibleText(lines[i]).length;
+    // Updates paragraphRecords for the window range from pre-serialized div sources.
+    // Inserts or removes records at the domEnd boundary to match srcs.length, then writes
+    // src/viewLen for each window paragraph. Called by EditorElement.syncRecordsFromDom()
+    // before getValue() to materialise the current DOM state into records so that getValue()
+    // can read from records alone without touching the DOM.
+    updateWindowRecords(srcs: string[]): void {
+        if (this.domEnd < 0) return;
+        const oldWindowDivCount = this.domEnd - this.domStart + 1;
+        const delta = srcs.length - oldWindowDivCount;
+        if (delta > 0) {
+            // More divs than domEnd expected (Enter or paste added divs). Insert new placeholder
+            // records at domEnd+1 so that off-window records shift to the correct indices.
+            const newRecs: ParagraphRecord[] = Array.from({ length: delta },
+                () => ({ src: '', viewLen: 0, width: 0 }));
+            this.paragraphRecords.splice(this.domEnd + 1, 0, ...newRecs);
+            this.domEnd += delta;
+        } else if (delta < 0) {
+            // Fewer divs than domEnd expected (Backspace removed divs). Remove records from
+            // the end of the window range so that off-window records shift back.
+            this.paragraphRecords.splice(this.domEnd + delta + 1, -delta);
+            this.domEnd += delta;
         }
-        // Clamp both window bounds to the new record count.
-        this.domEnd   = Math.min(this.domEnd, n - 1);
-        this.domStart = Math.min(this.domStart, Math.max(0, n - 1));
-        // Sync domEnd with the actual number of paragraph divs in the editor. Enter/Delete
-        // can add/remove divs within the window without going through spliceRecords, so
-        // we detect the discrepancy here and keep the virtualizer consistent with the DOM.
-        // Guard: only when spacers are present (attach() has been called); without spacers
-        // the editorEl.children count is unreliable for virtualization purposes.
-        if (this.domEnd >= 0 && this.rightSpacer) {
-            const anchorChildren = (this.rightAnchor ? 2 : 0) + (this.rightAnchorInner ? 2 : 0) +
-                (this.leftAnchorInner ? 2 : 0) + (this.leftAnchor ? 2 : 0);
-            const actualDivCount = this.editorEl.children.length - 2 - anchorChildren; // -2 for spacers
-            const windowDivCount = this.domEnd - this.domStart + 1;
-            if (actualDivCount !== windowDivCount) {
-                this.domEnd = Math.min(this.domStart + actualDivCount - 1, n - 1);
-                // leftSpacerWidth does NOT need recomputing. Enter/Backspace only add or
-                // remove divs inside the DOM window; the off-screen paragraphs represented
-                // by the spacer are unchanged, so the stored accumulated width stays correct.
-                // The next adjustWindowOnScroll() call (on the following scroll event or via
-                // adjustNow) will premeasure the updated in-window divs and call
-                // correctSpacerAfterExpand() if the window boundary moved further.
-            }
+        for (let k = 0; k < srcs.length; k++) {
+            const rec = this.paragraphRecords[this.domStart + k];
+            if (!rec) continue;
+            rec.src     = srcs[k];
+            rec.viewLen = this.buildParagraphVisibleText(srcs[k]).length;
         }
     }
 
@@ -1042,19 +1034,6 @@ export class ParagraphVirtualizer {
     // EXPAND_MARGIN < SHRINK_MARGIN provides hysteresis that prevents oscillation.
     private adjustWindowOnScroll(): void {
         if (this.paragraphRecords.length === 0) return;
-        // Guard: when Enter adds a new div mid-window, actualDivCount exceeds the range
-        // [domStart..domEnd]. premeasureWindowWidths() would read widths at shifted
-        // positions (the new empty div displaces existing divs), causing shrinkLeft() to
-        // compute incorrect widths and target the wrong div. Return early here; the
-        // commitToCm6() call that follows Enter will commit correct content and
-        // syncWindowSrcs() will reconcile domEnd with the actual div count.
-        // Note: Backspace (actualDivCount < windowDivCount) is NOT guarded here; the
-        // existing SPACER_CLASS check in shrinkLeft/Right handles missing divs safely.
-        if (this.domEnd >= 0 && this.rightSpacer) {
-            const anchorChildren = this.rightAnchorChildCount + this.leftAnchorChildCount;
-            const actualDivCount = this.editorEl.children.length - 2 - anchorChildren;
-            if (actualDivCount > this.domEnd - this.domStart + 1) return;
-        }
         // Premeasure: update rec.width with actual rendered widths before any mutations.
         // Ensures shrink operations use accurate widths so the net scrollWidth change
         // per shrink is zero, and also updates widths for divs added since the last

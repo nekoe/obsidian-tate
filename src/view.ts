@@ -182,7 +182,7 @@ export class VerticalWritingView extends ItemView {
         this.registerDomEvent(editorEl.el, 'cut', (e: ClipboardEvent) => {
             if (!this.guardCm6(e)) return; // Block cut if CM6 is unavailable
             editorEl.handleCut(e);
-            this.commitToCm6(); // Cut is an immediate commit point (also runs syncWindowSrcs)
+            this.commitToCm6(); // Cut is an immediate commit point
             virtualizer.adjustNow(); // Repair layout: removing in-window divs shrinks scrollWidth
             this.searchPanel?.onContentChanged();
         });
@@ -250,16 +250,22 @@ export class VerticalWritingView extends ItemView {
                 this.needsLayoutRepairOnFirstComposingInput = false;
             }
             if (!inputEvent.isComposing) {
-                // Repair layout in case the browser deleted in-window divs before inserting
-                // (e.g. insertText or insertParagraph with a non-collapsed selection).
-                // This mirrors the adjustNow() call in handleSelectionDelete for deleteContent*.
-                virtualizer.adjustNow();
                 if (inputEvent.inputType === 'insertParagraph') {
+                    // Enter: commit before adjustNow so that syncRecordsFromDom() inside
+                    // commitToCm6() reconciles domEnd with the new div BEFORE
+                    // adjustWindowOnScroll() runs premeasureWindowWidths(). Without this
+                    // ordering, premeasureWindowWidths() reads widths at shifted positions
+                    // (the new empty div displaces existing divs) and shrinkLeft() may
+                    // target the wrong div.
                     editorEl.handleParagraphInsert();
-                    this.commitToCm6(); // Enter is an immediate commit point
+                    this.commitToCm6(); // syncRecordsFromDom runs inside; domEnd reconciled
+                    virtualizer.adjustNow(); // safe: DOM and domEnd are consistent
                     this.searchPanel?.onContentChanged();
                     return;
                 }
+                // Repair layout in case the browser deleted in-window divs before inserting
+                // (e.g. insertText with a non-collapsed selection).
+                virtualizer.adjustNow();
                 const annotated = editorEl.handleRubyCompletion()
                                || editorEl.handleTcyCompletion()
                                || editorEl.handleBoutenCompletion()
@@ -943,6 +949,9 @@ export class VerticalWritingView extends ItemView {
         if (!el) return;
         const cm6 = this.getCm6Editor();
         if (!cm6) return;
+        // Sync records from DOM before reading content. Handles Enter/Backspace div count
+        // changes so getValue() reads from consistent records rather than live DOM.
+        el.syncRecordsFromDom();
         const content = el.getValue();
         const cm6Content = cm6.getValue();
         if (content === cm6Content) return; // No diff
@@ -979,10 +988,8 @@ export class VerticalWritingView extends ItemView {
             cm6.setCursor(cm6.offsetToPos(viewToSrc(segs, viewOffset)));
         }
         el.afterCommit();
-        // paragraphRecords are not updated during normal typing; sync them now so
-        // refreshOutline() sees current src/viewLen values for accurate jump offsets.
-        // syncWindowSrcs updates only src/viewLen without resetting domStart/domEnd/spacers.
-        this.virtualizer?.syncWindowSrcs(content.split('\n'));
+        // Records were already updated by syncRecordsFromDom() at the start of this call,
+        // so refreshOutline() sees current src/viewLen values for accurate jump offsets.
         this.plugin.refreshOutline();
     }
 
