@@ -1055,6 +1055,11 @@ export class ParagraphVirtualizer {
                     // already reconciled) and leaves the orphaned record in place.
                     this.paragraphRecords.splice(newDomEnd + 1, this.domEnd - newDomEnd);
                 }
+                // newDomEnd > domEnd (divs gained): no paragraphRecords manipulation needed.
+                // All paths that increase div count (insertParagraph, paste, undo/redo) call
+                // syncRecordsFromDom() synchronously before adjustNow(), so records are already
+                // consistent when this reconcile block runs. The Math.min cap above also guards
+                // against domEnd ever exceeding paragraphRecords.length - 1.
                 this.domEnd = newDomEnd;
             }
         }
