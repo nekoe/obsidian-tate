@@ -76,6 +76,8 @@ npm version major   # 1.x.y → (x+1).0.0
 - When designing, implementing, investigating bugs, or reviewing, consult the design documents in `docs/design/` as needed.
 - When using the Obsidian API, consult the official documentation as needed: [Obsidian Developer Documentation](https://docs.obsidian.md)
 - When using the CodeMirror 6 API, consult the official documentation as needed: [CodeMirror Documentation](https://codemirror.net/docs/)
+- When the root cause of a reported bug is not immediately obvious, consider embedding temporary debug logs to gather detailed runtime information before attempting a fix.
+- When fixing a bug, consider whether a unit test can be added to detect regressions of the same class of bug.
 
 ## Key Design Decisions
 
