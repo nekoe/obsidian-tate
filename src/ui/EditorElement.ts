@@ -932,6 +932,9 @@ export class EditorElement {
             changedDivs.push(div);
         }
 
+        // Update records first so domEnd is correct before the ensureBrPlaceholder loops below.
+        virt?.spliceRecords(lo, hiPrev - lo, nextLines.slice(lo, hiNext));
+
         // Defensive: unchanged empty lines may lack a <br> placeholder due to prior paste.
         // Only walk paragraphs that have a DOM div (in-window range with partial virtualizer).
         const checkFrom = virt && virt.domEnd >= 0 ? virt.domStart : 0;
@@ -941,7 +944,6 @@ export class EditorElement {
         for (let i = hiNext; i <= checkTo && i < N; i++)
             if (nextLines[i] === '') ensureBrPlaceholder(el.children[this.paragraphChildIndex(i)] as HTMLElement);
 
-        virt?.spliceRecords(lo, hiPrev - lo, nextLines.slice(lo, hiNext));
         return changedDivs;
     }
 
