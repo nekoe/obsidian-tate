@@ -4010,13 +4010,13 @@ var EditorElement = class {
       div.replaceChildren((0, import_obsidian4.sanitizeHTMLToDom)(html));
       changedDivs.push(div);
     }
+    virt == null ? void 0 : virt.spliceRecords(lo, hiPrev - lo, nextLines.slice(lo, hiNext));
     const checkFrom = virt && virt.domEnd >= 0 ? virt.domStart : 0;
     const checkTo = virt && virt.domEnd >= 0 ? virt.domEnd : N - 1;
     for (let i = checkFrom; i < lo; i++)
       if (nextLines[i] === "") ensureBrPlaceholder(el.children[this.paragraphChildIndex(i)]);
     for (let i = hiNext; i <= checkTo && i < N; i++)
       if (nextLines[i] === "") ensureBrPlaceholder(el.children[this.paragraphChildIndex(i)]);
-    virt == null ? void 0 : virt.spliceRecords(lo, hiPrev - lo, nextLines.slice(lo, hiNext));
     return changedDivs;
   }
   // Returns true iff el.childNodes consists of the expected number of paragraph <div> elements
