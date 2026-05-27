@@ -4954,7 +4954,23 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
     this.registerDomEvent(editorEl.el, "paste", (e) => {
       var _a;
       if (!this.guardCm6(e)) return;
+      const scrollArea = editorEl.el.parentElement;
+      const scrollWidthBefore = scrollArea.scrollWidth;
       editorEl.handlePaste(e);
+      if (editorEl.cursorJumped) {
+        editorEl.scrollCursorIntoView("center", "center");
+      } else {
+        const delta = scrollArea.scrollWidth - scrollWidthBefore;
+        if (delta !== 0) {
+          scrollArea.scrollLeft = Math.max(
+            0,
+            Math.min(
+              scrollArea.scrollWidth - scrollArea.clientWidth,
+              scrollArea.scrollLeft + delta
+            )
+          );
+        }
+      }
       virtualizer.adjustNow();
       this.commitToCm6();
       (_a = this.searchPanel) == null ? void 0 : _a.onContentChanged();

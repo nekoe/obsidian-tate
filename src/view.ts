@@ -188,8 +188,25 @@ export class VerticalWritingView extends ItemView {
         });
         this.registerDomEvent(editorEl.el, 'paste', (e: ClipboardEvent) => {
             if (!this.guardCm6(e)) return; // Block if CM6 is unavailable
+            const scrollArea = editorEl.el.parentElement!;
+            const scrollWidthBefore = scrollArea.scrollWidth;
             editorEl.handlePaste(e);
-            virtualizer.adjustNow(); // Repair layout: handlePaste may remove in-window divs
+            if (editorEl.cursorJumped) {
+                // Cursor teleported to a distant paragraph: scroll to center it.
+                editorEl.scrollCursorIntoView('center', 'center');
+            } else {
+                // initWindowFromLines (called inside handlePaste for multi-line paste) rebuilds
+                // lSpacer with estimated widths, shifting scrollWidth and every paragraph's
+                // absolute scroll coordinate by the same delta. Compensate by advancing scrollLeft
+                // by that delta so the user's visual position is preserved.
+                const delta = scrollArea.scrollWidth - scrollWidthBefore;
+                if (delta !== 0) {
+                    scrollArea.scrollLeft = Math.max(0,
+                        Math.min(scrollArea.scrollWidth - scrollArea.clientWidth,
+                            scrollArea.scrollLeft + delta));
+                }
+            }
+            virtualizer.adjustNow(); // Build correct window for the (possibly updated) scrollLeft
             this.commitToCm6(); // Paste is an immediate commit point
             this.searchPanel?.onContentChanged();
         });
