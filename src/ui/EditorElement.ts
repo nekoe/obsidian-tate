@@ -112,6 +112,37 @@ export class EditorElement {
         this.virtualizer?.teleportWindowTo(center);
     }
 
+    // If the cursor is inside an anchor island div, teleports the DOM window to that paragraph
+    // and restores the cursor to the equivalent position in the newly created window div.
+    // Returns true when a teleport was performed so handlePaste() can scroll to A afterward.
+    // Called at the start of handlePaste() to ensure the target paragraph is a regular window
+    // div before DOM mutations, preventing syncRecordsFromDom() from misreading the structure.
+    private ensureCursorParagraphInWindow(): boolean {
+        const virt = this.virtualizer;
+        if (!virt) return false;
+        const sel = window.getSelection();
+        if (!sel || sel.rangeCount === 0) return false;
+        const range = sel.getRangeAt(0);
+        if (range.startContainer === this.el) return false;
+        const cursorDiv = this.findParagraphDiv(range.startContainer);
+        if (!cursorDiv) return false;
+        const paraIdx = virt.getAnchorParaIdxForDiv(cursorDiv);
+        if (paraIdx < 0) return false;
+        // Save cursor view-offset before teleport removes the anchor div.
+        const viewOff = computeViewOffsetInDiv(cursorDiv, this.el, range.startContainer, range.startOffset);
+        this.jumpWindowTo(paraIdx);
+        // Restore cursor in the freshly-created window div at the same view offset.
+        const newDiv = virt.getWindowDiv(paraIdx);
+        if (!newDiv) return true;
+        const pos = computeDomPositionFromViewOff(newDiv, this.el, viewOff);
+        const newRange = activeDocument.createRange();
+        newRange.setStart(pos.node, pos.offset);
+        newRange.collapse(true);
+        sel.removeAllRanges();
+        sel.addRange(newRange);
+        return true;
+    }
+
     setValue(content: string, preserveCursor: boolean): void {
         // Normalize CRLF/CR to LF so that the HTML parser inside sanitizeHTMLToDom does not
         // convert \r to \n and inject spurious empty lines into the DOM.
@@ -356,6 +387,12 @@ export class EditorElement {
             this.deleteVirtualSelection(vs);
         }
 
+        // If the cursor is inside an anchor island div, teleport the DOM window to that
+        // paragraph before pasting. Without this, insertParsedParagraphs inserts new divs
+        // between the anchor div and midRightSpacer, breaking the spacerOffset arithmetic
+        // in syncRecordsFromDom() and causing pasted content to land in the wrong paragraph.
+        const anchorTeleported = this.ensureCursorParagraphInWindow();
+
         const sel = window.getSelection();
         if (!sel || sel.rangeCount === 0) return;
 
@@ -418,6 +455,13 @@ export class EditorElement {
                 virt.initWindowFromLines(newLines, lo, hi);
                 this.setVisibleOffset(cursorPos);
             }
+        }
+
+        // When the cursor was in an anchor island the DOM window was teleported to paragraph A
+        // before paste. The viewport is still at the original (now off-window) scroll position
+        // and would show blank spacers. Scroll to center A so the user can see the pasted content.
+        if (anchorTeleported) {
+            this.scrollCursorIntoView('center');
         }
 
         // beforeinput does not fire for paste, so set inBurst manually

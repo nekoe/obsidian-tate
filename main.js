@@ -2422,6 +2422,17 @@ var ParagraphVirtualizer = class {
     if (!this.isInWindow(i)) return null;
     return (_a = this.editorEl.children[i - this.domStart + this.windowChildOffset]) != null ? _a : null;
   }
+  // Returns the paragraphRecords index for div if it is an anchor island div, or -1 otherwise.
+  // Used by EditorElement.handlePaste() to detect when the cursor is in an anchor island so
+  // the window can be teleported before paste, preventing DOM structure corruption.
+  getAnchorParaIdxForDiv(div) {
+    var _a, _b, _c, _d;
+    if (((_a = this.rightAnchor) == null ? void 0 : _a.div) === div) return this.rightAnchor.paraIdx;
+    if (((_b = this.rightAnchorInner) == null ? void 0 : _b.div) === div) return this.rightAnchorInner.paraIdx;
+    if (((_c = this.leftAnchorInner) == null ? void 0 : _c.div) === div) return this.leftAnchorInner.paraIdx;
+    if (((_d = this.leftAnchor) == null ? void 0 : _d.div) === div) return this.leftAnchor.paraIdx;
+    return -1;
+  }
   // Teleports the DOM window to be centered on paragraph `center` (± windowHalf).
   // Rebuilds the DOM from paragraphRecords without traversing intermediate paragraphs.
   // Clears any anchor islands first so spacer widths are recomputed cleanly by resetWindow().
@@ -3341,6 +3352,34 @@ var EditorElement = class {
     var _a;
     (_a = this.virtualizer) == null ? void 0 : _a.teleportWindowTo(center);
   }
+  // If the cursor is inside an anchor island div, teleports the DOM window to that paragraph
+  // and restores the cursor to the equivalent position in the newly created window div.
+  // Returns true when a teleport was performed so handlePaste() can scroll to A afterward.
+  // Called at the start of handlePaste() to ensure the target paragraph is a regular window
+  // div before DOM mutations, preventing syncRecordsFromDom() from misreading the structure.
+  ensureCursorParagraphInWindow() {
+    const virt = this.virtualizer;
+    if (!virt) return false;
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return false;
+    const range = sel.getRangeAt(0);
+    if (range.startContainer === this.el) return false;
+    const cursorDiv = this.findParagraphDiv(range.startContainer);
+    if (!cursorDiv) return false;
+    const paraIdx = virt.getAnchorParaIdxForDiv(cursorDiv);
+    if (paraIdx < 0) return false;
+    const viewOff = computeViewOffsetInDiv(cursorDiv, this.el, range.startContainer, range.startOffset);
+    this.jumpWindowTo(paraIdx);
+    const newDiv = virt.getWindowDiv(paraIdx);
+    if (!newDiv) return true;
+    const pos = computeDomPositionFromViewOff(newDiv, this.el, viewOff);
+    const newRange = activeDocument.createRange();
+    newRange.setStart(pos.node, pos.offset);
+    newRange.collapse(true);
+    sel.removeAllRanges();
+    sel.addRange(newRange);
+    return true;
+  }
   setValue(content, preserveCursor) {
     content = content.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
     this.inlineEditor.reset();
@@ -3529,6 +3568,7 @@ var EditorElement = class {
       this.virtualizer.clearVirtualSelection();
       this.deleteVirtualSelection(vs);
     }
+    const anchorTeleported = this.ensureCursorParagraphInWindow();
     const sel = window.getSelection();
     if (!sel || sel.rangeCount === 0) return;
     const range = sel.getRangeAt(0);
@@ -3569,6 +3609,9 @@ var EditorElement = class {
         virt.initWindowFromLines(newLines, lo, hi);
         this.setVisibleOffset(cursorPos);
       }
+    }
+    if (anchorTeleported) {
+      this.scrollCursorIntoView("center");
     }
     this.inlineEditor.onBeforeInput();
   }

@@ -528,6 +528,17 @@ export class ParagraphVirtualizer {
         return (this.editorEl.children[i - this.domStart + this.windowChildOffset] as HTMLElement) ?? null;
     }
 
+    // Returns the paragraphRecords index for div if it is an anchor island div, or -1 otherwise.
+    // Used by EditorElement.handlePaste() to detect when the cursor is in an anchor island so
+    // the window can be teleported before paste, preventing DOM structure corruption.
+    getAnchorParaIdxForDiv(div: HTMLElement): number {
+        if (this.rightAnchor?.div === div)      return this.rightAnchor.paraIdx;
+        if (this.rightAnchorInner?.div === div) return this.rightAnchorInner.paraIdx;
+        if (this.leftAnchorInner?.div === div)  return this.leftAnchorInner.paraIdx;
+        if (this.leftAnchor?.div === div)       return this.leftAnchor.paraIdx;
+        return -1;
+    }
+
     // Teleports the DOM window to be centered on paragraph `center` (± windowHalf).
     // Rebuilds the DOM from paragraphRecords without traversing intermediate paragraphs.
     // Clears any anchor islands first so spacer widths are recomputed cleanly by resetWindow().
