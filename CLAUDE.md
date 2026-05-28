@@ -103,6 +103,7 @@ See the design documents in `docs/design/` for details:
 - [DOM Virtualization: Frozen Paragraph Placeholders (ParagraphVirtualizer, freeze/thaw lifecycle)](docs/design/20260504_dom_virtualization.md)
 - [Full DOM Virtualization: Design Notes and Future Feature Roadmap (replace, headings, outline)](docs/design/20260505_full_virtualization.md)
 - [Anchor Island: Pinned Paragraph Divs Outside the DOM Window (cursor stall fix, Cmd-A fix)](docs/design/20260522_anchor_island.md)
+- [Ruby `<rt>` Removal and CollapseGuard Unification (cursor-trap fix, data-rt + CSS ::after, CollapseGuard)](docs/design/20260528_ruby_rt_removal.md)
 
 ## Settings
 
