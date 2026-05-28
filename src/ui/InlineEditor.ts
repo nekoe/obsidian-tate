@@ -3,7 +3,7 @@ import {
     insertAnnotationElement,
     findTcyAncestor,
 } from './domHelpers';
-import { BoutenGuard } from './BoutenGuard';
+import { CollapseGuard } from './CollapseGuard';
 import { CursorAnchorManager } from './CursorAnchorManager';
 import { LiveConverter } from './LiveConverter';
 import { InlineExpander } from './InlineExpander';
@@ -29,18 +29,15 @@ export class InlineEditor {
     private expandTcy = true;
     private expandBouten = true;
     private expandHeading = true;
-    // After a ruby or heading span collapses, Chrome may normalize the cursor back into the
-    // element before any event fires. Record the element and its original text so that
-    // handleSelectionChange can redirect the cursor instead of re-expanding, and so that
-    // IME text that lands inside the element can be moved out after compositionend.
-    private postCollapseEl: { el: HTMLElement; originalText: string } | null = null;
-    private readonly boutenGuard: BoutenGuard;
+    // Post-collapse guard: after any annotation element collapses, Chrome may normalize the cursor
+    // back into it. collapseGuard records the element and intercepts input to route it outside.
+    private readonly collapseGuard: CollapseGuard;
     private readonly anchorManager: CursorAnchorManager;
     private readonly liveConverter: LiveConverter;
     private readonly expander: InlineExpander;
 
     constructor(private readonly el: HTMLDivElement) {
-        this.boutenGuard = new BoutenGuard(el);
+        this.collapseGuard = new CollapseGuard();
         this.anchorManager = new CursorAnchorManager(el);
         this.liveConverter = new LiveConverter(el);
         this.expander = new InlineExpander(el);
@@ -63,8 +60,7 @@ export class InlineEditor {
         this.expandedElOriginalText = null;
         this.savedRange = null;
         this.inBurst = false;
-        this.postCollapseEl = null;
-        this.boutenGuard.clear();
+        this.collapseGuard.clear();
     }
 
     isExpanded(): boolean {
@@ -183,24 +179,16 @@ export class InlineEditor {
             // Expand if the cursor is inside an expandable element (ruby/tcy/bouten)
             const target = this.findExpandableAncestor(currentRange.startContainer);
             if (target) {
-                // After a bouten collapse, Chrome normalizes the cursor from the adjacent anchor
-                // back into the bouten span. Detect this and redirect cursor instead of re-expanding.
-                const bjc = this.boutenGuard.get();
+                // After collapse, Chrome may normalize the cursor back into the element.
+                // Detect this via collapseGuard and redirect cursor instead of re-expanding.
+                const bjc = this.collapseGuard.get();
                 if (bjc && target === bjc.el) {
-                    this.boutenGuard.redirectCursorOutOfCollapsedBouten(target, sel);
-                    // Keep boutenJustCollapsed set; cleared only on user action (nav key / mouse).
+                    this.collapseGuard.redirectCursorOutOfCollapsed(target, sel);
+                    // Keep guard set; cleared only on user action (nav key / mouse / reset).
                     return contentChanged;
                 }
-                // After a ruby or heading collapse, Chrome may also normalize the cursor back into
-                // the element. Detect this and redirect cursor instead of re-expanding.
-                if (this.postCollapseEl && target === this.postCollapseEl.el) {
-                    this.redirectCursorOutOfCollapsed(target, sel);
-                    // Keep postCollapseEl set; cleared only on user action (nav key / mouse / reset).
-                    return contentChanged;
-                }
-                // Cursor entered a different expandable element: clear all post-collapse guards.
-                this.postCollapseEl = null;
-                this.boutenGuard.clear();
+                // Cursor entered a different expandable element: clear the post-collapse guard.
+                this.collapseGuard.clear();
                 // For expandable elements at end-of-line, insert a cursor anchor before expanding so
                 // that when the user exits past the closing bracket, nextSibling is already the anchor.
                 if (target.tagName === 'RUBY' || target.getAttribute('data-tcy') === 'explicit'
@@ -406,104 +394,38 @@ export class InlineEditor {
         this.inBurst = true;
     }
 
-    // Returns the bouten span that should intercept the next insertText event due to Chrome's
-    // post-collapse cursor behavior, or null if not applicable.
-    getCursorBoutenSpan(): HTMLElement | null {
-        return this.boutenGuard.getCursorBoutenSpan(this.expandBouten, this.expandedEl);
+    // Returns the annotation element that should intercept the next insertText event, or null.
+    // Determines the expand flag based on the recorded element type.
+    getCursorCollapseEl(): HTMLElement | null {
+        const state = this.collapseGuard.get();
+        if (!state) return null;
+        const expandFlag = state.el.getAttribute('data-bouten') !== null ? this.expandBouten
+            : state.el.tagName === 'RUBY' ? this.expandRuby
+            : state.el.getAttribute('data-heading') !== null ? this.expandHeading
+            : true;
+        return this.collapseGuard.getCursorCollapseEl(expandFlag, this.expandedEl);
     }
 
-    // Inserts chars into the DOM immediately after bouten without going through the Selection API.
-    insertAfterBouten(bouten: HTMLElement, chars: string): void {
-        this.boutenGuard.insertAfterBouten(bouten, chars);
-    }
-
-    // Called in compositionend (before commitToCm6) to move IME text that landed inside a
-    // post-collapse bouten span out to after the span. Returns true if the DOM was changed.
-    handleBoutenPostCollapseInput(): boolean {
-        return this.boutenGuard.handleBoutenPostCollapseInput();
-    }
-
-    // Returns the ruby or heading element to intercept the next insertText event, or null.
-    // Non-null only when postCollapseEl is set, expansion for that type is enabled, and no
-    // span is currently expanded.
-    getPostCollapseEl(): HTMLElement | null {
-        if (!this.postCollapseEl || this.expandedEl) return null;
-        const { el } = this.postCollapseEl;
-        if (!el.isConnected) { this.postCollapseEl = null; return null; }
-        if (el.tagName === 'RUBY' && !this.expandRuby) return null;
-        if (el.getAttribute('data-heading') && !this.expandHeading) return null;
-        return el;
-    }
-
-    // Inserts chars immediately after el (ruby or heading) without going through the Selection API.
-    // Mirrors BoutenGuard.insertAfterBouten for the ruby/heading case.
+    // Inserts chars immediately after el without going through the Selection API.
     insertAfterCollapsed(el: HTMLElement, chars: string): void {
-        const next = el.nextSibling;
-        let targetNode: Text;
-        let targetOffset: number;
-
-        if (next?.instanceOf(HTMLElement) && next.classList.contains('tate-cursor-anchor')
-                && next.firstChild?.nodeType === Node.TEXT_NODE) {
-            const textNode = activeDocument.createTextNode(chars);
-            el.parentNode!.insertBefore(textNode, next);
-            targetNode = textNode;
-            targetOffset = chars.length;
-        } else if (next?.nodeType === Node.TEXT_NODE) {
-            const textNode = next as Text;
-            textNode.insertData(0, chars);
-            targetNode = textNode;
-            targetOffset = chars.length;
-        } else {
-            const textNode = activeDocument.createTextNode(chars);
-            el.parentNode!.insertBefore(textNode, next ?? null);
-            targetNode = textNode;
-            targetOffset = chars.length;
-        }
-
-        const sel = window.getSelection();
-        if (sel) {
-            const r = activeDocument.createRange();
-            r.setStart(targetNode, targetOffset);
-            r.collapse(true);
-            sel.removeAllRanges();
-            sel.addRange(r);
-        }
-        this.postCollapseEl = null;
+        this.collapseGuard.insertAfter(el, chars);
     }
 
     // Called in compositionend (before commitToCm6) to move IME text that landed inside a
-    // post-collapse ruby or heading element out to after the element. Returns true if changed.
+    // post-collapse annotation element out to after the element. Returns true if changed.
     handlePostCollapseInput(): boolean {
-        if (!this.postCollapseEl) return false;
-        const { el, originalText } = this.postCollapseEl;
-        if (!el.isConnected) { this.postCollapseEl = null; return false; }
-
-        const currentText = el.textContent ?? '';
-        if (currentText === originalText) return false;
-
-        if (!currentText.startsWith(originalText)) {
-            // IME changed content unexpectedly: clear guard and let expansion handle naturally.
-            this.postCollapseEl = null;
-            return false;
-        }
-
-        const extraChars = currentText.slice(originalText.length);
-        el.textContent = originalText;
-        this.insertAfterCollapsed(el, extraChars);
-        // insertAfterCollapsed clears postCollapseEl
-        return true;
+        return this.collapseGuard.handlePostCollapseInput();
     }
 
-    // Resets the burst flag after a commit. Does NOT clear boutenGuard.
+    // Resets the burst flag after a commit. Does NOT clear collapseGuard.
     afterCommit(): void {
         this.inBurst = false;
     }
 
-    // Resets the burst flag and clears boutenGuard on mouse click or navigation key.
+    // Resets the burst flag and clears collapseGuard on mouse click or navigation key.
     afterNavigation(): void {
         this.inBurst = false;
-        this.postCollapseEl = null;
-        this.boutenGuard.clear();
+        this.collapseGuard.clear();
     }
 
     // ---- Shared logic for selection wrap ----
@@ -523,7 +445,7 @@ export class InlineEditor {
         try {
             const inserted = insertAnnotationElement(textNode, startOffset, endOffset, newEl);
             // Insert anchor first so Chrome cannot normalize cursor into the annotation span.
-            // placeCursorAfterCollapse also sets boutenGuard when wrapping a bouten span.
+            // placeCursorAfterCollapse also sets collapseGuard for the newly created element.
             this.anchorManager.ensureCursorAnchorAfter(inserted);
             const nextSib = inserted.nextSibling;
             const parentEl = inserted.parentElement;
@@ -553,20 +475,16 @@ export class InlineEditor {
 
     // Places the cursor just after a collapsed annotation element.
     // Inserts a cursor-anchor span at end-of-line if needed, and records the collapsed element
-    // so handleSelectionChange can detect Chrome's cursor normalization back into the element.
+    // in collapseGuard so handleSelectionChange can detect Chrome's cursor normalization.
     private placeCursorAfterCollapse(nextSib: Node | null, parentEl: HTMLElement, sel: Selection): void {
         this.anchorManager.placeCursorAfterCollapse(nextSib, parentEl, sel);
         if (nextSib?.isConnected) {
             const prev = nextSib.previousSibling;
-            if (prev?.instanceOf(HTMLElement)) {
-                if (prev.getAttribute('data-bouten')) {
-                    // Bouten needs both cursor redirect and IME-text interception (BoutenGuard).
-                    this.boutenGuard.set(prev, prev.textContent ?? '');
-                } else if (prev.tagName === 'RUBY' || prev.getAttribute('data-heading')) {
-                    // Ruby and heading need cursor redirect and IME-text interception.
-                    // originalText is the base text content at collapse time (no <rt> in DOM).
-                    this.postCollapseEl = { el: prev, originalText: prev.textContent ?? '' };
-                }
+            if (prev?.instanceOf(HTMLElement)
+                    && (prev.getAttribute('data-bouten') !== null
+                        || prev.tagName === 'RUBY'
+                        || prev.getAttribute('data-heading') !== null)) {
+                this.collapseGuard.set(prev, prev.textContent ?? '');
             }
         }
     }
@@ -619,27 +537,6 @@ export class InlineEditor {
         this.reset();
     }
 
-    // Redirects the cursor to a stable position just after el to prevent re-expansion.
-    // Mirrors BoutenGuard.redirectCursorOutOfCollapsedBouten but without bouten-specific logic.
-    private redirectCursorOutOfCollapsed(el: HTMLElement, sel: Selection): void {
-        const next = el.nextSibling;
-        const r = activeDocument.createRange();
-        if (next?.instanceOf(HTMLElement) && next.classList.contains('tate-cursor-anchor')
-                && next.firstChild?.nodeType === Node.TEXT_NODE) {
-            const anchorText = next.firstChild as Text;
-            r.setStart(anchorText, anchorText.length);
-        } else if (next?.nodeType === Node.TEXT_NODE) {
-            r.setStart(next as Text, 0);
-        } else if (next) {
-            r.setStartBefore(next);
-        } else {
-            r.setStartAfter(el);
-        }
-        r.collapse(true);
-        sel.removeAllRanges();
-        sel.addRange(r);
-    }
-
     // Normalizes savedRange and returns { textNode, startOffset, endOffset }.
     private resolveSelectionRange(): { textNode: Text; startOffset: number; endOffset: number } | null {
         const r = this.savedRange;
@@ -675,8 +572,8 @@ export class InlineEditor {
     // can skip the U+200B placeholder in the correct direction.
     // Call from the keydown handler before the browser moves the cursor.
     notifyNavigationKey(key: string): void {
-        // Intentional navigation clears the post-collapse guard so bouten can be entered again.
-        this.boutenGuard.clear();
+        // Intentional navigation clears the post-collapse guard so the element can be re-entered.
+        this.collapseGuard.clear();
         this.anchorManager.setSkipDirection(key);
     }
 

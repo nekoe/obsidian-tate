@@ -623,21 +623,14 @@ export class EditorElement {
     }
 
     // Called on beforeinput event (registered from view.ts).
-    // For non-IME insertText when cursor is inside a post-collapse bouten span
+    // For non-IME insertText when cursor is inside a post-collapse annotation element
     // (Chrome normalized it back in), intercepts the event and inserts the character
-    // after the span instead. Chrome's Selection API normalization is synchronous and
+    // after the element instead. Chrome's Selection API normalization is synchronous and
     // cannot be countered with sel.addRange, so Range-level insertion is used instead.
     onBeforeInput(e: InputEvent): void {
         this.inlineEditor.onBeforeInput();
         if (!e.isComposing && e.inputType === 'insertText' && e.data) {
-            const boutenSpan = this.inlineEditor.getCursorBoutenSpan();
-            if (boutenSpan) {
-                e.preventDefault();
-                const char = this.inputTransformer.applySpaceConversion(e.data);
-                this.inlineEditor.insertAfterBouten(boutenSpan, char);
-                return;
-            }
-            const collapseEl = this.inlineEditor.getPostCollapseEl();
+            const collapseEl = this.inlineEditor.getCursorCollapseEl();
             if (collapseEl) {
                 e.preventDefault();
                 const char = this.inputTransformer.applySpaceConversion(e.data);
@@ -691,13 +684,7 @@ export class EditorElement {
     }
 
     // Called in compositionend (before commitToCm6) to move IME text that landed inside a
-    // post-collapse bouten span out to after the span. Returns true if the DOM was changed.
-    handleBoutenPostCollapseInput(): boolean {
-        return this.inlineEditor.handleBoutenPostCollapseInput();
-    }
-
-    // Called in compositionend (before commitToCm6) to move IME text that landed inside a
-    // post-collapse ruby or heading element out to after the element. Returns true if changed.
+    // post-collapse annotation element out to after the element. Returns true if changed.
     handlePostCollapseInput(): boolean {
         return this.inlineEditor.handlePostCollapseInput();
     }
@@ -707,12 +694,12 @@ export class EditorElement {
         this.inputTransformer.handleCompositionEnd(e);
     }
 
-    // Resets the burst flag after a commit. Does NOT clear boutenGuard.
+    // Resets the burst flag after a commit. Does NOT clear collapseGuard.
     afterCommit(): void {
         this.inlineEditor.afterCommit();
     }
 
-    // Resets the burst flag and clears boutenGuard on mouse click or navigation key.
+    // Resets the burst flag and clears collapseGuard on mouse click or navigation key.
     afterNavigation(): void {
         this.inlineEditor.afterNavigation();
     }
