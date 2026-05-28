@@ -38,8 +38,8 @@ src/
     ├── InlineExpander.test.ts        # InlineExpander unit tests (vitest)
     ├── LiveConverter.ts              # Live notation conversion: ruby/tcy/bouten completion as user types
     ├── LiveConverter.test.ts         # LiveConverter unit tests (vitest)
-    ├── BoutenGuard.ts                # Bouten post-collapse guard: prevents cursor re-entry into collapsed bouten spans
-    ├── BoutenGuard.test.ts           # BoutenGuard unit tests (vitest)
+    ├── CollapseGuard.ts              # Post-collapse guard: prevents cursor re-entry into collapsed bouten/ruby/heading elements
+    ├── CollapseGuard.test.ts         # CollapseGuard unit tests (vitest)
     ├── CursorAnchorManager.ts        # Cursor anchor span lifecycle and navigation skip logic
     ├── CursorAnchorManager.test.ts   # CursorAnchorManager unit tests (vitest)
     ├── domHelpers.ts                 # Pure DOM helpers: element factories, ancestor traversal, pure computation
