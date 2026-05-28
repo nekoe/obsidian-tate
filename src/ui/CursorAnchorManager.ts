@@ -1,6 +1,6 @@
 import {
     createCursorAnchor, findCursorAnchorAncestor,
-    isInsideRtNode, findLastBaseTextInElement,
+    findLastBaseTextInElement,
 } from './domHelpers';
 import type { ParagraphVirtualizer } from './ParagraphVirtualizer';
 
@@ -91,7 +91,7 @@ export class CursorAnchorManager {
                 }
             } else {
                 // End-of-line: insert cursor anchor span with U+200B so Chrome has a real
-                // text position and does not normalize into <rt> or the annotation span.
+                // text position and does not normalize into the annotation span.
                 const anchor = createCursorAnchor();
                 parentEl.appendChild(anchor);
                 r.setStart(anchor.firstChild!, 0);
@@ -157,21 +157,16 @@ export class CursorAnchorManager {
         }
     }
 
-    // Returns the first non-<rt> text position after the anchor.
+    // Returns the first text position after the anchor.
     // Checks siblings within the same paragraph first; falls back to the next paragraph.
     private findPositionAfterAnchor(anchor: HTMLElement): { node: Text; offset: number } | null {
         let sibling: Node | null = anchor.nextSibling;
         while (sibling) {
             if (sibling.nodeType === Node.TEXT_NODE) {
-                const t = sibling as Text;
-                if (!isInsideRtNode(t, this.el)) return { node: t, offset: 0 };
+                return { node: sibling as Text, offset: 0 };
             } else if (sibling.nodeType === Node.ELEMENT_NODE) {
-                const walker = activeDocument.createTreeWalker(sibling, NodeFilter.SHOW_TEXT);
-                let node = walker.nextNode() as Text | null;
-                while (node) {
-                    if (!isInsideRtNode(node, this.el)) return { node, offset: 0 };
-                    node = walker.nextNode() as Text | null;
-                }
+                const node = activeDocument.createTreeWalker(sibling, NodeFilter.SHOW_TEXT).nextNode() as Text | null;
+                if (node) return { node, offset: 0 };
             }
             sibling = sibling.nextSibling;
         }
@@ -181,18 +176,14 @@ export class CursorAnchorManager {
         let next = parentDiv.nextSibling;
         while (next) {
             if (!next.instanceOf(HTMLElement)) { next = next.nextSibling; continue; }
-            const walker = activeDocument.createTreeWalker(next, NodeFilter.SHOW_TEXT);
-            let node = walker.nextNode() as Text | null;
-            while (node) {
-                if (!isInsideRtNode(node, this.el)) return { node, offset: 0 };
-                node = walker.nextNode() as Text | null;
-            }
+            const node = activeDocument.createTreeWalker(next, NodeFilter.SHOW_TEXT).nextNode() as Text | null;
+            if (node) return { node, offset: 0 };
             next = next.nextSibling;
         }
         return null;
     }
 
-    // Returns the last non-<rt> text position before the anchor on the same line.
+    // Returns the last text position before the anchor on the same line.
     // Descends into element siblings (e.g. <ruby>) to find their last base text node,
     // which causes selectionchange to trigger expandForEditing on the ruby.
     // Falls back to the last text of the previous paragraph if nothing is found on the same line.
@@ -218,7 +209,7 @@ export class CursorAnchorManager {
             let lastText: Text | null = null;
             let node = walker.nextNode() as Text | null;
             while (node) {
-                if (!isInsideRtNode(node, this.el)) lastText = node;
+                lastText = node;
                 node = walker.nextNode() as Text | null;
             }
             if (lastText) return { node: lastText, offset: lastText.length };

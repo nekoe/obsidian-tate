@@ -228,10 +228,8 @@ var KANJI_RE_STR = "[\u4E00-\u9FFF\u3400-\u4DBF\u{20000}-\u{2A6DF}\u3005\u3006\u
 function createRubyEl(base, rt, explicit) {
   const rubyEl = activeDocument.createElement("ruby");
   rubyEl.setAttribute("data-ruby-explicit", String(explicit));
+  rubyEl.setAttribute("data-rt", rt);
   rubyEl.appendChild(activeDocument.createTextNode(base));
-  const rtEl = activeDocument.createElement("rt");
-  rtEl.textContent = rt;
-  rubyEl.appendChild(rtEl);
   return rubyEl;
 }
 function createTcyEl(content) {
@@ -301,16 +299,12 @@ function isInsideRuby(node, rootEl) {
 function findCursorAnchorAncestor(node, rootEl) {
   return findAncestor(node, (el) => el.classList.contains("tate-cursor-anchor"), rootEl);
 }
-function isInsideRtNode(node, rootEl) {
-  var _a;
-  return findAncestor((_a = node.parentElement) != null ? _a : node, (el) => el.tagName === "RT", rootEl) !== null;
-}
-function findLastBaseTextInElement(el, rootEl) {
+function findLastBaseTextInElement(el, _rootEl) {
   const walker = activeDocument.createTreeWalker(el, NodeFilter.SHOW_TEXT);
   let lastText = null;
   let node = walker.nextNode();
   while (node) {
-    if (!isInsideRtNode(node, rootEl)) lastText = node;
+    lastText = node;
     node = walker.nextNode();
   }
   if (!lastText) return null;
@@ -327,20 +321,11 @@ function ensureBrPlaceholder(el) {
   clearChildren(el);
   el.appendChild(activeDocument.createElement("br"));
 }
-function rawOffsetForExpand(el, node, offset) {
+function rawOffsetForExpand(el, _node, offset) {
   if (el.tagName === "RUBY") {
     const explicit = el.getAttribute("data-ruby-explicit") !== "false";
     const prefix = explicit ? 1 : 0;
-    const baseLen = Array.from(el.childNodes).filter((n) => !(n.instanceOf(HTMLElement) && n.tagName === "RT")).reduce((sum, n) => {
-      var _a, _b;
-      return sum + ((_b = (_a = n.textContent) == null ? void 0 : _a.length) != null ? _b : 0);
-    }, 0);
-    const rt = el.querySelector("rt");
-    if (rt && rt.contains(node)) {
-      return prefix + baseLen + 1 + offset;
-    } else {
-      return prefix + offset;
-    }
+    return prefix + offset;
   } else {
     return offset;
   }
@@ -351,9 +336,7 @@ function computeDivViewLen(div, rootEl) {
   const walker = activeDocument.createTreeWalker(div, NodeFilter.SHOW_TEXT);
   let node = walker.nextNode();
   while (node) {
-    if (!isInsideRtNode(node, rootEl)) {
-      count += findCursorAnchorAncestor(node, rootEl) ? ((_a = node.textContent) != null ? _a : "").replace(/\u200B/g, "").length : node.length;
-    }
+    count += findCursorAnchorAncestor(node, rootEl) ? ((_a = node.textContent) != null ? _a : "").replace(/\u200B/g, "").length : node.length;
     node = walker.nextNode();
   }
   return count;
@@ -365,14 +348,12 @@ function computeViewOffsetInDiv(div, editorEl, targetNode, targetOffset) {
   const walker = activeDocument.createTreeWalker(div, NodeFilter.SHOW_TEXT);
   let node = walker.nextNode();
   while (node) {
-    if (!isInsideRtNode(node, editorEl)) {
-      const isAnchor = !!findCursorAnchorAncestor(node, editorEl);
-      if (node === targetNode) {
-        count += isAnchor ? ((_a = node.textContent) != null ? _a : "").slice(0, targetOffset).replace(/\u200B/g, "").length : targetOffset;
-        return count;
-      }
-      count += isAnchor ? ((_b = node.textContent) != null ? _b : "").replace(/\u200B/g, "").length : node.length;
+    const isAnchor = !!findCursorAnchorAncestor(node, editorEl);
+    if (node === targetNode) {
+      count += isAnchor ? ((_a = node.textContent) != null ? _a : "").slice(0, targetOffset).replace(/\u200B/g, "").length : targetOffset;
+      return count;
     }
+    count += isAnchor ? ((_b = node.textContent) != null ? _b : "").replace(/\u200B/g, "").length : node.length;
     node = walker.nextNode();
   }
   return count;
@@ -383,28 +364,26 @@ function computeDomPositionFromViewOff(div, editorEl, viewOff) {
   const walker = activeDocument.createTreeWalker(div, NodeFilter.SHOW_TEXT);
   let node = walker.nextNode();
   while (node) {
-    if (!isInsideRtNode(node, editorEl)) {
-      const isAnchor = !!findCursorAnchorAncestor(node, editorEl);
-      const text = (_a = node.textContent) != null ? _a : "";
-      if (isAnchor) {
-        const visLen = text.replace(/\u200B/g, "").length;
-        if (remaining <= visLen) {
-          let visible = 0;
-          let actualOffset = text.length;
-          for (let ci = 0; ci < text.length; ci++) {
-            if (visible === remaining) {
-              actualOffset = ci;
-              break;
-            }
-            if (text[ci] !== "\u200B") visible++;
+    const isAnchor = !!findCursorAnchorAncestor(node, editorEl);
+    const text = (_a = node.textContent) != null ? _a : "";
+    if (isAnchor) {
+      const visLen = text.replace(/\u200B/g, "").length;
+      if (remaining <= visLen) {
+        let visible = 0;
+        let actualOffset = text.length;
+        for (let ci = 0; ci < text.length; ci++) {
+          if (visible === remaining) {
+            actualOffset = ci;
+            break;
           }
-          return { node, offset: actualOffset };
+          if (text[ci] !== "\u200B") visible++;
         }
-        remaining -= visLen;
-      } else {
-        if (remaining <= node.length) return { node, offset: remaining };
-        remaining -= node.length;
+        return { node, offset: actualOffset };
       }
+      remaining -= visLen;
+    } else {
+      if (remaining <= node.length) return { node, offset: remaining };
+      remaining -= node.length;
     }
     node = walker.nextNode();
   }
@@ -703,7 +682,7 @@ function splitByExplicitRuby(text) {
     }
     result.push({
       type: "html",
-      html: `<ruby data-ruby-explicit="true">${esc(m[1])}<rt>${esc(m[2])}</rt></ruby>`
+      html: `<ruby data-ruby-explicit="true" data-rt="${esc(m[2])}">${esc(m[1])}</ruby>`
     });
     lastIndex = re.lastIndex;
   }
@@ -790,7 +769,7 @@ function splitByImplicitRuby(text) {
     }
     result.push({
       type: "html",
-      html: `<ruby data-ruby-explicit="false">${esc(m[1])}<rt>${esc(m[2])}</rt></ruby>`
+      html: `<ruby data-ruby-explicit="false" data-rt="${esc(m[2])}">${esc(m[1])}</ruby>`
     });
     lastIndex = re.lastIndex;
   }
@@ -800,10 +779,10 @@ function splitByImplicitRuby(text) {
   return result;
 }
 function esc(text) {
-  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 function serializeNode(node, rootEl) {
-  var _a, _b, _c, _d, _e, _f, _g;
+  var _a, _b, _c, _d, _e, _f;
   if (node.nodeType === Node.TEXT_NODE) {
     return (_a = node.textContent) != null ? _a : "";
   }
@@ -811,18 +790,18 @@ function serializeNode(node, rootEl) {
   switch (node.tagName) {
     case "RUBY": {
       const explicit = node.getAttribute("data-ruby-explicit") !== "false";
-      const base = Array.from(node.childNodes).filter((n) => !(n.instanceOf(HTMLElement) && n.tagName === "RT")).map((n) => serializeNode(n, rootEl)).join("");
-      const rt = (_c = (_b = node.querySelector("rt")) == null ? void 0 : _b.textContent) != null ? _c : "";
+      const base = Array.from(node.childNodes).map((n) => serializeNode(n, rootEl)).join("");
+      const rt = (_b = node.getAttribute("data-rt")) != null ? _b : "";
       return explicit ? `\uFF5C${base}\u300A${rt}\u300B` : `${base}\u300A${rt}\u300B`;
     }
     case "SPAN": {
       const tcy = node.getAttribute("data-tcy");
       if (tcy === "explicit") {
-        const content = (_d = node.textContent) != null ? _d : "";
+        const content = (_c = node.textContent) != null ? _c : "";
         return `${content}\uFF3B\uFF03\u300C${content}\u300D\u306F\u7E26\u4E2D\u6A2A\uFF3D`;
       }
       if (node.getAttribute("data-bouten")) {
-        const content = (_e = node.textContent) != null ? _e : "";
+        const content = (_d = node.textContent) != null ? _d : "";
         return `${content}\uFF3B\uFF03\u300C${content}\u300D\u306B\u508D\u70B9\uFF3D`;
       }
       const heading = node.getAttribute("data-heading");
@@ -832,12 +811,12 @@ function serializeNode(node, rootEl) {
         return `${content}\uFF3B\uFF03\u300C${content}\u300D\u306F${suffix}\uFF3D`;
       }
       if (node.classList.contains("tate-cursor-anchor")) {
-        return ((_f = node.textContent) != null ? _f : "").replace(/\u200B/g, "");
+        return ((_e = node.textContent) != null ? _e : "").replace(/\u200B/g, "");
       }
       return Array.from(node.childNodes).map((n) => serializeNode(n, rootEl)).join("");
     }
     case "BR":
-      if (node.parentElement !== rootEl && ((_g = node.parentElement) == null ? void 0 : _g.tagName) === "DIV" && node === node.parentElement.lastChild) {
+      if (node.parentElement !== rootEl && ((_f = node.parentElement) == null ? void 0 : _f.tagName) === "DIV" && node === node.parentElement.lastChild) {
         return "";
       }
       return "\n";
@@ -1109,21 +1088,16 @@ var CursorAnchorManager = class {
       }
     }
   }
-  // Returns the first non-<rt> text position after the anchor.
+  // Returns the first text position after the anchor.
   // Checks siblings within the same paragraph first; falls back to the next paragraph.
   findPositionAfterAnchor(anchor) {
     let sibling = anchor.nextSibling;
     while (sibling) {
       if (sibling.nodeType === Node.TEXT_NODE) {
-        const t = sibling;
-        if (!isInsideRtNode(t, this.el)) return { node: t, offset: 0 };
+        return { node: sibling, offset: 0 };
       } else if (sibling.nodeType === Node.ELEMENT_NODE) {
-        const walker = activeDocument.createTreeWalker(sibling, NodeFilter.SHOW_TEXT);
-        let node = walker.nextNode();
-        while (node) {
-          if (!isInsideRtNode(node, this.el)) return { node, offset: 0 };
-          node = walker.nextNode();
-        }
+        const node = activeDocument.createTreeWalker(sibling, NodeFilter.SHOW_TEXT).nextNode();
+        if (node) return { node, offset: 0 };
       }
       sibling = sibling.nextSibling;
     }
@@ -1135,17 +1109,13 @@ var CursorAnchorManager = class {
         next = next.nextSibling;
         continue;
       }
-      const walker = activeDocument.createTreeWalker(next, NodeFilter.SHOW_TEXT);
-      let node = walker.nextNode();
-      while (node) {
-        if (!isInsideRtNode(node, this.el)) return { node, offset: 0 };
-        node = walker.nextNode();
-      }
+      const node = activeDocument.createTreeWalker(next, NodeFilter.SHOW_TEXT).nextNode();
+      if (node) return { node, offset: 0 };
       next = next.nextSibling;
     }
     return null;
   }
-  // Returns the last non-<rt> text position before the anchor on the same line.
+  // Returns the last text position before the anchor on the same line.
   // Descends into element siblings (e.g. <ruby>) to find their last base text node,
   // which causes selectionchange to trigger expandForEditing on the ruby.
   // Falls back to the last text of the previous paragraph if nothing is found on the same line.
@@ -1173,7 +1143,7 @@ var CursorAnchorManager = class {
       let lastText = null;
       let node = walker.nextNode();
       while (node) {
-        if (!isInsideRtNode(node, this.el)) lastText = node;
+        lastText = node;
         node = walker.nextNode();
       }
       if (lastText) return { node: lastText, offset: lastText.length };
@@ -4237,19 +4207,17 @@ function visibleToRawOffset(node, visibleOffset) {
   }
   return text.length;
 }
-function extractSegmentsFromDiv(div, editorEl) {
+function extractSegmentsFromDiv(div) {
   var _a;
   const segments = [];
   let localOffset = 0;
   const walker = activeDocument.createTreeWalker(div, NodeFilter.SHOW_TEXT);
   let node = walker.nextNode();
   while (node) {
-    if (!isInsideRtNode(node, editorEl)) {
-      const visible = ((_a = node.textContent) != null ? _a : "").replace(/\u200B/g, "");
-      if (visible.length > 0) {
-        segments.push({ node, start: localOffset, length: visible.length });
-        localOffset += visible.length;
-      }
+    const visible = ((_a = node.textContent) != null ? _a : "").replace(/\u200B/g, "");
+    if (visible.length > 0) {
+      segments.push({ node, start: localOffset, length: visible.length });
+      localOffset += visible.length;
     }
     node = walker.nextNode();
   }
@@ -4266,7 +4234,7 @@ function extractHybridText(editorEl, virtualizer) {
       paragraphs.push({ paragraphIndex: i, div: null, globalStart: globalOffset, text, segments: [] });
       globalOffset += text.length;
     } else {
-      const segments = extractSegmentsFromDiv(div, editorEl);
+      const segments = extractSegmentsFromDiv(div);
       const text = segments.map((s) => {
         var _a;
         return ((_a = s.node.textContent) != null ? _a : "").replace(/\u200B/g, "");
@@ -4719,7 +4687,7 @@ var SearchPanel = class {
       }
       const div = this.virtualizer.getWindowDiv(entry.paragraphIndex);
       if (!div) return;
-      const segments = extractSegmentsFromDiv(div, this.editorElementRef.el);
+      const segments = extractSegmentsFromDiv(div);
       const r = createRangeInParagraph(segments, entry.localStart, entry.localEnd);
       if (!r) return;
       range = r;
@@ -4765,7 +4733,7 @@ var SearchPanel = class {
       if (!entry.range && this.virtualizer.isInWindow(entry.paragraphIndex)) {
         const div = this.virtualizer.getWindowDiv(entry.paragraphIndex);
         if (!div) continue;
-        const segments = extractSegmentsFromDiv(div, this.editorElementRef.el);
+        const segments = extractSegmentsFromDiv(div);
         const r = createRangeInParagraph(segments, entry.localStart, entry.localEnd);
         if (r) {
           entry.div = div;

@@ -8,10 +8,8 @@ export const KANJI_RE_STR = '[\u4E00-\u9FFF\u3400-\u4DBF\u{20000}-\u{2A6DF}ã€…ã€
 export function createRubyEl(base: string, rt: string, explicit: boolean): HTMLElement {
     const rubyEl = activeDocument.createElement('ruby');
     rubyEl.setAttribute('data-ruby-explicit', String(explicit));
+    rubyEl.setAttribute('data-rt', rt);
     rubyEl.appendChild(activeDocument.createTextNode(base));
-    const rtEl = activeDocument.createElement('rt');
-    rtEl.textContent = rt;
-    rubyEl.appendChild(rtEl);
     return rubyEl;
 }
 
@@ -110,19 +108,15 @@ export function findCursorAnchorAncestor(node: Node, rootEl: HTMLElement): HTMLE
     return findAncestor(node, el => el.classList.contains('tate-cursor-anchor'), rootEl);
 }
 
-export function isInsideRtNode(node: Node, rootEl: HTMLElement): boolean {
-    return findAncestor(node.parentElement ?? node, el => el.tagName === 'RT', rootEl) !== null;
-}
-
 export function findLastBaseTextInElement(
     el: HTMLElement,
-    rootEl: HTMLElement,
+    _rootEl: HTMLElement,
 ): { node: Text; offset: number } | null {
     const walker = activeDocument.createTreeWalker(el, NodeFilter.SHOW_TEXT);
     let lastText: Text | null = null;
     let node = walker.nextNode() as Text | null;
     while (node) {
-        if (!isInsideRtNode(node, rootEl)) lastText = node;
+        lastText = node;
         node = walker.nextNode() as Text | null;
     }
     if (!lastText) return null;
@@ -154,44 +148,34 @@ export function ensureBrPlaceholder(el: HTMLElement): void {
 
 // ---- Pure computation ----
 
-export function rawOffsetForExpand(el: HTMLElement, node: Node, offset: number): number {
+export function rawOffsetForExpand(el: HTMLElement, _node: Node, offset: number): number {
     if (el.tagName === 'RUBY') {
         const explicit = el.getAttribute('data-ruby-explicit') !== 'false';
         const prefix = explicit ? 1 : 0;
-        const baseLen = Array.from(el.childNodes)
-            .filter(n => !(n.instanceOf(HTMLElement) && n.tagName === 'RT'))
-            .reduce((sum, n) => sum + (n.textContent?.length ?? 0), 0);
-        const rt = el.querySelector('rt');
-        if (rt && rt.contains(node)) {
-            return prefix + baseLen + 1 + offset;
-        } else {
-            return prefix + offset;
-        }
+        return prefix + offset;
     } else {
         // <span data-tcy="explicit"> / <span data-bouten>: the content part is at the beginning
         return offset;
     }
 }
 
-// Counts visible characters in a paragraph div, excluding <rt> content and U+200B placeholders.
+// Counts visible characters in a paragraph div, excluding U+200B placeholders.
 // Used by EditorElement and ParagraphVirtualizer to compute per-div viewLen consistently.
 export function computeDivViewLen(div: HTMLElement, rootEl: HTMLElement): number {
     let count = 0;
     const walker = activeDocument.createTreeWalker(div, NodeFilter.SHOW_TEXT);
     let node = walker.nextNode() as Text | null;
     while (node) {
-        if (!isInsideRtNode(node, rootEl)) {
-            count += findCursorAnchorAncestor(node, rootEl)
-                ? (node.textContent ?? '').replace(/\u200B/g, '').length
-                : node.length;
-        }
+        count += findCursorAnchorAncestor(node, rootEl)
+            ? (node.textContent ?? '').replace(/\u200B/g, '').length
+            : node.length;
         node = walker.nextNode() as Text | null;
     }
     return count;
 }
 
 // Computes view offset (visible char count) from the start of div to (targetNode, targetOffset).
-// Applies the same rules as computeDivViewLen: excludes RT text and U+200B cursor anchors.
+// Applies the same rules as computeDivViewLen: excludes U+200B cursor anchors.
 export function computeViewOffsetInDiv(
     div: HTMLElement, editorEl: HTMLElement,
     targetNode: Node, targetOffset: number,
@@ -205,18 +189,16 @@ export function computeViewOffsetInDiv(
     const walker = activeDocument.createTreeWalker(div, NodeFilter.SHOW_TEXT);
     let node = walker.nextNode() as Text | null;
     while (node) {
-        if (!isInsideRtNode(node, editorEl)) {
-            const isAnchor = !!findCursorAnchorAncestor(node, editorEl);
-            if (node === targetNode) {
-                count += isAnchor
-                    ? (node.textContent ?? '').slice(0, targetOffset).replace(/\u200B/g, '').length
-                    : targetOffset;
-                return count;
-            }
+        const isAnchor = !!findCursorAnchorAncestor(node, editorEl);
+        if (node === targetNode) {
             count += isAnchor
-                ? (node.textContent ?? '').replace(/\u200B/g, '').length
-                : node.length;
+                ? (node.textContent ?? '').slice(0, targetOffset).replace(/\u200B/g, '').length
+                : targetOffset;
+            return count;
         }
+        count += isAnchor
+            ? (node.textContent ?? '').replace(/\u200B/g, '').length
+            : node.length;
         node = walker.nextNode() as Text | null;
     }
     return count;
@@ -231,25 +213,23 @@ export function computeDomPositionFromViewOff(
     const walker = activeDocument.createTreeWalker(div, NodeFilter.SHOW_TEXT);
     let node = walker.nextNode() as Text | null;
     while (node) {
-        if (!isInsideRtNode(node, editorEl)) {
-            const isAnchor = !!findCursorAnchorAncestor(node, editorEl);
-            const text = node.textContent ?? '';
-            if (isAnchor) {
-                const visLen = text.replace(/\u200B/g, '').length;
-                if (remaining <= visLen) {
-                    let visible = 0;
-                    let actualOffset = text.length;
-                    for (let ci = 0; ci < text.length; ci++) {
-                        if (visible === remaining) { actualOffset = ci; break; }
-                        if (text[ci] !== '\u200B') visible++;
-                    }
-                    return { node, offset: actualOffset };
+        const isAnchor = !!findCursorAnchorAncestor(node, editorEl);
+        const text = node.textContent ?? '';
+        if (isAnchor) {
+            const visLen = text.replace(/\u200B/g, '').length;
+            if (remaining <= visLen) {
+                let visible = 0;
+                let actualOffset = text.length;
+                for (let ci = 0; ci < text.length; ci++) {
+                    if (visible === remaining) { actualOffset = ci; break; }
+                    if (text[ci] !== '\u200B') visible++;
                 }
-                remaining -= visLen;
-            } else {
-                if (remaining <= node.length) return { node, offset: remaining };
-                remaining -= node.length;
+                return { node, offset: actualOffset };
             }
+            remaining -= visLen;
+        } else {
+            if (remaining <= node.length) return { node, offset: remaining };
+            remaining -= node.length;
         }
         node = walker.nextNode() as Text | null;
     }

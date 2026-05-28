@@ -1,7 +1,6 @@
 import { App, sanitizeHTMLToDom, Scope, setIcon } from 'obsidian';
 import type { EditorElement } from './EditorElement';
 import type { ParagraphVirtualizer } from './ParagraphVirtualizer';
-import { isInsideRtNode } from './domHelpers';
 import { buildSegmentMap, viewToSrc, type Segment } from './SegmentMap';
 import { parseInlineToHtml, serializeNode } from './AozoraParser';
 
@@ -46,18 +45,16 @@ function visibleToRawOffset(node: Text, visibleOffset: number): number {
     return text.length;
 }
 
-function extractSegmentsFromDiv(div: HTMLElement, editorEl: HTMLElement): LocalSegment[] {
+function extractSegmentsFromDiv(div: HTMLElement): LocalSegment[] {
     const segments: LocalSegment[] = [];
     let localOffset = 0;
     const walker = activeDocument.createTreeWalker(div, NodeFilter.SHOW_TEXT);
     let node = walker.nextNode() as Text | null;
     while (node) {
-        if (!isInsideRtNode(node, editorEl)) {
-            const visible = (node.textContent ?? '').replace(/\u200B/g, '');
-            if (visible.length > 0) {
-                segments.push({ node, start: localOffset, length: visible.length });
-                localOffset += visible.length;
-            }
+        const visible = (node.textContent ?? '').replace(/\u200B/g, '');
+        if (visible.length > 0) {
+            segments.push({ node, start: localOffset, length: visible.length });
+            localOffset += visible.length;
         }
         node = walker.nextNode() as Text | null;
     }
@@ -81,7 +78,7 @@ function extractHybridText(
             paragraphs.push({ paragraphIndex: i, div: null, globalStart: globalOffset, text, segments: [] });
             globalOffset += text.length;
         } else {
-            const segments = extractSegmentsFromDiv(div, editorEl);
+            const segments = extractSegmentsFromDiv(div);
             const text = segments.map(s => (s.node.textContent ?? '').replace(/\u200B/g, '')).join('');
             paragraphs.push({ paragraphIndex: i, div, globalStart: globalOffset, text, segments });
             globalOffset += text.length;
@@ -680,7 +677,7 @@ export class SearchPanel {
             }
             const div = this.virtualizer.getWindowDiv(entry.paragraphIndex);
             if (!div) return;
-            const segments = extractSegmentsFromDiv(div, this.editorElementRef.el);
+            const segments = extractSegmentsFromDiv(div);
             const r = createRangeInParagraph(segments, entry.localStart, entry.localEnd);
             if (!r) return;
             range = r;
@@ -746,7 +743,7 @@ export class SearchPanel {
             if (!entry.range && this.virtualizer.isInWindow(entry.paragraphIndex)) {
                 const div = this.virtualizer.getWindowDiv(entry.paragraphIndex);
                 if (!div) continue;
-                const segments = extractSegmentsFromDiv(div, this.editorElementRef.el);
+                const segments = extractSegmentsFromDiv(div);
                 const r = createRangeInParagraph(segments, entry.localStart, entry.localEnd);
                 if (r) { entry.div = div; entry.range = r; changed = true; }
             }

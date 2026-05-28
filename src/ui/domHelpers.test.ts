@@ -4,7 +4,7 @@ import {
     createRubyEl, createTcyEl, createBoutenEl, createCursorAnchor,
     insertAnnotationElement, setCursorAfter,
     findAncestor, findBoutenAncestor, findTcyAncestor, isInsideRuby,
-    findCursorAnchorAncestor, isInsideRtNode, findLastBaseTextInElement,
+    findCursorAnchorAncestor, findLastBaseTextInElement,
     rawOffsetForExpand, getExtraCharsFromAnnotation,
     isEffectivelyEmpty, clearChildren, ensureBrPlaceholder,
 } from './domHelpers';
@@ -31,15 +31,14 @@ describe('createRubyEl', () => {
         expect((textNode as Text).data).toBe('東京');
     });
 
-    it('rt element contains ruby text', () => {
+    it('data-rt attribute contains ruby text', () => {
         const el = createRubyEl('東京', 'とうきょう', true);
-        const rt = el.querySelector('rt');
-        expect(rt?.textContent).toBe('とうきょう');
+        expect(el.getAttribute('data-rt')).toBe('とうきょう');
     });
 
-    it('allows empty rt', () => {
+    it('allows empty data-rt', () => {
         const el = createRubyEl('東京', '', true);
-        expect(el.querySelector('rt')?.textContent).toBe('');
+        expect(el.getAttribute('data-rt')).toBe('');
     });
 });
 
@@ -252,13 +251,6 @@ describe('isInsideRuby', () => {
         expect(isInsideRuby(text, root)).toBe(false);
     });
 
-    it('returns true when inside rt (which is inside ruby)', () => {
-        const root = document.createElement('div');
-        const ruby = createRubyEl('東', 'ひがし', true);
-        root.appendChild(ruby);
-        const rt = ruby.querySelector('rt')!;
-        expect(isInsideRuby(rt, root)).toBe(true);
-    });
 });
 
 describe('findCursorAnchorAncestor', () => {
@@ -278,32 +270,6 @@ describe('findCursorAnchorAncestor', () => {
     });
 });
 
-describe('isInsideRtNode', () => {
-    it('returns true when inside rt', () => {
-        const root = document.createElement('div');
-        const ruby = createRubyEl('東', 'ひがし', true);
-        root.appendChild(ruby);
-        const rt = ruby.querySelector('rt')!;
-        const rtText = rt.firstChild!;
-        expect(isInsideRtNode(rtText, root)).toBe(true);
-    });
-
-    it('returns false when inside ruby base text (not rt)', () => {
-        const root = document.createElement('div');
-        const ruby = createRubyEl('東', 'ひがし', true);
-        root.appendChild(ruby);
-        // First text node of ruby (the base)
-        const baseText = ruby.firstChild!;
-        expect(isInsideRtNode(baseText, root)).toBe(false);
-    });
-
-    it('returns false for plain text outside ruby', () => {
-        const root = document.createElement('div');
-        const text = document.createTextNode('東');
-        root.appendChild(text);
-        expect(isInsideRtNode(text, root)).toBe(false);
-    });
-});
 
 describe('findLastBaseTextInElement', () => {
     it('returns last text node in a plain div', () => {
@@ -319,7 +285,7 @@ describe('findLastBaseTextInElement', () => {
         expect(result?.offset).toBe(1);
     });
 
-    it('skips text inside rt nodes', () => {
+    it('returns last text node in element containing ruby', () => {
         const root = document.createElement('div');
         const div = document.createElement('div');
         const text = document.createTextNode('前');
@@ -327,15 +293,10 @@ describe('findLastBaseTextInElement', () => {
         div.appendChild(text);
         div.appendChild(ruby);
         root.appendChild(div);
-        // 'ruby' base text comes after 'text', but rt text inside ruby should be skipped
-        // Last non-rt text inside div should be the ruby base text node
+        // ruby: [text('東')] — single base text node, no <rt>
+        // Last text node is the base text '東' inside ruby
         const result = findLastBaseTextInElement(div, root);
         expect(result?.node.nodeType).toBe(Node.TEXT_NODE);
-        // The base text of ruby is 'ひがし' — but wait, ruby contains base + rt.
-        // Actually ruby: [text('東'), rt('ひがし')]
-        // The base node is the first child of ruby ('東')
-        // rt text ('ひがし') is skipped
-        // So last non-rt text is '東'
         expect(result?.node.textContent).toBe('東');
     });
 
@@ -365,24 +326,6 @@ describe('rawOffsetForExpand', () => {
         const baseText = ruby.firstChild as Text;
         // Implicit ruby: prefix = 0, so offset 1 → 0 + 1 = 1
         expect(rawOffsetForExpand(ruby, baseText, 1)).toBe(1);
-    });
-
-    it('offset inside rt of explicit ruby', () => {
-        const ruby = createRubyEl('東', 'ひがし', true);
-        // Explicit: prefix=1, baseLen=1 (text '東'), then '《', then rt offset
-        // rawText: ｜東《ひがし》 → rt starts after prefix(1) + base(1) + '《'(1) = 3
-        const rt = ruby.querySelector('rt')!;
-        const rtText = rt.firstChild as Text;
-        expect(rawOffsetForExpand(ruby, rtText, 0)).toBe(1 + 1 + 1 + 0); // = 3
-        expect(rawOffsetForExpand(ruby, rtText, 2)).toBe(1 + 1 + 1 + 2); // = 5
-    });
-
-    it('offset inside rt of implicit ruby', () => {
-        const ruby = createRubyEl('東', 'ひがし', false);
-        // Implicit: prefix=0, baseLen=1, then '《'(1), then rt offset
-        const rt = ruby.querySelector('rt')!;
-        const rtText = rt.firstChild as Text;
-        expect(rawOffsetForExpand(ruby, rtText, 0)).toBe(0 + 1 + 1 + 0); // = 2
     });
 
     it('offset inside tcy span returns offset as-is', () => {

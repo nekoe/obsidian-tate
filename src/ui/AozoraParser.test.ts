@@ -41,31 +41,31 @@ describe('parseInlineToHtml', () => {
 
     it('explicit ruby with full-width pipe ｜', () => {
         expect(parseInlineToHtml('｜東京《とうきょう》')).toBe(
-            '<ruby data-ruby-explicit="true">東京<rt>とうきょう</rt></ruby>'
+            '<ruby data-ruby-explicit="true" data-rt="とうきょう">東京</ruby>'
         );
     });
 
     it('explicit ruby with half-width pipe |', () => {
         expect(parseInlineToHtml('|東京《とうきょう》')).toBe(
-            '<ruby data-ruby-explicit="true">東京<rt>とうきょう</rt></ruby>'
+            '<ruby data-ruby-explicit="true" data-rt="とうきょう">東京</ruby>'
         );
     });
 
     it('explicit ruby with empty rt', () => {
         expect(parseInlineToHtml('｜東京《》')).toBe(
-            '<ruby data-ruby-explicit="true">東京<rt></rt></ruby>'
+            '<ruby data-ruby-explicit="true" data-rt="">東京</ruby>'
         );
     });
 
     it('explicit ruby surrounded by plain text', () => {
         expect(parseInlineToHtml('前｜東京《とうきょう》後')).toBe(
-            '前<ruby data-ruby-explicit="true">東京<rt>とうきょう</rt></ruby>後'
+            '前<ruby data-ruby-explicit="true" data-rt="とうきょう">東京</ruby>後'
         );
     });
 
     it('base text with HTML special chars is escaped inside ruby', () => {
         expect(parseInlineToHtml('｜A&B《rt》')).toBe(
-            '<ruby data-ruby-explicit="true">A&amp;B<rt>rt</rt></ruby>'
+            '<ruby data-ruby-explicit="true" data-rt="rt">A&amp;B</ruby>'
         );
     });
 
@@ -73,7 +73,7 @@ describe('parseInlineToHtml', () => {
 
     it('implicit ruby (kanji base)', () => {
         expect(parseInlineToHtml('東京《とうきょう》')).toBe(
-            '<ruby data-ruby-explicit="false">東京<rt>とうきょう</rt></ruby>'
+            '<ruby data-ruby-explicit="false" data-rt="とうきょう">東京</ruby>'
         );
     });
 
@@ -88,7 +88,7 @@ describe('parseInlineToHtml', () => {
     it('explicit ruby takes priority over implicit when ｜ is present', () => {
         // ｜東 is matched as explicit first; remaining 《》 has no kanji prefix → plain
         expect(parseInlineToHtml('｜東《ひがし》《とう》')).toBe(
-            '<ruby data-ruby-explicit="true">東<rt>ひがし</rt></ruby>《とう》'
+            '<ruby data-ruby-explicit="true" data-rt="ひがし">東</ruby>《とう》'
         );
     });
 
@@ -159,7 +159,7 @@ describe('parseInlineToHtml', () => {
     it('mixed: ruby + tcy + bouten + plain', () => {
         const src = '｜春《はる》中AB［＃「AB」は縦中横］末春［＃「春」に傍点］';
         expect(parseInlineToHtml(src)).toBe(
-            '<ruby data-ruby-explicit="true">春<rt>はる</rt></ruby>' +
+            '<ruby data-ruby-explicit="true" data-rt="はる">春</ruby>' +
             '中' +
             '<span data-tcy="explicit" class="tcy">AB</span>' +
             '末' +
@@ -196,14 +196,14 @@ describe('parseToHtml', () => {
 
     it('aozora notation inside line', () => {
         expect(parseToHtml('｜東京《とうきょう》')).toBe(
-            '<div><ruby data-ruby-explicit="true">東京<rt>とうきょう</rt></ruby></div>'
+            '<div><ruby data-ruby-explicit="true" data-rt="とうきょう">東京</ruby></div>'
         );
     });
 
     it('multiline with notations on different lines', () => {
         expect(parseToHtml('前\n｜東《ひがし》\n後')).toBe(
             '<div>前</div>' +
-            '<div><ruby data-ruby-explicit="true">東<rt>ひがし</rt></ruby></div>' +
+            '<div><ruby data-ruby-explicit="true" data-rt="ひがし">東</ruby></div>' +
             '<div>後</div>'
         );
     });
@@ -225,19 +225,19 @@ describe('serializeNode', () => {
 
     it('explicit ruby → ｜base《rt》', () => {
         const root = document.createElement('div');
-        root.innerHTML = '<ruby data-ruby-explicit="true">東京<rt>とうきょう</rt></ruby>';
+        root.innerHTML = '<ruby data-ruby-explicit="true" data-rt="とうきょう">東京</ruby>';
         expect(serializeNode(root.firstChild!, root)).toBe('｜東京《とうきょう》');
     });
 
     it('implicit ruby → base《rt》 (no leading ｜)', () => {
         const root = document.createElement('div');
-        root.innerHTML = '<ruby data-ruby-explicit="false">東京<rt>とうきょう</rt></ruby>';
+        root.innerHTML = '<ruby data-ruby-explicit="false" data-rt="とうきょう">東京</ruby>';
         expect(serializeNode(root.firstChild!, root)).toBe('東京《とうきょう》');
     });
 
     it('ruby with missing data-ruby-explicit defaults to explicit', () => {
         const root = document.createElement('div');
-        root.innerHTML = '<ruby>東京<rt>とうきょう</rt></ruby>';
+        root.innerHTML = '<ruby data-rt="とうきょう">東京</ruby>';
         expect(serializeNode(root.firstChild!, root)).toBe('｜東京《とうきょう》');
     });
 
