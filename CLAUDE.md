@@ -27,13 +27,14 @@ src/
 ├── main.ts                    # TatePlugin (entry point)
 ├── view.ts                    # VerticalWritingView (ItemView)
 ├── settings.ts                # TatePluginSettings type + TateSettingTab
+├── css-highlight.d.ts         # Type declarations for CSS Custom Highlight API (not yet in TypeScript DOM lib)
 ├── sync/
 │   └── SyncCoordinator.ts     # Bidirectional sync control (external change detection, file loading)
 └── ui/
-    ├── EditorElement.ts       # contenteditable div DOM management (facade over AozoraParser, InlineEditor, and InputTransformer)
-    ├── AozoraParser.ts        # Aozora notation ↔ DOM bidirectional conversion (parse + serialize)
-    ├── AozoraParser.test.ts   # AozoraParser unit tests (vitest)
-    ├── InlineEditor.ts        # Orchestrator: inline expand/collapse, delegates to sub-modules below
+    ├── EditorElement.ts              # contenteditable div DOM management (facade over AozoraParser, InlineEditor, and InputTransformer)
+    ├── AozoraParser.ts               # Aozora notation ↔ DOM bidirectional conversion (parse + serialize)
+    ├── AozoraParser.test.ts          # AozoraParser unit tests (vitest)
+    ├── InlineEditor.ts               # Orchestrator: inline expand/collapse, delegates to sub-modules below
     ├── InlineExpander.ts             # Expand/collapse core: expandForEditing, collapseEditing, findExpandableAncestor
     ├── InlineExpander.test.ts        # InlineExpander unit tests (vitest)
     ├── LiveConverter.ts              # Live notation conversion: ruby/tcy/bouten completion as user types
@@ -45,8 +46,15 @@ src/
     ├── domHelpers.ts                 # Pure DOM helpers: element factories, ancestor traversal, pure computation
     ├── domHelpers.test.ts            # domHelpers unit tests (vitest)
     ├── InputTransformer.ts           # Space conversion, auto-indent, and bracket de-indent on beforeinput
+    ├── InputTransformer.test.ts      # InputTransformer unit tests (vitest)
     ├── SegmentMap.ts                 # Source offset ↔ view offset bidirectional mapping
-    └── SegmentMap.test.ts            # SegmentMap unit tests (vitest)
+    ├── SegmentMap.test.ts            # SegmentMap unit tests (vitest)
+    ├── ParagraphVirtualizer.ts       # DOM windowing: freeze/thaw paragraphs, anchor island, spacer divs
+    ├── ParagraphVirtualizer.test.ts  # ParagraphVirtualizer unit tests (vitest)
+    ├── HeadingExtractor.ts           # Extract heading entries (level + paragraph index) from paragraph records
+    ├── HeadingExtractor.test.ts      # HeadingExtractor unit tests (vitest)
+    ├── OutlineView.ts                # Outline panel ItemView: displays heading list, click-to-jump
+    └── SearchPanel.ts                # Incremental search panel using CSS Custom Highlight API
 __mocks__/
 └── obsidian.ts                # sanitizeHTMLToDom stub for unit tests (aliased via vitest.config.ts)
 vitest.config.ts               # Vitest config: aliases obsidian to __mocks__/obsidian.ts
