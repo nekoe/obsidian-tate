@@ -27,26 +27,34 @@ src/
 ├── main.ts                    # TatePlugin (entry point)
 ├── view.ts                    # VerticalWritingView (ItemView)
 ├── settings.ts                # TatePluginSettings type + TateSettingTab
+├── css-highlight.d.ts         # Type declarations for CSS Custom Highlight API (not yet in TypeScript DOM lib)
 ├── sync/
 │   └── SyncCoordinator.ts     # Bidirectional sync control (external change detection, file loading)
 └── ui/
-    ├── EditorElement.ts       # contenteditable div DOM management (facade over AozoraParser, InlineEditor, and InputTransformer)
-    ├── AozoraParser.ts        # Aozora notation ↔ DOM bidirectional conversion (parse + serialize)
-    ├── AozoraParser.test.ts   # AozoraParser unit tests (vitest)
-    ├── InlineEditor.ts        # Orchestrator: inline expand/collapse, delegates to sub-modules below
+    ├── EditorElement.ts              # contenteditable div DOM management (facade over AozoraParser, InlineEditor, and InputTransformer)
+    ├── AozoraParser.ts               # Aozora notation ↔ DOM bidirectional conversion (parse + serialize)
+    ├── AozoraParser.test.ts          # AozoraParser unit tests (vitest)
+    ├── InlineEditor.ts               # Orchestrator: inline expand/collapse, delegates to sub-modules below
     ├── InlineExpander.ts             # Expand/collapse core: expandForEditing, collapseEditing, findExpandableAncestor
     ├── InlineExpander.test.ts        # InlineExpander unit tests (vitest)
     ├── LiveConverter.ts              # Live notation conversion: ruby/tcy/bouten completion as user types
     ├── LiveConverter.test.ts         # LiveConverter unit tests (vitest)
-    ├── BoutenGuard.ts                # Bouten post-collapse guard: prevents cursor re-entry into collapsed bouten spans
-    ├── BoutenGuard.test.ts           # BoutenGuard unit tests (vitest)
+    ├── CollapseGuard.ts              # Post-collapse guard: prevents cursor re-entry into collapsed bouten/ruby/heading elements
+    ├── CollapseGuard.test.ts         # CollapseGuard unit tests (vitest)
     ├── CursorAnchorManager.ts        # Cursor anchor span lifecycle and navigation skip logic
     ├── CursorAnchorManager.test.ts   # CursorAnchorManager unit tests (vitest)
     ├── domHelpers.ts                 # Pure DOM helpers: element factories, ancestor traversal, pure computation
     ├── domHelpers.test.ts            # domHelpers unit tests (vitest)
     ├── InputTransformer.ts           # Space conversion, auto-indent, and bracket de-indent on beforeinput
+    ├── InputTransformer.test.ts      # InputTransformer unit tests (vitest)
     ├── SegmentMap.ts                 # Source offset ↔ view offset bidirectional mapping
-    └── SegmentMap.test.ts            # SegmentMap unit tests (vitest)
+    ├── SegmentMap.test.ts            # SegmentMap unit tests (vitest)
+    ├── ParagraphVirtualizer.ts       # DOM windowing: freeze/thaw paragraphs, anchor island, spacer divs
+    ├── ParagraphVirtualizer.test.ts  # ParagraphVirtualizer unit tests (vitest)
+    ├── HeadingExtractor.ts           # Extract heading entries (level + paragraph index) from paragraph records
+    ├── HeadingExtractor.test.ts      # HeadingExtractor unit tests (vitest)
+    ├── OutlineView.ts                # Outline panel ItemView: displays heading list, click-to-jump
+    └── SearchPanel.ts                # Incremental search panel using CSS Custom Highlight API
 __mocks__/
 └── obsidian.ts                # sanitizeHTMLToDom stub for unit tests (aliased via vitest.config.ts)
 vitest.config.ts               # Vitest config: aliases obsidian to __mocks__/obsidian.ts
@@ -103,6 +111,7 @@ See the design documents in `docs/design/` for details:
 - [DOM Virtualization: Frozen Paragraph Placeholders (ParagraphVirtualizer, freeze/thaw lifecycle)](docs/design/20260504_dom_virtualization.md)
 - [Full DOM Virtualization: Design Notes and Future Feature Roadmap (replace, headings, outline)](docs/design/20260505_full_virtualization.md)
 - [Anchor Island: Pinned Paragraph Divs Outside the DOM Window (cursor stall fix, Cmd-A fix)](docs/design/20260522_anchor_island.md)
+- [Ruby `<rt>` Removal and CollapseGuard Unification (cursor-trap fix, data-rt + CSS ::after, CollapseGuard)](docs/design/20260528_ruby_rt_removal.md)
 
 ## Settings
 

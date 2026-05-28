@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { describe, it, expect, beforeEach } from 'vitest';
-import { BoutenGuard } from './BoutenGuard';
+import { CollapseGuard } from './CollapseGuard';
 import { createBoutenEl, createCursorAnchor } from './domHelpers';
 
 // Build a minimal DOM: <div>(root) > <div>(para) > children...
@@ -14,16 +14,14 @@ function makeRoot(): HTMLDivElement {
 // set / get / clear
 // ================================================================
 
-describe('BoutenGuard state (set/get/clear)', () => {
+describe('CollapseGuard state (set/get/clear)', () => {
     it('get returns null initially', () => {
-        const el = document.createElement('div');
-        const guard = new BoutenGuard(el);
+        const guard = new CollapseGuard();
         expect(guard.get()).toBeNull();
     });
 
     it('get returns value after set', () => {
-        const el = document.createElement('div');
-        const guard = new BoutenGuard(el);
+        const guard = new CollapseGuard();
         const bouten = createBoutenEl('春');
         guard.set(bouten, '春');
         const result = guard.get();
@@ -32,8 +30,7 @@ describe('BoutenGuard state (set/get/clear)', () => {
     });
 
     it('get returns null after clear', () => {
-        const el = document.createElement('div');
-        const guard = new BoutenGuard(el);
+        const guard = new CollapseGuard();
         const bouten = createBoutenEl('春');
         guard.set(bouten, '春');
         guard.clear();
@@ -42,28 +39,28 @@ describe('BoutenGuard state (set/get/clear)', () => {
 });
 
 // ================================================================
-// insertAfterBouten — DOM structure tests
+// insertAfter — DOM structure tests
 // ================================================================
 
-describe('insertAfterBouten', () => {
+describe('insertAfter', () => {
     let root: HTMLDivElement;
-    let guard: BoutenGuard;
+    let guard: CollapseGuard;
     let para: HTMLDivElement;
 
     beforeEach(() => {
         root = makeRoot();
-        guard = new BoutenGuard(root);
+        guard = new CollapseGuard();
         para = document.createElement('div');
         root.appendChild(para);
     });
 
-    it('creates new text node between bouten and cursor anchor (end-of-line case)', () => {
+    it('creates new text node between el and cursor anchor (end-of-line case)', () => {
         const bouten = createBoutenEl('春');
         const anchor = createCursorAnchor();
         para.appendChild(bouten);
         para.appendChild(anchor);
 
-        guard.insertAfterBouten(bouten, 'あ');
+        guard.insertAfter(bouten, 'あ');
 
         // Structure should be: bouten | 'あ' | anchor
         expect(para.childNodes.length).toBe(3);
@@ -78,7 +75,7 @@ describe('insertAfterBouten', () => {
         para.appendChild(bouten);
         para.appendChild(text);
 
-        guard.insertAfterBouten(bouten, 'あ');
+        guard.insertAfter(bouten, 'あ');
 
         // Text node now has 'あ' prepended
         expect(para.childNodes.length).toBe(2);
@@ -89,49 +86,49 @@ describe('insertAfterBouten', () => {
         const bouten = createBoutenEl('春');
         para.appendChild(bouten);
 
-        guard.insertAfterBouten(bouten, 'あ');
+        guard.insertAfter(bouten, 'あ');
 
         expect(para.childNodes.length).toBe(2);
         expect(para.childNodes[0]).toBe(bouten);
         expect((para.childNodes[1] as Text).data).toBe('あ');
     });
 
-    it('clears boutenJustCollapsed after insertion', () => {
+    it('clears justCollapsed after insertion', () => {
         const bouten = createBoutenEl('春');
         para.appendChild(bouten);
         guard.set(bouten, '春');
 
-        guard.insertAfterBouten(bouten, 'あ');
+        guard.insertAfter(bouten, 'あ');
 
         expect(guard.get()).toBeNull();
     });
 });
 
 // ================================================================
-// handleBoutenPostCollapseInput
+// handlePostCollapseInput
 // ================================================================
 
-describe('handleBoutenPostCollapseInput', () => {
+describe('handlePostCollapseInput', () => {
     let root: HTMLDivElement;
-    let guard: BoutenGuard;
+    let guard: CollapseGuard;
     let para: HTMLDivElement;
 
     beforeEach(() => {
         root = makeRoot();
-        guard = new BoutenGuard(root);
+        guard = new CollapseGuard();
         para = document.createElement('div');
         root.appendChild(para);
     });
 
     it('returns false immediately when guard is not set', () => {
-        expect(guard.handleBoutenPostCollapseInput()).toBe(false);
+        expect(guard.handlePostCollapseInput()).toBe(false);
     });
 
-    it('returns false and clears guard when bouten is detached', () => {
+    it('returns false and clears guard when el is detached', () => {
         const bouten = createBoutenEl('春');
         // Do NOT attach bouten to DOM
         guard.set(bouten, '春');
-        expect(guard.handleBoutenPostCollapseInput()).toBe(false);
+        expect(guard.handlePostCollapseInput()).toBe(false);
         expect(guard.get()).toBeNull();
     });
 
@@ -139,22 +136,22 @@ describe('handleBoutenPostCollapseInput', () => {
         const bouten = createBoutenEl('春');
         para.appendChild(bouten);
         guard.set(bouten, '春');
-        expect(guard.handleBoutenPostCollapseInput()).toBe(false);
+        expect(guard.handlePostCollapseInput()).toBe(false);
         // Guard remains set
         expect(guard.get()).not.toBeNull();
     });
 
-    it('moves extra chars after bouten and returns true (end-of-line)', () => {
+    it('moves extra chars after el and returns true (end-of-line)', () => {
         const bouten = createBoutenEl('春');
         const anchor = createCursorAnchor();
         para.appendChild(bouten);
         para.appendChild(anchor);
         guard.set(bouten, '春');
 
-        // Simulate IME appending text inside the bouten span
+        // Simulate IME appending text inside the element
         bouten.textContent = '春あ';
 
-        const result = guard.handleBoutenPostCollapseInput();
+        const result = guard.handlePostCollapseInput();
 
         expect(result).toBe(true);
         expect(bouten.textContent).toBe('春');
@@ -163,7 +160,7 @@ describe('handleBoutenPostCollapseInput', () => {
         expect(para.childNodes[2]).toBe(anchor);
     });
 
-    it('moves extra chars after bouten and returns true (mid-line)', () => {
+    it('moves extra chars after el and returns true (mid-line)', () => {
         const bouten = createBoutenEl('春');
         const text = document.createTextNode('続き');
         para.appendChild(bouten);
@@ -172,7 +169,7 @@ describe('handleBoutenPostCollapseInput', () => {
 
         bouten.textContent = '春い';
 
-        const result = guard.handleBoutenPostCollapseInput();
+        const result = guard.handlePostCollapseInput();
 
         expect(result).toBe(true);
         expect(bouten.textContent).toBe('春');
@@ -188,7 +185,7 @@ describe('handleBoutenPostCollapseInput', () => {
         // Unexpected: content replaced entirely
         bouten.textContent = '夏';
 
-        const result = guard.handleBoutenPostCollapseInput();
+        const result = guard.handlePostCollapseInput();
 
         expect(result).toBe(false);
         expect(guard.get()).toBeNull();
@@ -196,42 +193,36 @@ describe('handleBoutenPostCollapseInput', () => {
 });
 
 // ================================================================
-// getCursorBoutenSpan — guard flag tests (cursor-independent)
+// getCursorCollapseEl — guard flag tests (cursor-independent)
 // ================================================================
 
-describe('getCursorBoutenSpan guard flags', () => {
+describe('getCursorCollapseEl guard flags', () => {
     it('returns null when guard is not set', () => {
-        const el = document.createElement('div');
-        const guard = new BoutenGuard(el);
-        expect(guard.getCursorBoutenSpan(true, null)).toBeNull();
+        const guard = new CollapseGuard();
+        expect(guard.getCursorCollapseEl(true, null)).toBeNull();
     });
 
-    it('returns null when expandBouten is false', () => {
-        const el = document.createElement('div');
-        const guard = new BoutenGuard(el);
+    it('returns null when expandFlag is false', () => {
+        const guard = new CollapseGuard();
         const bouten = createBoutenEl('春');
-        el.appendChild(bouten);
         guard.set(bouten, '春');
-        expect(guard.getCursorBoutenSpan(false, null)).toBeNull();
+        expect(guard.getCursorCollapseEl(false, null)).toBeNull();
     });
 
     it('returns null when expandedEl is set (another element already expanded)', () => {
-        const el = document.createElement('div');
-        const guard = new BoutenGuard(el);
+        const guard = new CollapseGuard();
         const bouten = createBoutenEl('春');
-        el.appendChild(bouten);
         guard.set(bouten, '春');
         const fakeExpanded = document.createElement('span') as HTMLSpanElement;
-        expect(guard.getCursorBoutenSpan(true, fakeExpanded)).toBeNull();
+        expect(guard.getCursorCollapseEl(true, fakeExpanded)).toBeNull();
     });
 
-    it('returns null and clears guard when bouten is detached', () => {
-        const el = document.createElement('div');
-        const guard = new BoutenGuard(el);
+    it('returns null and clears guard when el is detached', () => {
+        const guard = new CollapseGuard();
         const bouten = createBoutenEl('春');
         // Do NOT attach to DOM
         guard.set(bouten, '春');
-        const result = guard.getCursorBoutenSpan(true, null);
+        const result = guard.getCursorCollapseEl(true, null);
         expect(result).toBeNull();
         expect(guard.get()).toBeNull();
     });

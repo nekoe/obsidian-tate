@@ -106,7 +106,7 @@ describe('handleRubyCompletion — explicit form', () => {
         const ruby = para.querySelector('ruby');
         expect(ruby).not.toBeNull();
         expect(ruby!.getAttribute('data-ruby-explicit')).toBe('true');
-        expect(ruby!.querySelector('rt')!.textContent).toBe('とうきょう');
+        expect(ruby!.getAttribute('data-rt')).toBe('とうきょう');
     });
 
     it('converts half-width pipe |base《rt》 to a ruby element', () => {
@@ -174,7 +174,7 @@ describe('handleRubyCompletion — implicit form', () => {
         expect(result).toEqual({ converted: true });
         const ruby = para.querySelector('ruby');
         expect(ruby!.getAttribute('data-ruby-explicit')).toBe('false');
-        expect(ruby!.querySelector('rt')!.textContent).toBe('とうきょう');
+        expect(ruby!.getAttribute('data-rt')).toBe('とうきょう');
     });
 
     it('does not convert non-kanji base text without explicit pipe', () => {

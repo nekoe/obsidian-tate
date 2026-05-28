@@ -257,3 +257,8 @@ cursor normalization.
 | `src/ui/InlineEditor.ts` | Reduced from ~1,100 to ~500 lines; now orchestrator only |
 | `src/ui/domHelpers.test.ts` | New: 47 unit tests |
 | `src/ui/BoutenGuard.test.ts` | New: 17 unit tests |
+
+> **Update (2026-05-28):** `BoutenGuard` was later merged into `CollapseGuard`
+> (see `docs/design/20260528_ruby_rt_removal.md`). `BoutenGuard.ts` and
+> `BoutenGuard.test.ts` no longer exist; `CollapseGuard.ts` covers all three
+> annotation types (bouten, ruby, heading).

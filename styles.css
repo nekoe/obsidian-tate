@@ -90,6 +90,46 @@
     text-combine-upright: all;
 }
 
+/* Ruby annotation rendered via ::after from the data-rt attribute.
+   display:inline keeps the element in the normal inline flow so surrounding text shares
+   the column-gap reserved by line-height:2. display:inline-block would create an isolated
+   line box that prevents the gap from being shared.
+   position:relative establishes the containing block for the ::after pseudo-element
+   (the UA stylesheet does not set position on <ruby>). */
+.tate-editor ruby[data-rt] {
+    position: relative;
+    display: inline;
+    line-height: inherit;
+}
+
+/* left:100% places the pseudo-element in the column immediately to the right of the base
+   character in vertical-rl flow — the conventional ruby side. top:50% + translateY(-50%)
+   centers it vertically alongside the base text. writing-mode is set explicitly because
+   absolutely-positioned boxes do not reliably inherit writing-mode across all Chromium
+   versions bundled with Obsidian. user-select/pointer-events:none prevent interference
+   with text selection and click-to-position in the contenteditable editor. */
+.tate-editor ruby[data-rt]::after {
+    content: attr(data-rt);
+    position: absolute;
+    top: 50%;
+    left: 100%;
+    transform: translateY(-50%);
+    writing-mode: vertical-rl;
+    text-orientation: mixed;
+    font-size: 0.5em;
+    line-height: 1.2;
+    white-space: nowrap;
+    user-select: none;
+    pointer-events: none;
+    z-index: 1;
+}
+
+/* Suppress the generated box when data-rt is empty to avoid a stray absolute-positioned
+   zero-size box that wastes a layout slot. */
+.tate-editor ruby[data-rt=""]::after {
+    display: none;
+}
+
 /* Bouten (sesame emphasis marks) */
 .tate-editor .bouten {
     text-emphasis: sesame;

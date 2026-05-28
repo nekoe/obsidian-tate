@@ -58,7 +58,7 @@ function splitByExplicitRuby(text: string): ParseSegment[] {
         }
         result.push({
             type: 'html',
-            html: `<ruby data-ruby-explicit="true">${esc(m[1])}<rt>${esc(m[2])}</rt></ruby>`,
+            html: `<ruby data-ruby-explicit="true" data-rt="${esc(m[2])}">${esc(m[1])}</ruby>`,
         });
         lastIndex = re.lastIndex;
     }
@@ -167,7 +167,7 @@ function splitByImplicitRuby(text: string): ParseSegment[] {
         }
         result.push({
             type: 'html',
-            html: `<ruby data-ruby-explicit="false">${esc(m[1])}<rt>${esc(m[2])}</rt></ruby>`,
+            html: `<ruby data-ruby-explicit="false" data-rt="${esc(m[2])}">${esc(m[1])}</ruby>`,
         });
         lastIndex = re.lastIndex;
     }
@@ -178,7 +178,7 @@ function splitByImplicitRuby(text: string): ParseSegment[] {
 }
 
 function esc(text: string): string {
-    return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
 // ---- DOM serializer (innerHTML → Aozora notation) ----
@@ -197,10 +197,9 @@ export function serializeNode(node: Node, rootEl: HTMLElement): string {
         case 'RUBY': {
             const explicit = node.getAttribute('data-ruby-explicit') !== 'false';
             const base = Array.from(node.childNodes)
-                .filter(n => !(n.instanceOf(HTMLElement) && n.tagName === 'RT'))
                 .map(n => serializeNode(n, rootEl))
                 .join('');
-            const rt = node.querySelector('rt')?.textContent ?? '';
+            const rt = node.getAttribute('data-rt') ?? '';
             return explicit ? `｜${base}《${rt}》` : `${base}《${rt}》`;
         }
         case 'SPAN': {

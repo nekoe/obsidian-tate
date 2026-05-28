@@ -228,10 +228,8 @@ var KANJI_RE_STR = "[\u4E00-\u9FFF\u3400-\u4DBF\u{20000}-\u{2A6DF}\u3005\u3006\u
 function createRubyEl(base, rt, explicit) {
   const rubyEl = activeDocument.createElement("ruby");
   rubyEl.setAttribute("data-ruby-explicit", String(explicit));
+  rubyEl.setAttribute("data-rt", rt);
   rubyEl.appendChild(activeDocument.createTextNode(base));
-  const rtEl = activeDocument.createElement("rt");
-  rtEl.textContent = rt;
-  rubyEl.appendChild(rtEl);
   return rubyEl;
 }
 function createTcyEl(content) {
@@ -289,9 +287,6 @@ function findAncestor(node, pred, rootEl) {
   }
   return null;
 }
-function findBoutenAncestor(node, rootEl) {
-  return findAncestor(node, (el) => !!el.getAttribute("data-bouten"), rootEl);
-}
 function findTcyAncestor(node, rootEl) {
   return findAncestor(node, (el) => el.classList.contains("tcy"), rootEl);
 }
@@ -301,16 +296,12 @@ function isInsideRuby(node, rootEl) {
 function findCursorAnchorAncestor(node, rootEl) {
   return findAncestor(node, (el) => el.classList.contains("tate-cursor-anchor"), rootEl);
 }
-function isInsideRtNode(node, rootEl) {
-  var _a;
-  return findAncestor((_a = node.parentElement) != null ? _a : node, (el) => el.tagName === "RT", rootEl) !== null;
-}
-function findLastBaseTextInElement(el, rootEl) {
+function findLastBaseTextInElement(el, _rootEl) {
   const walker = activeDocument.createTreeWalker(el, NodeFilter.SHOW_TEXT);
   let lastText = null;
   let node = walker.nextNode();
   while (node) {
-    if (!isInsideRtNode(node, rootEl)) lastText = node;
+    lastText = node;
     node = walker.nextNode();
   }
   if (!lastText) return null;
@@ -327,20 +318,11 @@ function ensureBrPlaceholder(el) {
   clearChildren(el);
   el.appendChild(activeDocument.createElement("br"));
 }
-function rawOffsetForExpand(el, node, offset) {
+function rawOffsetForExpand(el, _node, offset) {
   if (el.tagName === "RUBY") {
     const explicit = el.getAttribute("data-ruby-explicit") !== "false";
     const prefix = explicit ? 1 : 0;
-    const baseLen = Array.from(el.childNodes).filter((n) => !(n.instanceOf(HTMLElement) && n.tagName === "RT")).reduce((sum, n) => {
-      var _a, _b;
-      return sum + ((_b = (_a = n.textContent) == null ? void 0 : _a.length) != null ? _b : 0);
-    }, 0);
-    const rt = el.querySelector("rt");
-    if (rt && rt.contains(node)) {
-      return prefix + baseLen + 1 + offset;
-    } else {
-      return prefix + offset;
-    }
+    return prefix + offset;
   } else {
     return offset;
   }
@@ -351,9 +333,7 @@ function computeDivViewLen(div, rootEl) {
   const walker = activeDocument.createTreeWalker(div, NodeFilter.SHOW_TEXT);
   let node = walker.nextNode();
   while (node) {
-    if (!isInsideRtNode(node, rootEl)) {
-      count += findCursorAnchorAncestor(node, rootEl) ? ((_a = node.textContent) != null ? _a : "").replace(/\u200B/g, "").length : node.length;
-    }
+    count += findCursorAnchorAncestor(node, rootEl) ? ((_a = node.textContent) != null ? _a : "").replace(/\u200B/g, "").length : node.length;
     node = walker.nextNode();
   }
   return count;
@@ -365,14 +345,12 @@ function computeViewOffsetInDiv(div, editorEl, targetNode, targetOffset) {
   const walker = activeDocument.createTreeWalker(div, NodeFilter.SHOW_TEXT);
   let node = walker.nextNode();
   while (node) {
-    if (!isInsideRtNode(node, editorEl)) {
-      const isAnchor = !!findCursorAnchorAncestor(node, editorEl);
-      if (node === targetNode) {
-        count += isAnchor ? ((_a = node.textContent) != null ? _a : "").slice(0, targetOffset).replace(/\u200B/g, "").length : targetOffset;
-        return count;
-      }
-      count += isAnchor ? ((_b = node.textContent) != null ? _b : "").replace(/\u200B/g, "").length : node.length;
+    const isAnchor = !!findCursorAnchorAncestor(node, editorEl);
+    if (node === targetNode) {
+      count += isAnchor ? ((_a = node.textContent) != null ? _a : "").slice(0, targetOffset).replace(/\u200B/g, "").length : targetOffset;
+      return count;
     }
+    count += isAnchor ? ((_b = node.textContent) != null ? _b : "").replace(/\u200B/g, "").length : node.length;
     node = walker.nextNode();
   }
   return count;
@@ -383,28 +361,26 @@ function computeDomPositionFromViewOff(div, editorEl, viewOff) {
   const walker = activeDocument.createTreeWalker(div, NodeFilter.SHOW_TEXT);
   let node = walker.nextNode();
   while (node) {
-    if (!isInsideRtNode(node, editorEl)) {
-      const isAnchor = !!findCursorAnchorAncestor(node, editorEl);
-      const text = (_a = node.textContent) != null ? _a : "";
-      if (isAnchor) {
-        const visLen = text.replace(/\u200B/g, "").length;
-        if (remaining <= visLen) {
-          let visible = 0;
-          let actualOffset = text.length;
-          for (let ci = 0; ci < text.length; ci++) {
-            if (visible === remaining) {
-              actualOffset = ci;
-              break;
-            }
-            if (text[ci] !== "\u200B") visible++;
+    const isAnchor = !!findCursorAnchorAncestor(node, editorEl);
+    const text = (_a = node.textContent) != null ? _a : "";
+    if (isAnchor) {
+      const visLen = text.replace(/\u200B/g, "").length;
+      if (remaining <= visLen) {
+        let visible = 0;
+        let actualOffset = text.length;
+        for (let ci = 0; ci < text.length; ci++) {
+          if (visible === remaining) {
+            actualOffset = ci;
+            break;
           }
-          return { node, offset: actualOffset };
+          if (text[ci] !== "\u200B") visible++;
         }
-        remaining -= visLen;
-      } else {
-        if (remaining <= node.length) return { node, offset: remaining };
-        remaining -= node.length;
+        return { node, offset: actualOffset };
       }
+      remaining -= visLen;
+    } else {
+      if (remaining <= node.length) return { node, offset: remaining };
+      remaining -= node.length;
     }
     node = walker.nextNode();
   }
@@ -703,7 +679,7 @@ function splitByExplicitRuby(text) {
     }
     result.push({
       type: "html",
-      html: `<ruby data-ruby-explicit="true">${esc(m[1])}<rt>${esc(m[2])}</rt></ruby>`
+      html: `<ruby data-ruby-explicit="true" data-rt="${esc(m[2])}">${esc(m[1])}</ruby>`
     });
     lastIndex = re.lastIndex;
   }
@@ -790,7 +766,7 @@ function splitByImplicitRuby(text) {
     }
     result.push({
       type: "html",
-      html: `<ruby data-ruby-explicit="false">${esc(m[1])}<rt>${esc(m[2])}</rt></ruby>`
+      html: `<ruby data-ruby-explicit="false" data-rt="${esc(m[2])}">${esc(m[1])}</ruby>`
     });
     lastIndex = re.lastIndex;
   }
@@ -800,10 +776,10 @@ function splitByImplicitRuby(text) {
   return result;
 }
 function esc(text) {
-  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 function serializeNode(node, rootEl) {
-  var _a, _b, _c, _d, _e, _f, _g;
+  var _a, _b, _c, _d, _e, _f;
   if (node.nodeType === Node.TEXT_NODE) {
     return (_a = node.textContent) != null ? _a : "";
   }
@@ -811,18 +787,18 @@ function serializeNode(node, rootEl) {
   switch (node.tagName) {
     case "RUBY": {
       const explicit = node.getAttribute("data-ruby-explicit") !== "false";
-      const base = Array.from(node.childNodes).filter((n) => !(n.instanceOf(HTMLElement) && n.tagName === "RT")).map((n) => serializeNode(n, rootEl)).join("");
-      const rt = (_c = (_b = node.querySelector("rt")) == null ? void 0 : _b.textContent) != null ? _c : "";
+      const base = Array.from(node.childNodes).map((n) => serializeNode(n, rootEl)).join("");
+      const rt = (_b = node.getAttribute("data-rt")) != null ? _b : "";
       return explicit ? `\uFF5C${base}\u300A${rt}\u300B` : `${base}\u300A${rt}\u300B`;
     }
     case "SPAN": {
       const tcy = node.getAttribute("data-tcy");
       if (tcy === "explicit") {
-        const content = (_d = node.textContent) != null ? _d : "";
+        const content = (_c = node.textContent) != null ? _c : "";
         return `${content}\uFF3B\uFF03\u300C${content}\u300D\u306F\u7E26\u4E2D\u6A2A\uFF3D`;
       }
       if (node.getAttribute("data-bouten")) {
-        const content = (_e = node.textContent) != null ? _e : "";
+        const content = (_d = node.textContent) != null ? _d : "";
         return `${content}\uFF3B\uFF03\u300C${content}\u300D\u306B\u508D\u70B9\uFF3D`;
       }
       const heading = node.getAttribute("data-heading");
@@ -832,12 +808,12 @@ function serializeNode(node, rootEl) {
         return `${content}\uFF3B\uFF03\u300C${content}\u300D\u306F${suffix}\uFF3D`;
       }
       if (node.classList.contains("tate-cursor-anchor")) {
-        return ((_f = node.textContent) != null ? _f : "").replace(/\u200B/g, "");
+        return ((_e = node.textContent) != null ? _e : "").replace(/\u200B/g, "");
       }
       return Array.from(node.childNodes).map((n) => serializeNode(n, rootEl)).join("");
     }
     case "BR":
-      if (node.parentElement !== rootEl && ((_g = node.parentElement) == null ? void 0 : _g.tagName) === "DIV" && node === node.parentElement.lastChild) {
+      if (node.parentElement !== rootEl && ((_f = node.parentElement) == null ? void 0 : _f.tagName) === "DIV" && node === node.parentElement.lastChild) {
         return "";
       }
       return "\n";
@@ -850,63 +826,62 @@ function serializeNode(node, rootEl) {
   }
 }
 
-// src/ui/BoutenGuard.ts
-var BoutenGuard = class {
-  constructor(el) {
-    this.el = el;
-    this.boutenJustCollapsed = null;
+// src/ui/CollapseGuard.ts
+var CollapseGuard = class {
+  constructor() {
+    this.justCollapsed = null;
   }
   clear() {
-    this.boutenJustCollapsed = null;
+    this.justCollapsed = null;
   }
-  set(bouten, originalText) {
-    this.boutenJustCollapsed = { el: bouten, originalText };
+  set(el, originalText) {
+    this.justCollapsed = { el, originalText };
   }
   get() {
-    return this.boutenJustCollapsed;
+    return this.justCollapsed;
   }
-  // Returns the bouten span that should intercept the next insertText event due to Chrome's
-  // post-collapse cursor behavior, or null if not applicable.
+  // Returns the guarded element if the cursor is in the post-collapse zone, or null.
+  // expandFlag: whether this element type should expand on cursor entry.
   // Covers three cursor positions that occur after collapse:
-  //   1. cursor normalized into bouten itself (Chrome moves it back synchronously)
+  //   1. cursor normalized into the element itself (Chrome moves it back synchronously)
   //   2. cursor redirected into the adjacent anchor span (end-of-line)
   //   3. cursor redirected to the start of the next text node (mid-line)
-  // Non-collapsed selections (e.g. Ctrl+A) are excluded to avoid false positives.
-  getCursorBoutenSpan(expandBouten, expandedEl) {
-    if (!this.boutenJustCollapsed || !expandBouten || expandedEl) return null;
-    const bouten = this.boutenJustCollapsed.el;
-    if (!bouten.isConnected) {
-      this.boutenJustCollapsed = null;
+  // Non-collapsed selections are excluded to avoid false positives.
+  getCursorCollapseEl(expandFlag, expandedEl) {
+    if (!this.justCollapsed || !expandFlag || expandedEl) return null;
+    const el = this.justCollapsed.el;
+    if (!el.isConnected) {
+      this.justCollapsed = null;
       return null;
     }
     const sel = window.getSelection();
     if (!sel || sel.rangeCount === 0 || !sel.getRangeAt(0).collapsed) return null;
     const range = sel.getRangeAt(0);
     const container = range.startContainer;
-    if (findBoutenAncestor(container, this.el) === bouten) return bouten;
-    const nextSib = bouten.nextSibling;
+    if (el.contains(container)) return el;
+    const nextSib = el.nextSibling;
     if (nextSib) {
       if (nextSib === container || (nextSib == null ? void 0 : nextSib.instanceOf(HTMLElement)) && nextSib.contains(container)) {
-        return bouten;
+        return el;
       }
       if (container.nodeType === Node.ELEMENT_NODE && container.childNodes[range.startOffset] === nextSib) {
-        return bouten;
+        return el;
       }
     }
     return null;
   }
-  // Inserts chars into the DOM immediately after bouten without going through the Selection API.
-  // End-of-line (anchor span follows): creates a new text node between bouten and anchor.
+  // Inserts chars into the DOM immediately after el without going through the Selection API.
+  // End-of-line (anchor span follows): creates a new text node between el and anchor.
   // Mid-line (text node follows): prepends to that text node.
   // Moves the cursor to just after the inserted text.
-  insertAfterBouten(bouten, chars) {
+  insertAfter(el, chars) {
     var _a;
-    const next = bouten.nextSibling;
+    const next = el.nextSibling;
     let targetNode;
     let targetOffset;
     if ((next == null ? void 0 : next.instanceOf(HTMLElement)) && next.classList.contains("tate-cursor-anchor") && ((_a = next.firstChild) == null ? void 0 : _a.nodeType) === Node.TEXT_NODE) {
       const textNode = activeDocument.createTextNode(chars);
-      bouten.parentNode.insertBefore(textNode, next);
+      el.parentNode.insertBefore(textNode, next);
       targetNode = textNode;
       targetOffset = chars.length;
     } else if ((next == null ? void 0 : next.nodeType) === Node.TEXT_NODE) {
@@ -916,7 +891,7 @@ var BoutenGuard = class {
       targetOffset = chars.length;
     } else {
       const textNode = activeDocument.createTextNode(chars);
-      bouten.parentNode.insertBefore(textNode, next != null ? next : null);
+      el.parentNode.insertBefore(textNode, next != null ? next : null);
       targetNode = textNode;
       targetOffset = chars.length;
     }
@@ -928,37 +903,36 @@ var BoutenGuard = class {
       sel.removeAllRanges();
       sel.addRange(r);
     }
-    this.boutenJustCollapsed = null;
+    this.justCollapsed = null;
   }
   // Called in compositionend (before commitToCm6) to move IME text that landed inside a
-  // post-collapse bouten span out to after the span. Returns true if the DOM was changed.
-  handleBoutenPostCollapseInput() {
+  // post-collapse element out to after the element. Returns true if the DOM was changed.
+  handlePostCollapseInput() {
     var _a;
-    if (!this.boutenJustCollapsed) return false;
-    const { el: bouten, originalText } = this.boutenJustCollapsed;
-    if (!bouten.isConnected) {
-      this.boutenJustCollapsed = null;
+    if (!this.justCollapsed) return false;
+    const { el, originalText } = this.justCollapsed;
+    if (!el.isConnected) {
+      this.justCollapsed = null;
       return false;
     }
-    const currentText = (_a = bouten.textContent) != null ? _a : "";
+    const currentText = (_a = el.textContent) != null ? _a : "";
     if (currentText === originalText) return false;
     if (!currentText.startsWith(originalText)) {
-      this.boutenJustCollapsed = null;
+      this.justCollapsed = null;
       return false;
     }
     const extraChars = currentText.slice(originalText.length);
-    bouten.textContent = originalText;
-    this.insertAfterBouten(bouten, extraChars);
+    el.textContent = originalText;
+    this.insertAfter(el, extraChars);
     return true;
   }
-  // Redirects cursor to a stable position after the bouten span to prevent re-expansion.
-  // Called when Chrome normalizes the cursor from the adjacent anchor back into bouten.
+  // Redirects cursor to a stable position just after el to prevent re-expansion.
   // End-of-line: redirects to end of anchor text (after U+200B), which the anchor span handler
   // intercepts on the next selectionchange so expansion does not fire.
   // Mid-line: redirects to the start of the following text node, a true text-level stable position.
-  redirectCursorOutOfCollapsedBouten(bouten, sel) {
+  redirectCursorOutOfCollapsed(el, sel) {
     var _a;
-    const next = bouten.nextSibling;
+    const next = el.nextSibling;
     const r = activeDocument.createRange();
     if ((next == null ? void 0 : next.instanceOf(HTMLElement)) && next.classList.contains("tate-cursor-anchor") && ((_a = next.firstChild) == null ? void 0 : _a.nodeType) === Node.TEXT_NODE) {
       const anchorText = next.firstChild;
@@ -968,7 +942,7 @@ var BoutenGuard = class {
     } else if (next) {
       r.setStartBefore(next);
     } else {
-      r.setStartAfter(bouten);
+      r.setStartAfter(el);
     }
     r.collapse(true);
     sel.removeAllRanges();
@@ -1109,21 +1083,16 @@ var CursorAnchorManager = class {
       }
     }
   }
-  // Returns the first non-<rt> text position after the anchor.
+  // Returns the first text position after the anchor.
   // Checks siblings within the same paragraph first; falls back to the next paragraph.
   findPositionAfterAnchor(anchor) {
     let sibling = anchor.nextSibling;
     while (sibling) {
       if (sibling.nodeType === Node.TEXT_NODE) {
-        const t = sibling;
-        if (!isInsideRtNode(t, this.el)) return { node: t, offset: 0 };
+        return { node: sibling, offset: 0 };
       } else if (sibling.nodeType === Node.ELEMENT_NODE) {
-        const walker = activeDocument.createTreeWalker(sibling, NodeFilter.SHOW_TEXT);
-        let node = walker.nextNode();
-        while (node) {
-          if (!isInsideRtNode(node, this.el)) return { node, offset: 0 };
-          node = walker.nextNode();
-        }
+        const node = activeDocument.createTreeWalker(sibling, NodeFilter.SHOW_TEXT).nextNode();
+        if (node) return { node, offset: 0 };
       }
       sibling = sibling.nextSibling;
     }
@@ -1135,17 +1104,13 @@ var CursorAnchorManager = class {
         next = next.nextSibling;
         continue;
       }
-      const walker = activeDocument.createTreeWalker(next, NodeFilter.SHOW_TEXT);
-      let node = walker.nextNode();
-      while (node) {
-        if (!isInsideRtNode(node, this.el)) return { node, offset: 0 };
-        node = walker.nextNode();
-      }
+      const node = activeDocument.createTreeWalker(next, NodeFilter.SHOW_TEXT).nextNode();
+      if (node) return { node, offset: 0 };
       next = next.nextSibling;
     }
     return null;
   }
-  // Returns the last non-<rt> text position before the anchor on the same line.
+  // Returns the last text position before the anchor on the same line.
   // Descends into element siblings (e.g. <ruby>) to find their last base text node,
   // which causes selectionchange to trigger expandForEditing on the ruby.
   // Falls back to the last text of the previous paragraph if nothing is found on the same line.
@@ -1173,7 +1138,7 @@ var CursorAnchorManager = class {
       let lastText = null;
       let node = walker.nextNode();
       while (node) {
-        if (!isInsideRtNode(node, this.el)) lastText = node;
+        lastText = node;
         node = walker.nextNode();
       }
       if (lastText) return { node: lastText, offset: lastText.length };
@@ -1378,7 +1343,7 @@ var InlineEditor = class {
     this.expandTcy = true;
     this.expandBouten = true;
     this.expandHeading = true;
-    this.boutenGuard = new BoutenGuard(el);
+    this.collapseGuard = new CollapseGuard();
     this.anchorManager = new CursorAnchorManager(el);
     this.liveConverter = new LiveConverter(el);
     this.expander = new InlineExpander(el);
@@ -1398,7 +1363,7 @@ var InlineEditor = class {
     this.expandedElOriginalText = null;
     this.savedRange = null;
     this.inBurst = false;
-    this.boutenGuard.clear();
+    this.collapseGuard.clear();
   }
   isExpanded() {
     return this.expandedEl !== null;
@@ -1480,12 +1445,12 @@ var InlineEditor = class {
       }
       const target = this.findExpandableAncestor(currentRange.startContainer);
       if (target) {
-        const bjc = this.boutenGuard.get();
+        const bjc = this.collapseGuard.get();
         if (bjc && target === bjc.el) {
-          this.boutenGuard.redirectCursorOutOfCollapsedBouten(target, sel);
+          this.collapseGuard.redirectCursorOutOfCollapsed(target, sel);
           return contentChanged;
         }
-        this.boutenGuard.clear();
+        this.collapseGuard.clear();
         if (target.tagName === "RUBY" || target.getAttribute("data-tcy") === "explicit" || target.getAttribute("data-bouten") || target.getAttribute("data-heading"))
           this.anchorManager.ensureCursorAnchorAfter(target);
         this.expandForEditing(target, currentRange);
@@ -1660,28 +1625,31 @@ var InlineEditor = class {
   onBeforeInput() {
     this.inBurst = true;
   }
-  // Returns the bouten span that should intercept the next insertText event due to Chrome's
-  // post-collapse cursor behavior, or null if not applicable.
-  getCursorBoutenSpan() {
-    return this.boutenGuard.getCursorBoutenSpan(this.expandBouten, this.expandedEl);
+  // Returns the annotation element that should intercept the next insertText event, or null.
+  // Determines the expand flag based on the recorded element type.
+  getCursorCollapseEl() {
+    const state = this.collapseGuard.get();
+    if (!state) return null;
+    const expandFlag = state.el.getAttribute("data-bouten") !== null ? this.expandBouten : state.el.tagName === "RUBY" ? this.expandRuby : state.el.getAttribute("data-heading") !== null ? this.expandHeading : true;
+    return this.collapseGuard.getCursorCollapseEl(expandFlag, this.expandedEl);
   }
-  // Inserts chars into the DOM immediately after bouten without going through the Selection API.
-  insertAfterBouten(bouten, chars) {
-    this.boutenGuard.insertAfterBouten(bouten, chars);
+  // Inserts chars immediately after el without going through the Selection API.
+  insertAfterCollapsed(el, chars) {
+    this.collapseGuard.insertAfter(el, chars);
   }
   // Called in compositionend (before commitToCm6) to move IME text that landed inside a
-  // post-collapse bouten span out to after the span. Returns true if the DOM was changed.
-  handleBoutenPostCollapseInput() {
-    return this.boutenGuard.handleBoutenPostCollapseInput();
+  // post-collapse annotation element out to after the element. Returns true if changed.
+  handlePostCollapseInput() {
+    return this.collapseGuard.handlePostCollapseInput();
   }
-  // Resets the burst flag after a commit. Does NOT clear boutenGuard.
+  // Resets the burst flag after a commit. Does NOT clear collapseGuard.
   afterCommit() {
     this.inBurst = false;
   }
-  // Resets the burst flag and clears boutenGuard on mouse click or navigation key.
+  // Resets the burst flag and clears collapseGuard on mouse click or navigation key.
   afterNavigation() {
     this.inBurst = false;
-    this.boutenGuard.clear();
+    this.collapseGuard.clear();
   }
   // ---- Shared logic for selection wrap ----
   // Shared implementation for element-replacement wraps (tcy, bouten, etc.)
@@ -1720,14 +1688,15 @@ var InlineEditor = class {
     this.inBurst = false;
   }
   // Places the cursor just after a collapsed annotation element.
-  // Inserts a cursor-anchor span at end-of-line if needed, and records boutenJustCollapsed.
+  // Inserts a cursor-anchor span at end-of-line if needed, and records the collapsed element
+  // in collapseGuard so handleSelectionChange can detect Chrome's cursor normalization.
   placeCursorAfterCollapse(nextSib, parentEl, sel) {
     var _a;
     this.anchorManager.placeCursorAfterCollapse(nextSib, parentEl, sel);
     if (nextSib == null ? void 0 : nextSib.isConnected) {
-      const prevOfNextSib = nextSib.previousSibling;
-      if ((prevOfNextSib == null ? void 0 : prevOfNextSib.instanceOf(HTMLElement)) && prevOfNextSib.getAttribute("data-bouten")) {
-        this.boutenGuard.set(prevOfNextSib, (_a = prevOfNextSib.textContent) != null ? _a : "");
+      const prev = nextSib.previousSibling;
+      if ((prev == null ? void 0 : prev.instanceOf(HTMLElement)) && (prev.getAttribute("data-bouten") !== null || prev.tagName === "RUBY" || prev.getAttribute("data-heading") !== null)) {
+        this.collapseGuard.set(prev, (_a = prev.textContent) != null ? _a : "");
       }
     }
   }
@@ -1803,7 +1772,7 @@ var InlineEditor = class {
   // can skip the U+200B placeholder in the correct direction.
   // Call from the keydown handler before the browser moves the cursor.
   notifyNavigationKey(key) {
-    this.boutenGuard.clear();
+    this.collapseGuard.clear();
     this.anchorManager.setSkipDirection(key);
   }
   // Called after input/compositionend when cursor may be inside a tate-cursor-anchor span.
@@ -3771,18 +3740,18 @@ var EditorElement = class {
     this.el.focus();
   }
   // Called on beforeinput event (registered from view.ts).
-  // For non-IME insertText when cursor is inside a post-collapse bouten span
+  // For non-IME insertText when cursor is inside a post-collapse annotation element
   // (Chrome normalized it back in), intercepts the event and inserts the character
-  // after the span instead. Chrome's Selection API normalization is synchronous and
+  // after the element instead. Chrome's Selection API normalization is synchronous and
   // cannot be countered with sel.addRange, so Range-level insertion is used instead.
   onBeforeInput(e) {
     this.inlineEditor.onBeforeInput();
     if (!e.isComposing && e.inputType === "insertText" && e.data) {
-      const boutenSpan = this.inlineEditor.getCursorBoutenSpan();
-      if (boutenSpan) {
+      const collapseEl = this.inlineEditor.getCursorCollapseEl();
+      if (collapseEl) {
         e.preventDefault();
         const char = this.inputTransformer.applySpaceConversion(e.data);
-        this.inlineEditor.insertAfterBouten(boutenSpan, char);
+        this.inlineEditor.insertAfterCollapsed(collapseEl, char);
         return;
       }
     }
@@ -3820,19 +3789,19 @@ var EditorElement = class {
     this.inputTransformer.handleCompositionStart();
   }
   // Called in compositionend (before commitToCm6) to move IME text that landed inside a
-  // post-collapse bouten span out to after the span. Returns true if the DOM was changed.
-  handleBoutenPostCollapseInput() {
-    return this.inlineEditor.handleBoutenPostCollapseInput();
+  // post-collapse annotation element out to after the element. Returns true if changed.
+  handlePostCollapseInput() {
+    return this.inlineEditor.handlePostCollapseInput();
   }
   // Called on compositionend (registered from view.ts), before commitToCm6.
   onCompositionEnd(e) {
     this.inputTransformer.handleCompositionEnd(e);
   }
-  // Resets the burst flag after a commit. Does NOT clear boutenGuard.
+  // Resets the burst flag after a commit. Does NOT clear collapseGuard.
   afterCommit() {
     this.inlineEditor.afterCommit();
   }
-  // Resets the burst flag and clears boutenGuard on mouse click or navigation key.
+  // Resets the burst flag and clears collapseGuard on mouse click or navigation key.
   afterNavigation() {
     this.inlineEditor.afterNavigation();
   }
@@ -4237,19 +4206,17 @@ function visibleToRawOffset(node, visibleOffset) {
   }
   return text.length;
 }
-function extractSegmentsFromDiv(div, editorEl) {
+function extractSegmentsFromDiv(div) {
   var _a;
   const segments = [];
   let localOffset = 0;
   const walker = activeDocument.createTreeWalker(div, NodeFilter.SHOW_TEXT);
   let node = walker.nextNode();
   while (node) {
-    if (!isInsideRtNode(node, editorEl)) {
-      const visible = ((_a = node.textContent) != null ? _a : "").replace(/\u200B/g, "");
-      if (visible.length > 0) {
-        segments.push({ node, start: localOffset, length: visible.length });
-        localOffset += visible.length;
-      }
+    const visible = ((_a = node.textContent) != null ? _a : "").replace(/\u200B/g, "");
+    if (visible.length > 0) {
+      segments.push({ node, start: localOffset, length: visible.length });
+      localOffset += visible.length;
     }
     node = walker.nextNode();
   }
@@ -4266,7 +4233,7 @@ function extractHybridText(editorEl, virtualizer) {
       paragraphs.push({ paragraphIndex: i, div: null, globalStart: globalOffset, text, segments: [] });
       globalOffset += text.length;
     } else {
-      const segments = extractSegmentsFromDiv(div, editorEl);
+      const segments = extractSegmentsFromDiv(div);
       const text = segments.map((s) => {
         var _a;
         return ((_a = s.node.textContent) != null ? _a : "").replace(/\u200B/g, "");
@@ -4719,7 +4686,7 @@ var SearchPanel = class {
       }
       const div = this.virtualizer.getWindowDiv(entry.paragraphIndex);
       if (!div) return;
-      const segments = extractSegmentsFromDiv(div, this.editorElementRef.el);
+      const segments = extractSegmentsFromDiv(div);
       const r = createRangeInParagraph(segments, entry.localStart, entry.localEnd);
       if (!r) return;
       range = r;
@@ -4765,7 +4732,7 @@ var SearchPanel = class {
       if (!entry.range && this.virtualizer.isInWindow(entry.paragraphIndex)) {
         const div = this.virtualizer.getWindowDiv(entry.paragraphIndex);
         if (!div) continue;
-        const segments = extractSegmentsFromDiv(div, this.editorElementRef.el);
+        const segments = extractSegmentsFromDiv(div);
         const r = createRangeInParagraph(segments, entry.localStart, entry.localEnd);
         if (r) {
           entry.div = div;
@@ -5055,7 +5022,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
       editorEl.handleHeadingCompletion();
       editorEl.onCompositionEnd(e);
       editorEl.handleCursorAnchorInput();
-      editorEl.handleBoutenPostCollapseInput();
+      editorEl.handlePostCollapseInput();
       this.commitToCm6();
       (_a = this.searchPanel) == null ? void 0 : _a.onContentChanged();
     });

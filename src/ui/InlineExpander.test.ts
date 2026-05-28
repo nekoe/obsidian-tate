@@ -72,14 +72,6 @@ describe('findExpandableAncestor — ruby', () => {
         expect(expander.findExpandableAncestor(baseText, true, false, false)).toBe(ruby);
     });
 
-    it('returns ruby when cursor is inside <rt> and ruby=true', () => {
-        const ruby = createRubyEl('東京', 'とうきょう', false);
-        root.appendChild(ruby);
-        const rt = ruby.querySelector('rt')!;
-        const rtText = rt.firstChild as Text;
-        expect(expander.findExpandableAncestor(rtText, true, false, false)).toBe(ruby);
-    });
-
     it('returns null for ruby element when ruby=false', () => {
         const ruby = createRubyEl('東京', 'とうきょう', true);
         root.appendChild(ruby);
@@ -271,7 +263,7 @@ describe('collapseEditing — DOM transformation', () => {
         expander.collapseEditing(span, '東京《とうきょう》');
         const ruby = para.querySelector('ruby') as HTMLElement;
         expect(ruby).not.toBeNull();
-        expect(ruby.querySelector('rt')?.textContent).toBe('とうきょう');
+        expect(ruby.getAttribute('data-rt')).toBe('とうきょう');
     });
 
     it('preserves preceding and following text nodes', () => {
