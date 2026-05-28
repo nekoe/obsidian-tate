@@ -1051,6 +1051,7 @@ export class VerticalWritingView extends ItemView {
         this.syncCoordinator?.notifySelfWrite(newContent);
         this.plugin.updateCharCount(countChars(newContent));
         this.searchPanel?.onContentChanged();
+        this.plugin.refreshOutline();
     }
 
     /** Derives the appropriate cursor position from the content diff before and after undo/redo.

@@ -5600,6 +5600,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
     (_a = this.syncCoordinator) == null ? void 0 : _a.notifySelfWrite(newContent);
     this.plugin.updateCharCount(countChars(newContent));
     (_b = this.searchPanel) == null ? void 0 : _b.onContentChanged();
+    this.plugin.refreshOutline();
   }
   /** Derives the appropriate cursor position from the content diff before and after undo/redo.
    *  Returns the end of the changed region in next (offset in next).
