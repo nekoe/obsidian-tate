@@ -333,6 +333,7 @@ export class VerticalWritingView extends ItemView {
             editorEl.onCompositionEnd(e); // bracket de-indent for IME input
             editorEl.handleCursorAnchorInput(); // Manage U+200B placeholder after IME input
             editorEl.handleBoutenPostCollapseInput(); // Move IME text out of post-collapse bouten span
+            editorEl.handlePostCollapseInput(); // Move IME text out of post-collapse ruby/heading
             this.commitToCm6(); // IME confirmation is a commit point
             this.searchPanel?.onContentChanged();
         });

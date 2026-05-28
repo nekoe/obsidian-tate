@@ -637,6 +637,13 @@ export class EditorElement {
                 this.inlineEditor.insertAfterBouten(boutenSpan, char);
                 return;
             }
+            const collapseEl = this.inlineEditor.getPostCollapseEl();
+            if (collapseEl) {
+                e.preventDefault();
+                const char = this.inputTransformer.applySpaceConversion(e.data);
+                this.inlineEditor.insertAfterCollapsed(collapseEl, char);
+                return;
+            }
         }
         this.inputTransformer.handleBeforeInput(e);
     }
@@ -687,6 +694,12 @@ export class EditorElement {
     // post-collapse bouten span out to after the span. Returns true if the DOM was changed.
     handleBoutenPostCollapseInput(): boolean {
         return this.inlineEditor.handleBoutenPostCollapseInput();
+    }
+
+    // Called in compositionend (before commitToCm6) to move IME text that landed inside a
+    // post-collapse ruby or heading element out to after the element. Returns true if changed.
+    handlePostCollapseInput(): boolean {
+        return this.inlineEditor.handlePostCollapseInput();
     }
 
     // Called on compositionend (registered from view.ts), before commitToCm6.
