@@ -3611,7 +3611,7 @@ var EditorElement = class {
       }
     }
     if (anchorTeleported) {
-      this.scrollCursorIntoView("center");
+      this._cursorJumped = true;
     }
     this.inlineEditor.onBeforeInput();
   }

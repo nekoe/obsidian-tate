@@ -459,9 +459,10 @@ export class EditorElement {
 
         // When the cursor was in an anchor island the DOM window was teleported to paragraph A
         // before paste. The viewport is still at the original (now off-window) scroll position
-        // and would show blank spacers. Scroll to center A so the user can see the pasted content.
+        // and would show blank spacers. Signal view.ts to center the cursor via the same
+        // cursorJumped path used for off-window cursor jumps, so scroll is handled once.
         if (anchorTeleported) {
-            this.scrollCursorIntoView('center');
+            this._cursorJumped = true;
         }
 
         // beforeinput does not fire for paste, so set inBurst manually
