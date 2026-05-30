@@ -323,28 +323,44 @@ export class InlineEditor {
         return this.wrapSelectionWith(content => createHeadingEl(content, level));
     }
 
-    // Handles ArrowUp (→ move left) and ArrowDown (→ move right) when cursor is inside a tcy span.
-    // In vertical writing mode the tcy element is laid out horizontally, so the vertical arrow keys
-    // should navigate within the tcy text rather than jumping to the adjacent line.
-    // With shiftKey=true, jumps the selection focus past the span instead of moving within it,
-    // because the browser gets stuck inside the horizontal layout when extending a selection.
+    // Handles arrow keys when cursor is inside a tcy span.
+    // ArrowUp/Down: move left/right within the horizontal TCY text.
+    // ArrowLeft/Right (no Shift): escape the TCY span entirely to prevent the infinite loop
+    //   that occurs when the browser bounces the cursor back to the adjacent paragraph.
+    //   ArrowLeft (toward later paragraphs in vertical-rl) → cursor lands after the span.
+    //   ArrowRight (toward earlier paragraphs in vertical-rl) → cursor lands before the span.
+    // With shiftKey=true, jumps the selection focus past the span for ArrowUp/Down
+    //   (browser gets stuck inside horizontal layout when extending a selection).
     // Returns true if the key was consumed (caller should call preventDefault).
     handleTcyNavigation(key: string, shiftKey = false): boolean {
-        if (key !== 'ArrowUp' && key !== 'ArrowDown') return false;
+        if (key !== 'ArrowUp' && key !== 'ArrowDown' &&
+            key !== 'ArrowLeft' && key !== 'ArrowRight') return false;
         const sel = window.getSelection();
         if (!sel || sel.rangeCount === 0) return false;
         const range = sel.getRangeAt(0);
+
+        // ArrowLeft/Right without Shift: escape the span to break the bounce-back loop.
+        if ((key === 'ArrowLeft' || key === 'ArrowRight') && !shiftKey) {
+            const tcySpan = findTcyAncestor(range.startContainer, this.el);
+            if (!tcySpan) return false;
+            const r = activeDocument.createRange();
+            if (key === 'ArrowLeft') r.setStartAfter(tcySpan);
+            else r.setStartBefore(tcySpan);
+            r.collapse(true);
+            sel.removeAllRanges();
+            sel.addRange(r);
+            return true;
+        }
 
         if (shiftKey) {
             // Use sel.focusNode (the moving end) to detect whether the selection is stuck in a TCY span.
             if (!sel.focusNode) return false;
             const tcySpan = findTcyAncestor(sel.focusNode, this.el);
             if (!tcySpan) return false;
-            // Compute the position just before (ArrowUp) or just after (ArrowDown) the TCY span,
-            // then move the focus there while keeping the anchor fixed.
+            // Move focus just before (ArrowUp/Right) or just after (ArrowDown/Left) the span.
             const r = activeDocument.createRange();
-            if (key === 'ArrowUp') r.setStartBefore(tcySpan);
-            else r.setStartAfter(tcySpan);
+            if (key === 'ArrowUp' || key === 'ArrowRight') r.setStartBefore(tcySpan);
+            else r.setStartAfter(tcySpan); // ArrowDown or ArrowLeft
             r.collapse(true);
             sel.setBaseAndExtent(sel.anchorNode!, sel.anchorOffset, r.startContainer, r.startOffset);
             return true;

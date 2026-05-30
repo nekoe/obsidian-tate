@@ -439,10 +439,11 @@ export class VerticalWritingView extends ItemView {
                     return;
                 }
             }
-            // ArrowUp/ArrowDown inside a tcy span: move left/right within the horizontal text.
-            // With Shift, jump the selection focus past the span (browser gets stuck inside its
-            // horizontal layout); in that case fall through so the navigation-keys block runs.
-            if (!e.isComposing && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+            // Arrow keys inside a tcy span.
+            // ArrowUp/Down: move within the horizontal TCY text (or escape with Shift).
+            // ArrowLeft/Right: escape the span entirely to prevent the bounce-back loop.
+            if (!e.isComposing && (e.key === 'ArrowUp' || e.key === 'ArrowDown' ||
+                    e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
                 if (editorEl.handleTcyNavigation(e.key, e.shiftKey)) {
                     e.preventDefault();
                     if (!e.shiftKey) {
