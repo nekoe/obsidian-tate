@@ -275,6 +275,42 @@ describe('serializeNode', () => {
         expect(serializeNode(root.firstChild!, root)).toBe('はじめに［＃「はじめに」は小見出し］');
     });
 
+    // ---- Empty annotation shells (base text deleted) ----
+
+    it('empty ruby shell (no children) returns empty string', () => {
+        const root = document.createElement('div');
+        root.innerHTML = '<ruby data-ruby-explicit="false" data-rt="さいばんかん"></ruby>';
+        expect(serializeNode(root.firstChild!, root)).toBe('');
+    });
+
+    it('empty ruby shell (only empty text node) returns empty string', () => {
+        const root = document.createElement('div');
+        const ruby = document.createElement('ruby');
+        ruby.setAttribute('data-ruby-explicit', 'false');
+        ruby.setAttribute('data-rt', 'よみ');
+        ruby.appendChild(document.createTextNode(''));
+        root.appendChild(ruby);
+        expect(serializeNode(root.firstChild!, root)).toBe('');
+    });
+
+    it('empty bouten span returns empty string', () => {
+        const root = document.createElement('div');
+        root.innerHTML = '<span data-bouten="sesame" class="bouten"></span>';
+        expect(serializeNode(root.firstChild!, root)).toBe('');
+    });
+
+    it('empty tcy span returns empty string', () => {
+        const root = document.createElement('div');
+        root.innerHTML = '<span data-tcy="explicit" class="tcy"></span>';
+        expect(serializeNode(root.firstChild!, root)).toBe('');
+    });
+
+    it('empty large heading span returns empty string', () => {
+        const root = document.createElement('div');
+        root.innerHTML = '<span class="tate-heading tate-heading-large" data-heading="large"></span>';
+        expect(serializeNode(root.firstChild!, root)).toBe('');
+    });
+
     // ---- Cursor anchor ----
 
     it('cursor anchor span with U+200B only returns empty string', () => {

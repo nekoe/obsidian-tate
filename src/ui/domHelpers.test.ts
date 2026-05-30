@@ -6,7 +6,7 @@ import {
     findAncestor, findBoutenAncestor, findTcyAncestor, isInsideRuby,
     findCursorAnchorAncestor, findLastBaseTextInElement,
     rawOffsetForExpand, getExtraCharsFromAnnotation,
-    isEffectivelyEmpty, clearChildren, ensureBrPlaceholder,
+    isEffectivelyEmpty, clearChildren, ensureBrPlaceholder, removeEmptyAnnotationShells,
 } from './domHelpers';
 
 // ================================================================
@@ -477,6 +477,107 @@ describe('ensureBrPlaceholder', () => {
         div.appendChild(document.createElement('span'));
         ensureBrPlaceholder(div);
         expect(div.childNodes.length).toBe(2);
+    });
+});
+
+// ================================================================
+// removeEmptyAnnotationShells
+// ================================================================
+
+describe('removeEmptyAnnotationShells', () => {
+    it('removes an empty ruby shell (no children)', () => {
+        const div = document.createElement('div');
+        const ruby = document.createElement('ruby');
+        ruby.setAttribute('data-rt', 'さいばんかん');
+        ruby.setAttribute('data-ruby-explicit', 'false');
+        div.appendChild(ruby);
+        removeEmptyAnnotationShells(div);
+        expect(div.querySelector('ruby')).toBeNull();
+    });
+
+    it('removes a ruby shell with only empty text nodes', () => {
+        const div = document.createElement('div');
+        const ruby = document.createElement('ruby');
+        ruby.setAttribute('data-rt', 'よみ');
+        ruby.appendChild(document.createTextNode(''));
+        div.appendChild(ruby);
+        removeEmptyAnnotationShells(div);
+        expect(div.querySelector('ruby')).toBeNull();
+    });
+
+    it('keeps a ruby element that has base text', () => {
+        const div = document.createElement('div');
+        const ruby = document.createElement('ruby');
+        ruby.setAttribute('data-rt', 'よみ');
+        ruby.appendChild(document.createTextNode('漢字'));
+        div.appendChild(ruby);
+        removeEmptyAnnotationShells(div);
+        expect(div.querySelector('ruby')).not.toBeNull();
+    });
+
+    it('removes an empty bouten span', () => {
+        const div = document.createElement('div');
+        const span = document.createElement('span');
+        span.setAttribute('data-bouten', 'sesame');
+        span.className = 'bouten';
+        div.appendChild(span);
+        removeEmptyAnnotationShells(div);
+        expect(div.querySelector('[data-bouten]')).toBeNull();
+    });
+
+    it('keeps a bouten span that has text', () => {
+        const div = document.createElement('div');
+        const span = document.createElement('span');
+        span.setAttribute('data-bouten', 'sesame');
+        span.className = 'bouten';
+        span.textContent = '春';
+        div.appendChild(span);
+        removeEmptyAnnotationShells(div);
+        expect(div.querySelector('[data-bouten]')).not.toBeNull();
+    });
+
+    it('removes an empty tcy span', () => {
+        const div = document.createElement('div');
+        const span = document.createElement('span');
+        span.setAttribute('data-tcy', 'explicit');
+        span.className = 'tcy';
+        div.appendChild(span);
+        removeEmptyAnnotationShells(div);
+        expect(div.querySelector('[data-tcy]')).toBeNull();
+    });
+
+    it('removes an empty heading span', () => {
+        const div = document.createElement('div');
+        const span = document.createElement('span');
+        span.setAttribute('data-heading', 'large');
+        span.className = 'tate-heading tate-heading-large';
+        div.appendChild(span);
+        removeEmptyAnnotationShells(div);
+        expect(div.querySelector('[data-heading]')).toBeNull();
+    });
+
+    it('is a no-op when div has no annotation elements', () => {
+        const div = document.createElement('div');
+        div.appendChild(document.createTextNode('こんにちは'));
+        removeEmptyAnnotationShells(div);
+        expect(div.textContent).toBe('こんにちは');
+    });
+
+    it('only removes empty shells, leaves non-empty ones intact', () => {
+        const div = document.createElement('div');
+        const ruby1 = document.createElement('ruby');
+        ruby1.setAttribute('data-rt', 'あき');
+        div.appendChild(ruby1); // empty — should be removed
+
+        const ruby2 = document.createElement('ruby');
+        ruby2.setAttribute('data-rt', 'はる');
+        ruby2.appendChild(document.createTextNode('春'));
+        div.appendChild(ruby2); // non-empty — should stay
+
+        removeEmptyAnnotationShells(div);
+        const rubies = div.querySelectorAll('ruby');
+        expect(rubies.length).toBe(1);
+        expect(rubies[0].getAttribute('data-rt')).toBe('はる');
     });
 });
 

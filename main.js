@@ -318,6 +318,15 @@ function ensureBrPlaceholder(el) {
   clearChildren(el);
   el.appendChild(activeDocument.createElement("br"));
 }
+function removeEmptyAnnotationShells(el) {
+  var _a;
+  const shells = el.querySelectorAll('ruby, [data-bouten], [data-tcy="explicit"], [data-heading]');
+  for (const shell of Array.from(shells)) {
+    if (shell.instanceOf(HTMLElement) && ((_a = shell.textContent) != null ? _a : "").replace(/\u200B/g, "") === "") {
+      shell.remove();
+    }
+  }
+}
 function rawOffsetForExpand(el, _node, offset) {
   if (el.tagName === "RUBY") {
     const explicit = el.getAttribute("data-ruby-explicit") !== "false";
@@ -788,6 +797,7 @@ function serializeNode(node, rootEl) {
     case "RUBY": {
       const explicit = node.getAttribute("data-ruby-explicit") !== "false";
       const base = Array.from(node.childNodes).map((n) => serializeNode(n, rootEl)).join("");
+      if (!base) return "";
       const rt = (_b = node.getAttribute("data-rt")) != null ? _b : "";
       return explicit ? `\uFF5C${base}\u300A${rt}\u300B` : `${base}\u300A${rt}\u300B`;
     }
@@ -795,16 +805,19 @@ function serializeNode(node, rootEl) {
       const tcy = node.getAttribute("data-tcy");
       if (tcy === "explicit") {
         const content = (_c = node.textContent) != null ? _c : "";
+        if (!content) return "";
         return `${content}\uFF3B\uFF03\u300C${content}\u300D\u306F\u7E26\u4E2D\u6A2A\uFF3D`;
       }
       if (node.getAttribute("data-bouten")) {
         const content = (_d = node.textContent) != null ? _d : "";
+        if (!content) return "";
         return `${content}\uFF3B\uFF03\u300C${content}\u300D\u306B\u508D\u70B9\uFF3D`;
       }
       const heading = node.getAttribute("data-heading");
       if (heading === "large" || heading === "mid" || heading === "small") {
         const suffix = heading === "large" ? "\u5927\u898B\u51FA\u3057" : heading === "mid" ? "\u4E2D\u898B\u51FA\u3057" : "\u5C0F\u898B\u51FA\u3057";
         const content = Array.from(node.childNodes).map((n) => serializeNode(n, rootEl)).join("");
+        if (!content) return "";
         return `${content}\uFF3B\uFF03\u300C${content}\u300D\u306F${suffix}\uFF3D`;
       }
       if (node.classList.contains("tate-cursor-anchor")) {
@@ -3525,6 +3538,8 @@ var EditorElement = class {
     const startWasEmptyLine = startDiv !== null && startDiv.childNodes.length === 1 && ((_a = startDiv.firstChild) == null ? void 0 : _a.nodeName) === "BR";
     const endWasEmptyLine = endDiv !== null && endDiv !== startDiv && endDiv.childNodes.length === 1 && ((_b = endDiv.firstChild) == null ? void 0 : _b.nodeName) === "BR";
     range.deleteContents();
+    if (startDiv) removeEmptyAnnotationShells(startDiv);
+    if (endDiv && endDiv !== startDiv) removeEmptyAnnotationShells(endDiv);
     if (startDiv == null ? void 0 : startDiv.isConnected) {
       if (startWasEmptyLine && isEffectivelyEmpty(startDiv)) {
         startDiv.remove();

@@ -146,6 +146,19 @@ export function ensureBrPlaceholder(el: HTMLElement): void {
     el.appendChild(activeDocument.createElement('br'));
 }
 
+// Removes annotation element shells (ruby/bouten/tcy/heading) whose base text was
+// entirely deleted. Range.deleteContents() removes child text nodes but leaves the
+// element shell when the selection boundary falls inside the element.
+export function removeEmptyAnnotationShells(el: HTMLElement): void {
+    const shells = el.querySelectorAll('ruby, [data-bouten], [data-tcy="explicit"], [data-heading]');
+    for (const shell of Array.from(shells)) {
+        // U+200B is used by cursor anchor spans; strip it before the empty check
+        if (shell.instanceOf(HTMLElement) && (shell.textContent ?? '').replace(/\u200B/g, '') === '') {
+            shell.remove();
+        }
+    }
+}
+
 // ---- Pure computation ----
 
 export function rawOffsetForExpand(el: HTMLElement, _node: Node, offset: number): number {

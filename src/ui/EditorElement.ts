@@ -4,7 +4,7 @@ import { buildSegmentMap, srcToView, viewToSrc } from './SegmentMap';
 import { parseInlineToHtml, parseToHtml, serializeNode } from './AozoraParser';
 import { InlineEditor } from './InlineEditor';
 import { InputTransformer } from './InputTransformer';
-import { isEffectivelyEmpty, clearChildren, ensureBrPlaceholder, computeDivViewLen, computeViewOffsetInDiv, computeDomPositionFromViewOff, findParentDivInEditor } from './domHelpers';
+import { isEffectivelyEmpty, clearChildren, ensureBrPlaceholder, removeEmptyAnnotationShells, computeDivViewLen, computeViewOffsetInDiv, computeDomPositionFromViewOff, findParentDivInEditor } from './domHelpers';
 import type { ParagraphVirtualizer, VirtualSelection } from './ParagraphVirtualizer';
 import { SPACER_CLASS } from './ParagraphVirtualizer';
 
@@ -310,6 +310,12 @@ export class EditorElement {
             endDiv.firstChild?.nodeName === 'BR';
 
         range.deleteContents();
+
+        // Remove annotation shells (ruby/bouten/tcy/heading) whose base text was
+        // entirely deleted. The browser leaves empty element shells when the selection
+        // boundary falls inside an annotation element.
+        if (startDiv) removeEmptyAnnotationShells(startDiv);
+        if (endDiv && endDiv !== startDiv) removeEmptyAnnotationShells(endDiv);
 
         if (startDiv?.isConnected) {
             if (startWasEmptyLine && isEffectivelyEmpty(startDiv)) {

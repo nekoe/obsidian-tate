@@ -199,6 +199,7 @@ export function serializeNode(node: Node, rootEl: HTMLElement): string {
             const base = Array.from(node.childNodes)
                 .map(n => serializeNode(n, rootEl))
                 .join('');
+            if (!base) return '';
             const rt = node.getAttribute('data-rt') ?? '';
             return explicit ? `｜${base}《${rt}》` : `${base}《${rt}》`;
         }
@@ -206,10 +207,12 @@ export function serializeNode(node: Node, rootEl: HTMLElement): string {
             const tcy = node.getAttribute('data-tcy');
             if (tcy === 'explicit') {
                 const content = node.textContent ?? '';
+                if (!content) return '';
                 return `${content}［＃「${content}」は縦中横］`;
             }
             if (node.getAttribute('data-bouten')) {
                 const content = node.textContent ?? '';
+                if (!content) return '';
                 return `${content}［＃「${content}」に傍点］`;
             }
             const heading = node.getAttribute('data-heading');
@@ -218,6 +221,7 @@ export function serializeNode(node: Node, rootEl: HTMLElement): string {
                 const content = Array.from(node.childNodes)
                     .map(n => serializeNode(n, rootEl))
                     .join('');
+                if (!content) return '';
                 return `${content}［＃「${content}」は${suffix}］`;
             }
             if (node.classList.contains('tate-cursor-anchor')) {
