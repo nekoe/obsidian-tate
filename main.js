@@ -1609,7 +1609,11 @@ var InlineEditor = class {
   // savedRange, replacing each with its base text. Returns true if any were removed.
   removeAnnotationsInSelection() {
     var _a, _b;
+    let collapseNextSib = null;
+    let collapseParent = null;
     if ((_a = this.expandedEl) == null ? void 0 : _a.isConnected) {
+      collapseNextSib = this.expandedEl.nextSibling;
+      collapseParent = this.expandedEl.parentElement;
       this.isModifyingDom = true;
       try {
         this.collapseEditing();
@@ -1621,15 +1625,17 @@ var InlineEditor = class {
       }
     }
     let targets = this.findAnnotationsIntersectingSavedRange();
+    if (targets.length === 0 && collapseParent) {
+      const candidate = collapseNextSib ? collapseNextSib.previousSibling : collapseParent.lastChild;
+      if ((candidate == null ? void 0 : candidate.instanceOf(HTMLElement)) && (candidate.tagName === "RUBY" || candidate.getAttribute("data-tcy") === "explicit" || candidate.getAttribute("data-bouten") !== null || candidate.getAttribute("data-heading") !== null)) {
+        targets = [candidate];
+      }
+    }
     if (targets.length === 0) {
       const sel = window.getSelection();
       if (sel && sel.rangeCount > 0 && sel.isCollapsed && this.el.contains(sel.getRangeAt(0).startContainer)) {
-        const annotation = findAncestor(
-          sel.getRangeAt(0).startContainer,
-          (el) => el.tagName === "RUBY" || el.getAttribute("data-tcy") === "explicit" || el.getAttribute("data-bouten") !== null || el.getAttribute("data-heading") !== null,
-          this.el
-        );
-        if (annotation) targets = [annotation];
+        const found = this.findAnnotationAtCursor(sel.getRangeAt(0));
+        if (found) targets = [found];
       }
     }
     if (targets.length === 0) return false;
@@ -1773,6 +1779,38 @@ var InlineEditor = class {
     return true;
   }
   // ---- Private helpers for inline expand/collapse ----
+  // Returns the annotation element (ruby/tcy/bouten/heading) at or immediately adjacent to
+  // the cursor, or null if none found. Checks three positions:
+  //   1. An annotation ancestor of the cursor node (cursor is inside the annotation).
+  //   2. The node just before or after the cursor (cursor is adjacent to the annotation).
+  //   3. The previous sibling of a cursor anchor span (cursor is inside the anchor).
+  findAnnotationAtCursor(range) {
+    var _a;
+    const node = range.startContainer;
+    const offset = range.startOffset;
+    const isAnnotation = (n) => !!(n == null ? void 0 : n.instanceOf(HTMLElement)) && (n.tagName === "RUBY" || n.getAttribute("data-tcy") === "explicit" || n.getAttribute("data-bouten") !== null || n.getAttribute("data-heading") !== null);
+    const ancestor = findAncestor(node, isAnnotation, this.el);
+    if (ancestor) return ancestor;
+    let next = null;
+    let prev = null;
+    if (node.nodeType === Node.ELEMENT_NODE) {
+      const el = node;
+      next = (_a = el.childNodes[offset]) != null ? _a : null;
+      prev = offset > 0 ? el.childNodes[offset - 1] : null;
+    } else if (node.nodeType === Node.TEXT_NODE) {
+      const text = node;
+      if (offset === text.length) next = text.nextSibling;
+      if (offset === 0) prev = text.previousSibling;
+    }
+    if (isAnnotation(next)) return next;
+    if (isAnnotation(prev)) return prev;
+    const parentEl = node.nodeType === Node.TEXT_NODE ? node.parentElement : null;
+    if (parentEl == null ? void 0 : parentEl.classList.contains("tate-cursor-anchor")) {
+      const beforeAnchor = parentEl.previousSibling;
+      if (isAnnotation(beforeAnchor)) return beforeAnchor;
+    }
+    return null;
+  }
   // Returns all annotation elements (ruby/tcy/bouten/heading) that intersect savedRange.
   // Rebuilds a DOM Range from savedRange and uses intersectsNode() so that partial overlaps,
   // full containment, and cross-node selections are all handled uniformly.

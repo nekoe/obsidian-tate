@@ -334,7 +334,13 @@ export class InlineEditor {
     removeAnnotationsInSelection(): boolean {
         // Collapse inline-expand first so the annotation element is restored to the DOM.
         // Avoid collapseForApply() here because it calls reset() which clears savedRange.
+        // Save nextSibling/parentElement before collapse so we can locate the newly created
+        // annotation element afterwards (collapseEditing inserts it just before nextSibling).
+        let collapseNextSib: Node | null = null;
+        let collapseParent: HTMLElement | null = null;
         if (this.expandedEl?.isConnected) {
+            collapseNextSib = this.expandedEl.nextSibling;
+            collapseParent  = this.expandedEl.parentElement;
             this.isModifyingDom = true;
             try {
                 this.collapseEditing();
@@ -351,22 +357,32 @@ export class InlineEditor {
 
         let targets = this.findAnnotationsIntersectingSavedRange();
 
-        // Fallback for a collapsed cursor (no selection): find the annotation element that
-        // contains the cursor. Needed when inline expansion is suppressed and the user places
-        // the cursor inside an annotation without expanding it.
+        // Fallback 1: after inline-expand collapse, the annotation element was inserted
+        // immediately before collapseNextSib in collapseParent (or as its last child).
+        if (targets.length === 0 && collapseParent) {
+            const candidate = collapseNextSib
+                ? collapseNextSib.previousSibling
+                : collapseParent.lastChild;
+            if (candidate?.instanceOf(HTMLElement)
+                    && (candidate.tagName === 'RUBY'
+                        || candidate.getAttribute('data-tcy') === 'explicit'
+                        || candidate.getAttribute('data-bouten') !== null
+                        || candidate.getAttribute('data-heading') !== null)) {
+                targets = [candidate];
+            }
+        }
+
+        // Fallback 2: collapsed cursor — check inside and adjacent to annotation elements.
+        // Covers two cases:
+        //   • Inline expansion suppressed: cursor entered annotation without expanding it.
+        //   • Command palette collapse: handleSelectionChange collapsed the span and left
+        //     the cursor just before/after the resulting annotation element.
         if (targets.length === 0) {
             const sel = window.getSelection();
             if (sel && sel.rangeCount > 0 && sel.isCollapsed
                     && this.el.contains(sel.getRangeAt(0).startContainer)) {
-                const annotation = findAncestor(
-                    sel.getRangeAt(0).startContainer,
-                    el => el.tagName === 'RUBY'
-                       || el.getAttribute('data-tcy') === 'explicit'
-                       || el.getAttribute('data-bouten') !== null
-                       || el.getAttribute('data-heading') !== null,
-                    this.el,
-                );
-                if (annotation) targets = [annotation];
+                const found = this.findAnnotationAtCursor(sel.getRangeAt(0));
+                if (found) targets = [found];
             }
         }
 
@@ -541,6 +557,51 @@ export class InlineEditor {
     }
 
     // ---- Private helpers for inline expand/collapse ----
+
+    // Returns the annotation element (ruby/tcy/bouten/heading) at or immediately adjacent to
+    // the cursor, or null if none found. Checks three positions:
+    //   1. An annotation ancestor of the cursor node (cursor is inside the annotation).
+    //   2. The node just before or after the cursor (cursor is adjacent to the annotation).
+    //   3. The previous sibling of a cursor anchor span (cursor is inside the anchor).
+    private findAnnotationAtCursor(range: Range): HTMLElement | null {
+        const node   = range.startContainer;
+        const offset = range.startOffset;
+
+        const isAnnotation = (n: Node | null | undefined): n is HTMLElement =>
+            !!n?.instanceOf(HTMLElement)
+            && (n.tagName === 'RUBY'
+                || n.getAttribute('data-tcy') === 'explicit'
+                || n.getAttribute('data-bouten') !== null
+                || n.getAttribute('data-heading') !== null);
+
+        // Case 1: cursor is inside an annotation element
+        const ancestor = findAncestor(node, isAnnotation, this.el);
+        if (ancestor) return ancestor;
+
+        // Case 2: cursor is between DOM siblings — check the node just before and just after
+        let next: Node | null = null;
+        let prev: Node | null = null;
+        if (node.nodeType === Node.ELEMENT_NODE) {
+            const el = node as Element;
+            next = el.childNodes[offset] ?? null;
+            prev = offset > 0 ? el.childNodes[offset - 1] : null;
+        } else if (node.nodeType === Node.TEXT_NODE) {
+            const text = node as Text;
+            if (offset === text.length) next = text.nextSibling;
+            if (offset === 0)           prev = text.previousSibling;
+        }
+        if (isAnnotation(next)) return next;
+        if (isAnnotation(prev)) return prev;
+
+        // Case 3: cursor is inside a cursor anchor span — annotation is the anchor's prev sibling
+        const parentEl = node.nodeType === Node.TEXT_NODE ? node.parentElement : null;
+        if (parentEl?.classList.contains('tate-cursor-anchor')) {
+            const beforeAnchor = parentEl.previousSibling;
+            if (isAnnotation(beforeAnchor)) return beforeAnchor;
+        }
+
+        return null;
+    }
 
     // Returns all annotation elements (ruby/tcy/bouten/heading) that intersect savedRange.
     // Rebuilds a DOM Range from savedRange and uses intersectsNode() so that partial overlaps,
