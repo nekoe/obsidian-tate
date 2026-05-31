@@ -1576,6 +1576,41 @@ var InlineEditor = class {
   wrapSelectionWithHeading(level) {
     return this.wrapSelectionWith((content) => createHeadingEl(content, level));
   }
+  // Returns true if the current savedRange intersects at least one annotation element.
+  // Used by view.ts to block wrap commands when the selection already contains an annotation.
+  hasAnnotationInSelection() {
+    return this.findAnnotationsIntersectingSavedRange().length > 0;
+  }
+  // Removes all annotation elements (ruby/tcy/bouten/heading) that intersect the current
+  // savedRange, replacing each with its base text. Returns true if any were removed.
+  removeAnnotationsInSelection() {
+    var _a, _b;
+    if ((_a = this.expandedEl) == null ? void 0 : _a.isConnected) {
+      this.isModifyingDom = true;
+      try {
+        this.collapseEditing();
+      } finally {
+        this.isModifyingDom = false;
+      }
+      if (this.savedRange && !this.savedRange.startContainer.isConnected) {
+        this.savedRange = null;
+      }
+    }
+    const targets = this.findAnnotationsIntersectingSavedRange();
+    if (targets.length === 0) return false;
+    this.isModifyingDom = true;
+    try {
+      for (const target of targets) {
+        if (!target.isConnected) continue;
+        target.replaceWith(activeDocument.createTextNode((_b = target.textContent) != null ? _b : ""));
+      }
+    } finally {
+      this.isModifyingDom = false;
+    }
+    this.collapseGuard.clear();
+    this.savedRange = null;
+    return true;
+  }
   // Handles arrow keys when cursor is inside a tcy span.
   // ArrowUp/Down: move left/right within the horizontal TCY text.
   // ArrowLeft/Right (no Shift): escape the TCY span entirely to prevent the infinite loop
@@ -1703,6 +1738,28 @@ var InlineEditor = class {
     return true;
   }
   // ---- Private helpers for inline expand/collapse ----
+  // Returns all annotation elements (ruby/tcy/bouten/heading) that intersect savedRange.
+  // Rebuilds a DOM Range from savedRange and uses intersectsNode() so that partial overlaps,
+  // full containment, and cross-node selections are all handled uniformly.
+  findAnnotationsIntersectingSavedRange() {
+    const r = this.savedRange;
+    if (!r) return [];
+    const range = activeDocument.createRange();
+    try {
+      range.setStart(r.startContainer, r.startOffset);
+      range.setEnd(r.endContainer, r.endOffset);
+    } catch (e) {
+      return [];
+    }
+    const candidates = this.el.querySelectorAll(
+      'ruby, [data-bouten], [data-tcy="explicit"], [data-heading]'
+    );
+    const result = [];
+    for (const candidate of Array.from(candidates)) {
+      if (range.intersectsNode(candidate)) result.push(candidate);
+    }
+    return result;
+  }
   // Walks up ancestors from node and returns the first expandable element (ruby or explicit tcy)
   findExpandableAncestor(node) {
     return this.expander.findExpandableAncestor(node, this.expandRuby, this.expandTcy, this.expandBouten, this.expandHeading);
@@ -3469,6 +3526,15 @@ var EditorElement = class {
   // Returns false if no text is selected.
   applyHeading(level) {
     return this.inlineEditor.wrapSelectionWithHeading(level);
+  }
+  // Returns true if the current selection intersects at least one annotation element.
+  hasAnnotationInSelection() {
+    return this.inlineEditor.hasAnnotationInSelection();
+  }
+  // Removes all annotation elements intersecting the current selection, replacing each with
+  // its base text. Returns true if any were removed, false if none found.
+  removeAnnotationsInSelection() {
+    return this.inlineEditor.removeAnnotationsInSelection();
   }
   // Copy handler: serializes the selected DOM to Aozora notation and writes it to text/plain.
   // This ensures ruby/tcy/bouten are preserved when copying within the editor.
@@ -5508,6 +5574,10 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
   }
   applyRuby() {
     if (!this.editorEl) return;
+    if (this.editorEl.hasAnnotationInSelection()) {
+      new import_obsidian6.Notice("\u9078\u629E\u7BC4\u56F2\u306B\u65E2\u5B58\u306E\u9752\u7A7A\u8A18\u6CD5\u304C\u542B\u307E\u308C\u3066\u3044\u307E\u3059");
+      return;
+    }
     if (!this.editorEl.wrapSelectionWithRuby()) {
       new import_obsidian6.Notice("\u30C6\u30AD\u30B9\u30C8\u3092\u9078\u629E\u3057\u3066\u304F\u3060\u3055\u3044");
     }
@@ -5520,6 +5590,16 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
   }
   applyHeading(level) {
     this.applyAnnotation((el) => el.applyHeading(level));
+  }
+  removeAnnotations() {
+    var _a;
+    if (!this.editorEl) return;
+    if (!this.editorEl.removeAnnotationsInSelection()) {
+      new import_obsidian6.Notice("\u9752\u7A7A\u8A18\u6CD5\u304C\u898B\u3064\u304B\u308A\u307E\u305B\u3093");
+    } else {
+      this.commitToCm6();
+      (_a = this.searchPanel) == null ? void 0 : _a.onContentChanged();
+    }
   }
   /** Moves the editor cursor to viewOffset and scrolls it into view. Used by OutlineView. */
   jumpToViewOffset(offset) {
@@ -5557,11 +5637,17 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
     return (_b = (_a = this.virtualizer) == null ? void 0 : _a.paragraphRecords) != null ? _b : [];
   }
   applyAnnotation(wrap) {
+    var _a;
     if (!this.editorEl) return;
+    if (this.editorEl.hasAnnotationInSelection()) {
+      new import_obsidian6.Notice("\u9078\u629E\u7BC4\u56F2\u306B\u65E2\u5B58\u306E\u9752\u7A7A\u8A18\u6CD5\u304C\u542B\u307E\u308C\u3066\u3044\u307E\u3059");
+      return;
+    }
     if (!wrap(this.editorEl)) {
       new import_obsidian6.Notice("\u30C6\u30AD\u30B9\u30C8\u3092\u9078\u629E\u3057\u3066\u304F\u3060\u3055\u3044");
     } else {
       this.commitToCm6();
+      (_a = this.searchPanel) == null ? void 0 : _a.onContentChanged();
     }
   }
   // ---- CM6 integration helpers ----
@@ -5897,6 +5983,16 @@ var TatePlugin = class extends import_obsidian8.Plugin {
         const view = this.getActiveTateView();
         if (!view) return false;
         if (!checking) view.applyHeading("small");
+        return true;
+      }
+    });
+    this.addCommand({
+      id: "remove-annotations",
+      name: "\u9078\u629E\u7BC4\u56F2\u306E\u9752\u7A7A\u8A18\u6CD5\u3092\u89E3\u9664\u3059\u308B",
+      checkCallback: (checking) => {
+        const view = this.getActiveTateView();
+        if (!view) return false;
+        if (!checking) view.removeAnnotations();
         return true;
       }
     });

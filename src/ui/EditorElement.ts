@@ -232,6 +232,17 @@ export class EditorElement {
         return this.inlineEditor.wrapSelectionWithHeading(level);
     }
 
+    // Returns true if the current selection intersects at least one annotation element.
+    hasAnnotationInSelection(): boolean {
+        return this.inlineEditor.hasAnnotationInSelection();
+    }
+
+    // Removes all annotation elements intersecting the current selection, replacing each with
+    // its base text. Returns true if any were removed, false if none found.
+    removeAnnotationsInSelection(): boolean {
+        return this.inlineEditor.removeAnnotationsInSelection();
+    }
+
     // Copy handler: serializes the selected DOM to Aozora notation and writes it to text/plain.
     // This ensures ruby/tcy/bouten are preserved when copying within the editor.
     // When a VirtualSelection is active, uses the virtual selection data model instead of the DOM.

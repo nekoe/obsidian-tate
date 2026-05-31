@@ -130,6 +130,17 @@ export default class TatePlugin extends Plugin {
         });
 
         this.addCommand({
+            id: 'remove-annotations',
+            name: '選択範囲の青空記法を解除する',
+            checkCallback: (checking) => {
+                const view = this.getActiveTateView();
+                if (!view) return false;
+                if (!checking) view.removeAnnotations();
+                return true;
+            },
+        });
+
+        this.addCommand({
             id: 'open-outline',
             name: 'アウトラインパネルを開く',
             checkCallback: (checking) => {

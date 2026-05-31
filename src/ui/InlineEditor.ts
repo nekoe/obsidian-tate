@@ -323,6 +323,52 @@ export class InlineEditor {
         return this.wrapSelectionWith(content => createHeadingEl(content, level));
     }
 
+    // Returns true if the current savedRange intersects at least one annotation element.
+    // Used by view.ts to block wrap commands when the selection already contains an annotation.
+    hasAnnotationInSelection(): boolean {
+        return this.findAnnotationsIntersectingSavedRange().length > 0;
+    }
+
+    // Removes all annotation elements (ruby/tcy/bouten/heading) that intersect the current
+    // savedRange, replacing each with its base text. Returns true if any were removed.
+    removeAnnotationsInSelection(): boolean {
+        // Collapse inline-expand first so the annotation element is restored to the DOM.
+        // Avoid collapseForApply() here because it calls reset() which clears savedRange.
+        if (this.expandedEl?.isConnected) {
+            this.isModifyingDom = true;
+            try {
+                this.collapseEditing();
+            } finally {
+                this.isModifyingDom = false;
+            }
+            // After collapse the tate-editing span is removed; savedRange may now point to a
+            // detached text node that lived inside the span. Discard it to prevent creating a
+            // Range with an invalid node in findAnnotationsIntersectingSavedRange().
+            if (this.savedRange && !this.savedRange.startContainer.isConnected) {
+                this.savedRange = null;
+            }
+        }
+
+        const targets = this.findAnnotationsIntersectingSavedRange();
+        if (targets.length === 0) return false;
+
+        this.isModifyingDom = true;
+        try {
+            for (const target of targets) {
+                if (!target.isConnected) continue;
+                // For ruby: textContent is the base text only (no <rt> element per design).
+                // For tcy/bouten/heading: textContent is the base text.
+                target.replaceWith(activeDocument.createTextNode(target.textContent ?? ''));
+            }
+        } finally {
+            this.isModifyingDom = false;
+        }
+
+        this.collapseGuard.clear();
+        this.savedRange = null;
+        return true;
+    }
+
     // Handles arrow keys when cursor is inside a tcy span.
     // ArrowUp/Down: move left/right within the horizontal TCY text.
     // ArrowLeft/Right (no Shift): escape the TCY span entirely to prevent the infinite loop
@@ -475,6 +521,31 @@ export class InlineEditor {
     }
 
     // ---- Private helpers for inline expand/collapse ----
+
+    // Returns all annotation elements (ruby/tcy/bouten/heading) that intersect savedRange.
+    // Rebuilds a DOM Range from savedRange and uses intersectsNode() so that partial overlaps,
+    // full containment, and cross-node selections are all handled uniformly.
+    private findAnnotationsIntersectingSavedRange(): HTMLElement[] {
+        const r = this.savedRange;
+        if (!r) return [];
+
+        const range = activeDocument.createRange();
+        try {
+            range.setStart(r.startContainer, r.startOffset);
+            range.setEnd(r.endContainer, r.endOffset);
+        } catch {
+            return [];
+        }
+
+        const candidates = this.el.querySelectorAll<HTMLElement>(
+            'ruby, [data-bouten], [data-tcy="explicit"], [data-heading]'
+        );
+        const result: HTMLElement[] = [];
+        for (const candidate of Array.from(candidates)) {
+            if (range.intersectsNode(candidate)) result.push(candidate);
+        }
+        return result;
+    }
 
     // Walks up ancestors from node and returns the first expandable element (ruby or explicit tcy)
     private findExpandableAncestor(node: Node): HTMLElement | null {

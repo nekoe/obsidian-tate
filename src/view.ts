@@ -857,6 +857,10 @@ export class VerticalWritingView extends ItemView {
 
     applyRuby(): void {
         if (!this.editorEl) return;
+        if (this.editorEl.hasAnnotationInSelection()) {
+            new Notice('選択範囲に既存の青空記法が含まれています');
+            return;
+        }
         if (!this.editorEl.wrapSelectionWithRuby()) {
             new Notice('テキストを選択してください');
         }
@@ -867,6 +871,16 @@ export class VerticalWritingView extends ItemView {
 
     applyHeading(level: 'large' | 'mid' | 'small'): void {
         this.applyAnnotation(el => el.applyHeading(level));
+    }
+
+    removeAnnotations(): void {
+        if (!this.editorEl) return;
+        if (!this.editorEl.removeAnnotationsInSelection()) {
+            new Notice('青空記法が見つかりません');
+        } else {
+            this.commitToCm6();
+            this.searchPanel?.onContentChanged();
+        }
     }
 
     /** Moves the editor cursor to viewOffset and scrolls it into view. Used by OutlineView. */
@@ -911,10 +925,15 @@ export class VerticalWritingView extends ItemView {
 
     private applyAnnotation(wrap: (el: EditorElement) => boolean): void {
         if (!this.editorEl) return;
+        if (this.editorEl.hasAnnotationInSelection()) {
+            new Notice('選択範囲に既存の青空記法が含まれています');
+            return;
+        }
         if (!wrap(this.editorEl)) {
             new Notice('テキストを選択してください');
         } else {
             this.commitToCm6(); // tcy/bouten finalize immediately, so commit
+            this.searchPanel?.onContentChanged();
         }
     }
 
