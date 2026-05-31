@@ -1,6 +1,6 @@
 import { sanitizeHTMLToDom } from 'obsidian';
 import { DEFAULT_SETTINGS, TatePluginSettings } from '../settings';
-import { buildSegmentMap, srcToView, viewToSrc } from './SegmentMap';
+import { buildSegmentMap, srcToView, viewToSrc, stripAnnotationsInSrcRange } from './SegmentMap';
 import { parseInlineToHtml, parseToHtml, serializeNode } from './AozoraParser';
 import { InlineEditor } from './InlineEditor';
 import { InputTransformer } from './InputTransformer';
@@ -239,7 +239,13 @@ export class EditorElement {
 
     // Removes all annotation elements intersecting the current selection, replacing each with
     // its base text. Returns true if any were removed, false if none found.
+    // Routes to removeAnnotationsFromVirtualSelection() when a VirtualSelection is active.
     removeAnnotationsInSelection(): boolean {
+        const vs = this.virtualizer?.getVirtualSelection();
+        if (vs) {
+            this.virtualizer!.clearVirtualSelection();
+            return this.removeAnnotationsFromVirtualSelection(vs);
+        }
         return this.inlineEditor.removeAnnotationsInSelection();
     }
 
@@ -787,6 +793,68 @@ export class EditorElement {
         const div = virt.getWindowDiv(i);
         if (div) return Array.from(div.childNodes).map(n => serializeNode(n, this.el)).join('');
         return virt.getSrcByIndex(i);
+    }
+
+    // Strips all annotation markup from the source range covered by vs, replacing each
+    // annotation with its base text. Returns true if any annotations were removed.
+    // Caller must call clearVirtualSelection() before calling this method.
+    private removeAnnotationsFromVirtualSelection(vs: VirtualSelection): boolean {
+        const virt = this.virtualizer;
+        if (!virt) return false;
+        const { anchorParaIdx, anchorViewOff, focusParaIdx, focusViewOff } = vs;
+        const [si, so, ei, eo] = anchorParaIdx <= focusParaIdx
+            ? [anchorParaIdx, anchorViewOff, focusParaIdx, focusViewOff]
+            : [focusParaIdx, focusViewOff, anchorParaIdx, anchorViewOff];
+        const N = virt.paragraphRecords.length;
+
+        let changed = false;
+        const allLines: string[] = [];
+        for (let i = 0; i < N; i++) {
+            const src = this.getParaSrc(virt, i);
+            if (i < si || i > ei) {
+                allLines.push(src);
+            } else {
+                const paraStart = (i === si) ? so : 0;
+                const paraEnd   = (i === ei) ? eo : virt.getViewLenByIndex(i);
+                const segs      = buildSegmentMap(src);
+                const stripped  = stripAnnotationsInSrcRange(src, segs, paraStart, paraEnd);
+                allLines.push(stripped);
+                if (stripped !== src) changed = true;
+            }
+        }
+
+        if (!changed) return false;
+
+        const newContent = allLines.join('\n');
+        let cursorViewOffset = 0;
+        for (let i = 0; i < si; i++) cursorViewOffset += virt.getViewLenByIndex(i);
+        cursorViewOffset += so;
+
+        this.inlineEditor.reset();
+        this.loadContent(newContent, cursorViewOffset);
+        // Mirror the so===0 disambiguation from deleteVirtualSelection: when so=0,
+        // cursorViewOffset equals the end of para si-1, so setVisibleOffset would land
+        // at the wrong paragraph. Place the cursor directly via the DOM instead.
+        if (so === 0) {
+            const targetDiv = virt.getWindowDiv(si);
+            if (targetDiv) {
+                const walker = activeDocument.createTreeWalker(targetDiv, NodeFilter.SHOW_TEXT);
+                const firstNode = walker.nextNode() as Text | null;
+                const range = activeDocument.createRange();
+                if (firstNode) { range.setStart(firstNode, 0); }
+                else           { range.setStart(targetDiv, 0); }
+                range.collapse(true);
+                const sel = window.getSelection();
+                sel?.removeAllRanges();
+                sel?.addRange(range);
+            } else {
+                this.setViewCursorOffset(cursorViewOffset);
+            }
+        } else {
+            this.setViewCursorOffset(cursorViewOffset);
+        }
+        this.scrollCursorIntoView('nearest');
+        return true;
     }
 
     // Deletes the content covered by a VirtualSelection. Rebuilds the content from

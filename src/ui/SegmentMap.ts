@@ -113,6 +113,44 @@ export function viewToSrc(segs: readonly Segment[], viewOffset: number): number 
     return last.srcStart + last.srcLen;
 }
 
+/**
+ * Returns a copy of src with annotation segments whose view range overlaps
+ * [startViewOff, endViewOff) replaced by their base text.
+ * Plain and newline segments are kept as-is.
+ */
+export function stripAnnotationsInSrcRange(
+    src: string,
+    segs: readonly Segment[],
+    startViewOff: number,
+    endViewOff: number,
+): string {
+    let result = '';
+    for (const seg of segs) {
+        const chunk = src.slice(seg.srcStart, seg.srcStart + seg.srcLen);
+        if (seg.kind === 'plain' || seg.kind === 'newline') {
+            result += chunk;
+            continue;
+        }
+        const overlaps = seg.viewStart < endViewOff && seg.viewStart + seg.viewLen > startViewOff;
+        if (!overlaps) {
+            result += chunk;
+            continue;
+        }
+        // Strip: keep only the base text, discarding annotation markup.
+        if (seg.kind === 'ruby-explicit') {
+            // ｜base《rt》 → base  (skip the leading ｜, keep baseLen chars)
+            result += src.slice(seg.srcStart + 1, seg.srcStart + 1 + (seg.baseLen ?? seg.viewLen));
+        } else if (seg.kind === 'ruby-implicit') {
+            // base《rt》 → base  (first baseLen chars)
+            result += src.slice(seg.srcStart, seg.srcStart + (seg.baseLen ?? seg.viewLen));
+        } else {
+            // tcy, bouten, heading-*: content precedes the bracket annotation
+            result += src.slice(seg.srcStart, seg.srcStart + seg.viewLen);
+        }
+    }
+    return result;
+}
+
 // ---- Internal helpers ----
 
 function mapSrcLocalToView(seg: Segment, local: number): number {

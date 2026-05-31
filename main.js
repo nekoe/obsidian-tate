@@ -469,6 +469,30 @@ function viewToSrc(segs, viewOffset) {
   const last = segs[segs.length - 1];
   return last.srcStart + last.srcLen;
 }
+function stripAnnotationsInSrcRange(src, segs, startViewOff, endViewOff) {
+  var _a, _b;
+  let result = "";
+  for (const seg of segs) {
+    const chunk = src.slice(seg.srcStart, seg.srcStart + seg.srcLen);
+    if (seg.kind === "plain" || seg.kind === "newline") {
+      result += chunk;
+      continue;
+    }
+    const overlaps = seg.viewStart < endViewOff && seg.viewStart + seg.viewLen > startViewOff;
+    if (!overlaps) {
+      result += chunk;
+      continue;
+    }
+    if (seg.kind === "ruby-explicit") {
+      result += src.slice(seg.srcStart + 1, seg.srcStart + 1 + ((_a = seg.baseLen) != null ? _a : seg.viewLen));
+    } else if (seg.kind === "ruby-implicit") {
+      result += src.slice(seg.srcStart, seg.srcStart + ((_b = seg.baseLen) != null ? _b : seg.viewLen));
+    } else {
+      result += src.slice(seg.srcStart, seg.srcStart + seg.viewLen);
+    }
+  }
+  return result;
+}
 function mapSrcLocalToView(seg, local) {
   var _a, _b;
   switch (seg.kind) {
@@ -3533,7 +3557,14 @@ var EditorElement = class {
   }
   // Removes all annotation elements intersecting the current selection, replacing each with
   // its base text. Returns true if any were removed, false if none found.
+  // Routes to removeAnnotationsFromVirtualSelection() when a VirtualSelection is active.
   removeAnnotationsInSelection() {
+    var _a;
+    const vs = (_a = this.virtualizer) == null ? void 0 : _a.getVirtualSelection();
+    if (vs) {
+      this.virtualizer.clearVirtualSelection();
+      return this.removeAnnotationsFromVirtualSelection(vs);
+    }
     return this.inlineEditor.removeAnnotationsInSelection();
   }
   // Copy handler: serializes the selected DOM to Aozora notation and writes it to text/plain.
@@ -3966,6 +3997,61 @@ var EditorElement = class {
     const div = virt.getWindowDiv(i);
     if (div) return Array.from(div.childNodes).map((n) => serializeNode(n, this.el)).join("");
     return virt.getSrcByIndex(i);
+  }
+  // Strips all annotation markup from the source range covered by vs, replacing each
+  // annotation with its base text. Returns true if any annotations were removed.
+  // Caller must call clearVirtualSelection() before calling this method.
+  removeAnnotationsFromVirtualSelection(vs) {
+    const virt = this.virtualizer;
+    if (!virt) return false;
+    const { anchorParaIdx, anchorViewOff, focusParaIdx, focusViewOff } = vs;
+    const [si, so, ei, eo] = anchorParaIdx <= focusParaIdx ? [anchorParaIdx, anchorViewOff, focusParaIdx, focusViewOff] : [focusParaIdx, focusViewOff, anchorParaIdx, anchorViewOff];
+    const N = virt.paragraphRecords.length;
+    let changed = false;
+    const allLines = [];
+    for (let i = 0; i < N; i++) {
+      const src = this.getParaSrc(virt, i);
+      if (i < si || i > ei) {
+        allLines.push(src);
+      } else {
+        const paraStart = i === si ? so : 0;
+        const paraEnd = i === ei ? eo : virt.getViewLenByIndex(i);
+        const segs = buildSegmentMap(src);
+        const stripped = stripAnnotationsInSrcRange(src, segs, paraStart, paraEnd);
+        allLines.push(stripped);
+        if (stripped !== src) changed = true;
+      }
+    }
+    if (!changed) return false;
+    const newContent = allLines.join("\n");
+    let cursorViewOffset = 0;
+    for (let i = 0; i < si; i++) cursorViewOffset += virt.getViewLenByIndex(i);
+    cursorViewOffset += so;
+    this.inlineEditor.reset();
+    this.loadContent(newContent, cursorViewOffset);
+    if (so === 0) {
+      const targetDiv = virt.getWindowDiv(si);
+      if (targetDiv) {
+        const walker = activeDocument.createTreeWalker(targetDiv, NodeFilter.SHOW_TEXT);
+        const firstNode = walker.nextNode();
+        const range = activeDocument.createRange();
+        if (firstNode) {
+          range.setStart(firstNode, 0);
+        } else {
+          range.setStart(targetDiv, 0);
+        }
+        range.collapse(true);
+        const sel = window.getSelection();
+        sel == null ? void 0 : sel.removeAllRanges();
+        sel == null ? void 0 : sel.addRange(range);
+      } else {
+        this.setViewCursorOffset(cursorViewOffset);
+      }
+    } else {
+      this.setViewCursorOffset(cursorViewOffset);
+    }
+    this.scrollCursorIntoView("nearest");
+    return true;
   }
   // Deletes the content covered by a VirtualSelection. Rebuilds the content from
   // paragraphRecords (using the DOM for in-window paragraphs) with the selected range
@@ -5573,7 +5659,12 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
     }
   }
   applyRuby() {
+    var _a;
     if (!this.editorEl) return;
+    if ((_a = this.virtualizer) == null ? void 0 : _a.getVirtualSelection()) {
+      new import_obsidian6.Notice("\u9078\u629E\u7BC4\u56F2\u304C\u5E83\u3059\u304E\u307E\u3059\u3002\u30C6\u30AD\u30B9\u30C8\u3092\u9078\u629E\u3057\u76F4\u3057\u3066\u304F\u3060\u3055\u3044");
+      return;
+    }
     if (this.editorEl.hasAnnotationInSelection()) {
       new import_obsidian6.Notice("\u9078\u629E\u7BC4\u56F2\u306B\u65E2\u5B58\u306E\u9752\u7A7A\u8A18\u6CD5\u304C\u542B\u307E\u308C\u3066\u3044\u307E\u3059");
       return;
@@ -5637,8 +5728,12 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
     return (_b = (_a = this.virtualizer) == null ? void 0 : _a.paragraphRecords) != null ? _b : [];
   }
   applyAnnotation(wrap) {
-    var _a;
+    var _a, _b;
     if (!this.editorEl) return;
+    if ((_a = this.virtualizer) == null ? void 0 : _a.getVirtualSelection()) {
+      new import_obsidian6.Notice("\u9078\u629E\u7BC4\u56F2\u304C\u5E83\u3059\u304E\u307E\u3059\u3002\u30C6\u30AD\u30B9\u30C8\u3092\u9078\u629E\u3057\u76F4\u3057\u3066\u304F\u3060\u3055\u3044");
+      return;
+    }
     if (this.editorEl.hasAnnotationInSelection()) {
       new import_obsidian6.Notice("\u9078\u629E\u7BC4\u56F2\u306B\u65E2\u5B58\u306E\u9752\u7A7A\u8A18\u6CD5\u304C\u542B\u307E\u308C\u3066\u3044\u307E\u3059");
       return;
@@ -5647,7 +5742,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
       new import_obsidian6.Notice("\u30C6\u30AD\u30B9\u30C8\u3092\u9078\u629E\u3057\u3066\u304F\u3060\u3055\u3044");
     } else {
       this.commitToCm6();
-      (_a = this.searchPanel) == null ? void 0 : _a.onContentChanged();
+      (_b = this.searchPanel) == null ? void 0 : _b.onContentChanged();
     }
   }
   // ---- CM6 integration helpers ----

@@ -857,6 +857,10 @@ export class VerticalWritingView extends ItemView {
 
     applyRuby(): void {
         if (!this.editorEl) return;
+        if (this.virtualizer?.getVirtualSelection()) {
+            new Notice('選択範囲が広すぎます。テキストを選択し直してください');
+            return;
+        }
         if (this.editorEl.hasAnnotationInSelection()) {
             new Notice('選択範囲に既存の青空記法が含まれています');
             return;
@@ -925,6 +929,10 @@ export class VerticalWritingView extends ItemView {
 
     private applyAnnotation(wrap: (el: EditorElement) => boolean): void {
         if (!this.editorEl) return;
+        if (this.virtualizer?.getVirtualSelection()) {
+            new Notice('選択範囲が広すぎます。テキストを選択し直してください');
+            return;
+        }
         if (this.editorEl.hasAnnotationInSelection()) {
             new Notice('選択範囲に既存の青空記法が含まれています');
             return;
