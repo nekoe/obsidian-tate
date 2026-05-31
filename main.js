@@ -1620,7 +1620,18 @@ var InlineEditor = class {
         this.savedRange = null;
       }
     }
-    const targets = this.findAnnotationsIntersectingSavedRange();
+    let targets = this.findAnnotationsIntersectingSavedRange();
+    if (targets.length === 0) {
+      const sel = window.getSelection();
+      if (sel && sel.rangeCount > 0 && sel.isCollapsed && this.el.contains(sel.getRangeAt(0).startContainer)) {
+        const annotation = findAncestor(
+          sel.getRangeAt(0).startContainer,
+          (el) => el.tagName === "RUBY" || el.getAttribute("data-tcy") === "explicit" || el.getAttribute("data-bouten") !== null || el.getAttribute("data-heading") !== null,
+          this.el
+        );
+        if (annotation) targets = [annotation];
+      }
+    }
     if (targets.length === 0) return false;
     this.isModifyingDom = true;
     try {

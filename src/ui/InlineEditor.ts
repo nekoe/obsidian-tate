@@ -1,7 +1,7 @@
 import {
     createTcyEl, createBoutenEl, createHeadingEl,
     insertAnnotationElement,
-    findTcyAncestor,
+    findTcyAncestor, findAncestor,
 } from './domHelpers';
 import { CollapseGuard } from './CollapseGuard';
 import { CursorAnchorManager } from './CursorAnchorManager';
@@ -349,7 +349,27 @@ export class InlineEditor {
             }
         }
 
-        const targets = this.findAnnotationsIntersectingSavedRange();
+        let targets = this.findAnnotationsIntersectingSavedRange();
+
+        // Fallback for a collapsed cursor (no selection): find the annotation element that
+        // contains the cursor. Needed when inline expansion is suppressed and the user places
+        // the cursor inside an annotation without expanding it.
+        if (targets.length === 0) {
+            const sel = window.getSelection();
+            if (sel && sel.rangeCount > 0 && sel.isCollapsed
+                    && this.el.contains(sel.getRangeAt(0).startContainer)) {
+                const annotation = findAncestor(
+                    sel.getRangeAt(0).startContainer,
+                    el => el.tagName === 'RUBY'
+                       || el.getAttribute('data-tcy') === 'explicit'
+                       || el.getAttribute('data-bouten') !== null
+                       || el.getAttribute('data-heading') !== null,
+                    this.el,
+                );
+                if (annotation) targets = [annotation];
+            }
+        }
+
         if (targets.length === 0) return false;
 
         this.isModifyingDom = true;
