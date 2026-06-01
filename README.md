@@ -34,6 +34,17 @@ Select text, open the command palette (`Ctrl+P` / `Cmd+P`), and run one of:
 
 All annotations are applied to the selected text range.
 
+If the selection already contains an existing annotation, the command is blocked and a notice is shown instead.
+
+**Removing Annotations**
+
+Run `選択範囲の青空記法を解除する` from the command palette to strip all Aozora annotations within the current selection, replacing each with its base text (for ruby, the reading is discarded and only the base characters remain).
+
+- If any part of an annotation overlaps the selection, the entire annotation is removed.
+- Works with a collapsed cursor: if the cursor is positioned inside or immediately adjacent to an annotation element, that annotation is removed — useful when inline expansion is suppressed.
+- Works with a document-wide selection (`Cmd+A` / `Ctrl+A`): all annotations in the file are removed in one step.
+- If no annotation is found in the current selection, a notice is shown.
+
 **Inline Editing**
 
 Moving the cursor into a ruby, tate-chu-yoko, emphasis mark, or heading element expands it into raw Aozora text in place — the same behavior as Obsidian's Markdown editor. Moving the cursor out collapses it back to the rendered form. Pressing **Enter** while an element is expanded also collapses it immediately.
