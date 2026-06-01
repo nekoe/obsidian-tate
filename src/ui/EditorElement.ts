@@ -801,10 +801,7 @@ export class EditorElement {
     private removeAnnotationsFromVirtualSelection(vs: VirtualSelection): boolean {
         const virt = this.virtualizer;
         if (!virt) return false;
-        const { anchorParaIdx, anchorViewOff, focusParaIdx, focusViewOff } = vs;
-        const [si, so, ei, eo] = anchorParaIdx <= focusParaIdx
-            ? [anchorParaIdx, anchorViewOff, focusParaIdx, focusViewOff]
-            : [focusParaIdx, focusViewOff, anchorParaIdx, anchorViewOff];
+        const [si, so, ei, eo] = this.normalizeVsRange(vs);
         const N = virt.paragraphRecords.length;
 
         let changed = false;
@@ -825,35 +822,7 @@ export class EditorElement {
 
         if (!changed) return false;
 
-        const newContent = allLines.join('\n');
-        let cursorViewOffset = 0;
-        for (let i = 0; i < si; i++) cursorViewOffset += virt.getViewLenByIndex(i);
-        cursorViewOffset += so;
-
-        this.inlineEditor.reset();
-        this.loadContent(newContent, cursorViewOffset);
-        // Mirror the so===0 disambiguation from deleteVirtualSelection: when so=0,
-        // cursorViewOffset equals the end of para si-1, so setVisibleOffset would land
-        // at the wrong paragraph. Place the cursor directly via the DOM instead.
-        if (so === 0) {
-            const targetDiv = virt.getWindowDiv(si);
-            if (targetDiv) {
-                const walker = activeDocument.createTreeWalker(targetDiv, NodeFilter.SHOW_TEXT);
-                const firstNode = walker.nextNode() as Text | null;
-                const range = activeDocument.createRange();
-                if (firstNode) { range.setStart(firstNode, 0); }
-                else           { range.setStart(targetDiv, 0); }
-                range.collapse(true);
-                const sel = window.getSelection();
-                sel?.removeAllRanges();
-                sel?.addRange(range);
-            } else {
-                this.setViewCursorOffset(cursorViewOffset);
-            }
-        } else {
-            this.setViewCursorOffset(cursorViewOffset);
-        }
-        this.scrollCursorIntoView('nearest');
+        this.reloadAndPlaceCursor(allLines.join('\n'), si, so);
         return true;
     }
 
@@ -863,10 +832,7 @@ export class EditorElement {
     deleteVirtualSelection(vs: VirtualSelection): void {
         const virt = this.virtualizer;
         if (!virt) return;
-        const { anchorParaIdx, anchorViewOff, focusParaIdx, focusViewOff } = vs;
-        const [si, so, ei, eo] = anchorParaIdx <= focusParaIdx
-            ? [anchorParaIdx, anchorViewOff, focusParaIdx, focusViewOff]
-            : [focusParaIdx, focusViewOff, anchorParaIdx, anchorViewOff];
+        const [si, so, ei, eo] = this.normalizeVsRange(vs);
         const N = virt.paragraphRecords.length;
 
         const allLines: string[] = [];
@@ -877,38 +843,51 @@ export class EditorElement {
         );
         for (let i = ei + 1; i < N; i++) allLines.push(this.getParaSrc(virt, i));
 
-        const newContent = allLines.join('\n');
+        this.reloadAndPlaceCursor(allLines.join('\n'), si, so);
+    }
+
+    // Returns VS endpoints in document order: [startPara, startOff, endPara, endOff].
+    private normalizeVsRange(vs: VirtualSelection): [number, number, number, number] {
+        const { anchorParaIdx, anchorViewOff, focusParaIdx, focusViewOff } = vs;
+        return anchorParaIdx <= focusParaIdx
+            ? [anchorParaIdx, anchorViewOff, focusParaIdx, focusViewOff]
+            : [focusParaIdx, focusViewOff, anchorParaIdx, anchorViewOff];
+    }
+
+    // Reloads the editor with newContent and positions the cursor at paragraph si / offset so.
+    // Shared tail of deleteVirtualSelection and removeAnnotationsFromVirtualSelection.
+    private reloadAndPlaceCursor(newContent: string, si: number, so: number): void {
+        const virt = this.virtualizer;
         let cursorViewOffset = 0;
-        for (let i = 0; i < si; i++) cursorViewOffset += virt.getViewLenByIndex(i);
+        if (virt) for (let i = 0; i < si; i++) cursorViewOffset += virt.getViewLenByIndex(i);
         cursorViewOffset += so;
 
         this.inlineEditor.reset();
         this.loadContent(newContent, cursorViewOffset);
+        // loadContent rebuilds the DOM and may shift the scroll position due to spacer width
+        // changes; scrollCursorIntoView('nearest') below keeps the cursor visible.
+        //
         // When so=0, cursorViewOffset equals the cumulative length of paras 0..si-1, which is
         // the same integer as "end of para si-1". setVisibleOffset (using <=) would stop at the
         // last text node of para si-1 rather than the start of para si. Bypass this ambiguity by
-        // placing the cursor directly via the DOM.
-        if (so === 0) {
-            const targetDiv = virt.getWindowDiv(si);
-            if (targetDiv) {
-                const walker = activeDocument.createTreeWalker(targetDiv, NodeFilter.SHOW_TEXT);
-                const firstNode = walker.nextNode() as Text | null;
-                const range = activeDocument.createRange();
-                if (firstNode) { range.setStart(firstNode, 0); }
-                else           { range.setStart(targetDiv, 0); }
-                range.collapse(true);
-                const sel = window.getSelection();
-                sel?.removeAllRanges();
-                sel?.addRange(range);
-            } else {
-                this.setViewCursorOffset(cursorViewOffset);
-            }
-        } else {
-            this.setViewCursorOffset(cursorViewOffset);
-        }
-        // loadContent rebuilds the DOM and may shift the scroll position due to spacer width
-        // changes. Scroll the cursor into view with minimal movement to keep it visible.
+        // placing the cursor directly at the start of the si div via the DOM.
+        const targetDiv = so === 0 && virt ? virt.getWindowDiv(si) : null;
+        if (targetDiv) this.placeCursorAtDivStart(targetDiv);
+        else           this.setViewCursorOffset(cursorViewOffset);
         this.scrollCursorIntoView('nearest');
+    }
+
+    // Places the collapsed cursor at the start of div (its first text node, or the div itself).
+    private placeCursorAtDivStart(div: HTMLElement): void {
+        const walker = activeDocument.createTreeWalker(div, NodeFilter.SHOW_TEXT);
+        const firstNode = walker.nextNode() as Text | null;
+        const range = activeDocument.createRange();
+        if (firstNode) { range.setStart(firstNode, 0); }
+        else           { range.setStart(div, 0); }
+        range.collapse(true);
+        const sel = window.getSelection();
+        sel?.removeAllRanges();
+        sel?.addRange(range);
     }
 
     // Slices an Aozora source string to the visible character range [startViewOff, endViewOff).
@@ -924,10 +903,7 @@ export class EditorElement {
     // In-window paragraphs are serialized from the live DOM; off-window from paragraphRecords.
     private buildClipboardTextFromVirtual(vs: VirtualSelection): string {
         const virt = this.virtualizer!;
-        const { anchorParaIdx, anchorViewOff, focusParaIdx, focusViewOff } = vs;
-        const [si, so, ei, eo] = anchorParaIdx <= focusParaIdx
-            ? [anchorParaIdx, anchorViewOff, focusParaIdx, focusViewOff]
-            : [focusParaIdx, focusViewOff, anchorParaIdx, anchorViewOff];
+        const [si, so, ei, eo] = this.normalizeVsRange(vs);
 
         const parts: string[] = [];
         for (let i = si; i <= ei; i++) {

@@ -4050,8 +4050,7 @@ var EditorElement = class {
   removeAnnotationsFromVirtualSelection(vs) {
     const virt = this.virtualizer;
     if (!virt) return false;
-    const { anchorParaIdx, anchorViewOff, focusParaIdx, focusViewOff } = vs;
-    const [si, so, ei, eo] = anchorParaIdx <= focusParaIdx ? [anchorParaIdx, anchorViewOff, focusParaIdx, focusViewOff] : [focusParaIdx, focusViewOff, anchorParaIdx, anchorViewOff];
+    const [si, so, ei, eo] = this.normalizeVsRange(vs);
     const N = virt.paragraphRecords.length;
     let changed = false;
     const allLines = [];
@@ -4069,34 +4068,7 @@ var EditorElement = class {
       }
     }
     if (!changed) return false;
-    const newContent = allLines.join("\n");
-    let cursorViewOffset = 0;
-    for (let i = 0; i < si; i++) cursorViewOffset += virt.getViewLenByIndex(i);
-    cursorViewOffset += so;
-    this.inlineEditor.reset();
-    this.loadContent(newContent, cursorViewOffset);
-    if (so === 0) {
-      const targetDiv = virt.getWindowDiv(si);
-      if (targetDiv) {
-        const walker = activeDocument.createTreeWalker(targetDiv, NodeFilter.SHOW_TEXT);
-        const firstNode = walker.nextNode();
-        const range = activeDocument.createRange();
-        if (firstNode) {
-          range.setStart(firstNode, 0);
-        } else {
-          range.setStart(targetDiv, 0);
-        }
-        range.collapse(true);
-        const sel = window.getSelection();
-        sel == null ? void 0 : sel.removeAllRanges();
-        sel == null ? void 0 : sel.addRange(range);
-      } else {
-        this.setViewCursorOffset(cursorViewOffset);
-      }
-    } else {
-      this.setViewCursorOffset(cursorViewOffset);
-    }
-    this.scrollCursorIntoView("nearest");
+    this.reloadAndPlaceCursor(allLines.join("\n"), si, so);
     return true;
   }
   // Deletes the content covered by a VirtualSelection. Rebuilds the content from
@@ -4105,8 +4077,7 @@ var EditorElement = class {
   deleteVirtualSelection(vs) {
     const virt = this.virtualizer;
     if (!virt) return;
-    const { anchorParaIdx, anchorViewOff, focusParaIdx, focusViewOff } = vs;
-    const [si, so, ei, eo] = anchorParaIdx <= focusParaIdx ? [anchorParaIdx, anchorViewOff, focusParaIdx, focusViewOff] : [focusParaIdx, focusViewOff, anchorParaIdx, anchorViewOff];
+    const [si, so, ei, eo] = this.normalizeVsRange(vs);
     const N = virt.paragraphRecords.length;
     const allLines = [];
     for (let i = 0; i < si; i++) allLines.push(this.getParaSrc(virt, i));
@@ -4114,34 +4085,41 @@ var EditorElement = class {
       this.sliceAozoraSrcByView(this.getParaSrc(virt, si), 0, so) + this.sliceAozoraSrcByView(this.getParaSrc(virt, ei), eo)
     );
     for (let i = ei + 1; i < N; i++) allLines.push(this.getParaSrc(virt, i));
-    const newContent = allLines.join("\n");
+    this.reloadAndPlaceCursor(allLines.join("\n"), si, so);
+  }
+  // Returns VS endpoints in document order: [startPara, startOff, endPara, endOff].
+  normalizeVsRange(vs) {
+    const { anchorParaIdx, anchorViewOff, focusParaIdx, focusViewOff } = vs;
+    return anchorParaIdx <= focusParaIdx ? [anchorParaIdx, anchorViewOff, focusParaIdx, focusViewOff] : [focusParaIdx, focusViewOff, anchorParaIdx, anchorViewOff];
+  }
+  // Reloads the editor with newContent and positions the cursor at paragraph si / offset so.
+  // Shared tail of deleteVirtualSelection and removeAnnotationsFromVirtualSelection.
+  reloadAndPlaceCursor(newContent, si, so) {
+    const virt = this.virtualizer;
     let cursorViewOffset = 0;
-    for (let i = 0; i < si; i++) cursorViewOffset += virt.getViewLenByIndex(i);
+    if (virt) for (let i = 0; i < si; i++) cursorViewOffset += virt.getViewLenByIndex(i);
     cursorViewOffset += so;
     this.inlineEditor.reset();
     this.loadContent(newContent, cursorViewOffset);
-    if (so === 0) {
-      const targetDiv = virt.getWindowDiv(si);
-      if (targetDiv) {
-        const walker = activeDocument.createTreeWalker(targetDiv, NodeFilter.SHOW_TEXT);
-        const firstNode = walker.nextNode();
-        const range = activeDocument.createRange();
-        if (firstNode) {
-          range.setStart(firstNode, 0);
-        } else {
-          range.setStart(targetDiv, 0);
-        }
-        range.collapse(true);
-        const sel = window.getSelection();
-        sel == null ? void 0 : sel.removeAllRanges();
-        sel == null ? void 0 : sel.addRange(range);
-      } else {
-        this.setViewCursorOffset(cursorViewOffset);
-      }
-    } else {
-      this.setViewCursorOffset(cursorViewOffset);
-    }
+    const targetDiv = so === 0 && virt ? virt.getWindowDiv(si) : null;
+    if (targetDiv) this.placeCursorAtDivStart(targetDiv);
+    else this.setViewCursorOffset(cursorViewOffset);
     this.scrollCursorIntoView("nearest");
+  }
+  // Places the collapsed cursor at the start of div (its first text node, or the div itself).
+  placeCursorAtDivStart(div) {
+    const walker = activeDocument.createTreeWalker(div, NodeFilter.SHOW_TEXT);
+    const firstNode = walker.nextNode();
+    const range = activeDocument.createRange();
+    if (firstNode) {
+      range.setStart(firstNode, 0);
+    } else {
+      range.setStart(div, 0);
+    }
+    range.collapse(true);
+    const sel = window.getSelection();
+    sel == null ? void 0 : sel.removeAllRanges();
+    sel == null ? void 0 : sel.addRange(range);
   }
   // Slices an Aozora source string to the visible character range [startViewOff, endViewOff).
   sliceAozoraSrcByView(src, startViewOff, endViewOff) {
@@ -4155,8 +4133,7 @@ var EditorElement = class {
   // In-window paragraphs are serialized from the live DOM; off-window from paragraphRecords.
   buildClipboardTextFromVirtual(vs) {
     const virt = this.virtualizer;
-    const { anchorParaIdx, anchorViewOff, focusParaIdx, focusViewOff } = vs;
-    const [si, so, ei, eo] = anchorParaIdx <= focusParaIdx ? [anchorParaIdx, anchorViewOff, focusParaIdx, focusViewOff] : [focusParaIdx, focusViewOff, anchorParaIdx, anchorViewOff];
+    const [si, so, ei, eo] = this.normalizeVsRange(vs);
     const parts = [];
     for (let i = si; i <= ei; i++) {
       const src = this.getParaSrc(virt, i);
