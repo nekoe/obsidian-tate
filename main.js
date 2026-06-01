@@ -1598,6 +1598,24 @@ var InlineEditor = class {
   hasAnnotationInSelection() {
     return this.findAnnotationsIntersectingSavedRange().length > 0;
   }
+  // Returns true if savedRange selects content from more than one paragraph div.
+  // Wrap commands only support a single text node, so view.ts blocks multi-paragraph
+  // selections. A triple-click ends at offset 0 of the following paragraph div — that
+  // selects no content from it, so the effective end is the previous paragraph and the
+  // selection is treated as single-paragraph.
+  spansMultipleParagraphs() {
+    const r = this.savedRange;
+    if (!r) return false;
+    const startPara = findParentDivInEditor(r.startContainer, this.el);
+    if (!startPara) return false;
+    let endPara = findParentDivInEditor(r.endContainer, this.el);
+    if (endPara && r.endContainer === endPara && r.endOffset === 0) {
+      const prev = endPara.previousElementSibling;
+      if ((prev == null ? void 0 : prev.instanceOf(HTMLElement)) && prev.tagName === "DIV") endPara = prev;
+    }
+    if (!endPara) return false;
+    return startPara !== endPara;
+  }
   // Removes all annotation elements (ruby/tcy/bouten/heading) that intersect the current
   // savedRange, replacing each with its base text. Returns true if any were removed.
   removeAnnotationsInSelection() {
@@ -3603,6 +3621,10 @@ var EditorElement = class {
   // Returns true if the current selection intersects at least one annotation element.
   hasAnnotationInSelection() {
     return this.inlineEditor.hasAnnotationInSelection();
+  }
+  // Returns true if the current selection spans more than one paragraph.
+  selectionSpansMultipleParagraphs() {
+    return this.inlineEditor.spansMultipleParagraphs();
   }
   // Removes all annotation elements intersecting the current selection, replacing each with
   // its base text. Returns true if any were removed, false if none found.
@@ -5728,7 +5750,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
   applyRuby() {
     var _a;
     if (!this.editorEl) return;
-    if ((_a = this.virtualizer) == null ? void 0 : _a.getVirtualSelection()) {
+    if (((_a = this.virtualizer) == null ? void 0 : _a.getVirtualSelection()) || this.editorEl.selectionSpansMultipleParagraphs()) {
       new import_obsidian6.Notice("\u9078\u629E\u7BC4\u56F2\u304C\u5E83\u3059\u304E\u307E\u3059\u3002\u30C6\u30AD\u30B9\u30C8\u3092\u9078\u629E\u3057\u76F4\u3057\u3066\u304F\u3060\u3055\u3044");
       return;
     }
@@ -5797,7 +5819,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
   applyAnnotation(wrap) {
     var _a, _b;
     if (!this.editorEl) return;
-    if ((_a = this.virtualizer) == null ? void 0 : _a.getVirtualSelection()) {
+    if (((_a = this.virtualizer) == null ? void 0 : _a.getVirtualSelection()) || this.editorEl.selectionSpansMultipleParagraphs()) {
       new import_obsidian6.Notice("\u9078\u629E\u7BC4\u56F2\u304C\u5E83\u3059\u304E\u307E\u3059\u3002\u30C6\u30AD\u30B9\u30C8\u3092\u9078\u629E\u3057\u76F4\u3057\u3066\u304F\u3060\u3055\u3044");
       return;
     }

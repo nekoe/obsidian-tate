@@ -237,6 +237,11 @@ export class EditorElement {
         return this.inlineEditor.hasAnnotationInSelection();
     }
 
+    // Returns true if the current selection spans more than one paragraph.
+    selectionSpansMultipleParagraphs(): boolean {
+        return this.inlineEditor.spansMultipleParagraphs();
+    }
+
     // Removes all annotation elements intersecting the current selection, replacing each with
     // its base text. Returns true if any were removed, false if none found.
     // Routes to removeAnnotationsFromVirtualSelection() when a VirtualSelection is active.

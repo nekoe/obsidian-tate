@@ -1,7 +1,7 @@
 import {
     createTcyEl, createBoutenEl, createHeadingEl,
     insertAnnotationElement,
-    findTcyAncestor, findAncestor,
+    findTcyAncestor, findAncestor, findParentDivInEditor,
     annotationKindOf, isAnnotationElement, ANNOTATION_SELECTOR,
 } from './domHelpers';
 import { CollapseGuard } from './CollapseGuard';
@@ -327,6 +327,25 @@ export class InlineEditor {
     // Used by view.ts to block wrap commands when the selection already contains an annotation.
     hasAnnotationInSelection(): boolean {
         return this.findAnnotationsIntersectingSavedRange().length > 0;
+    }
+
+    // Returns true if savedRange selects content from more than one paragraph div.
+    // Wrap commands only support a single text node, so view.ts blocks multi-paragraph
+    // selections. A triple-click ends at offset 0 of the following paragraph div — that
+    // selects no content from it, so the effective end is the previous paragraph and the
+    // selection is treated as single-paragraph.
+    spansMultipleParagraphs(): boolean {
+        const r = this.savedRange;
+        if (!r) return false;
+        const startPara = findParentDivInEditor(r.startContainer, this.el);
+        if (!startPara) return false;
+        let endPara = findParentDivInEditor(r.endContainer, this.el);
+        if (endPara && r.endContainer === endPara && r.endOffset === 0) {
+            const prev = endPara.previousElementSibling;
+            if (prev?.instanceOf(HTMLElement) && prev.tagName === 'DIV') endPara = prev;
+        }
+        if (!endPara) return false;
+        return startPara !== endPara;
     }
 
     // Removes all annotation elements (ruby/tcy/bouten/heading) that intersect the current
