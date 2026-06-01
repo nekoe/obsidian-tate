@@ -1,8 +1,11 @@
 import {
-    KANJI_RE_STR,
     createRubyEl, createTcyEl, createBoutenEl, createHeadingEl,
     insertAnnotationElement, setCursorAfter, isInsideRuby,
 } from './domHelpers';
+import {
+    EXPLICIT_RUBY, IMPLICIT_RUBY, TCY, BOUTEN, HEADING,
+    completionRegex, headingLevelFromKanji,
+} from './aozoraPatterns';
 
 // Result returned by handleRubyCompletion.
 // When a tate-editing span is created (empty rt), newExpanded carries it so
@@ -31,11 +34,11 @@ export class LiveConverter {
         if (!textBefore.endsWith('》')) return { converted: false };
 
         // Explicit form takes priority: ｜base《rt》 or |base《rt》
-        let match = textBefore.match(/[|｜]([^|｜《》\n]+)《([^《》\n]*)》$/);
+        let match = textBefore.match(completionRegex(EXPLICIT_RUBY));
         let explicit = true;
         if (!match) {
             // Implicit form: preceding run of kanji followed by 《rt》
-            match = textBefore.match(new RegExp(`(${KANJI_RE_STR})《([^《》\\n]*)》$`, 'u'));
+            match = textBefore.match(completionRegex(IMPLICIT_RUBY));
             explicit = false;
         }
         if (!match) return { converted: false };
@@ -79,30 +82,27 @@ export class LiveConverter {
     // Converts a tate-chu-yoko notation just before the cursor to a <span class="tcy"> when ］ is typed.
     // Returns true if a conversion occurred.
     handleTcyCompletion(): boolean {
-        return this.handleAnnotationCompletion('］', /［＃「([^「」\n]+)」は縦中横］$/, createTcyEl);
+        return this.handleAnnotationCompletion('］', completionRegex(TCY), m => createTcyEl(m[1]));
     }
 
     // Converts a bouten notation just before the cursor to a <span class="bouten"> when ］ is typed.
     // Returns true if a conversion occurred.
     handleBoutenCompletion(): boolean {
-        return this.handleAnnotationCompletion('］', /［＃「([^「」\n]+)」に傍点］$/, createBoutenEl);
+        return this.handleAnnotationCompletion('］', completionRegex(BOUTEN), m => createBoutenEl(m[1]));
     }
 
     // Converts a heading notation just before the cursor to a heading span when ］ is typed.
-    // Tries large → mid → small in order; returns true if any conversion occurred.
+    // The level (大/中/小) is read from the match, so a single pass handles all three levels.
     handleHeadingCompletion(): boolean {
-        return (
-            this.handleAnnotationCompletion('］', /［＃「([^「」\n]+)」は大見出し］$/, c => createHeadingEl(c, 'large')) ||
-            this.handleAnnotationCompletion('］', /［＃「([^「」\n]+)」は中見出し］$/, c => createHeadingEl(c, 'mid'))   ||
-            this.handleAnnotationCompletion('］', /［＃「([^「」\n]+)」は小見出し］$/, c => createHeadingEl(c, 'small'))
-        );
+        return this.handleAnnotationCompletion('］', completionRegex(HEADING),
+            m => createHeadingEl(m[1], headingLevelFromKanji(m[2])));
     }
 
     // Shared implementation for live conversions that complete on a terminal character (tcy, bouten).
     private handleAnnotationCompletion(
         endChar: string,
         re: RegExp,
-        createElement: (content: string) => HTMLElement,
+        createElement: (match: RegExpMatchArray) => HTMLElement,
     ): boolean {
         const sel = window.getSelection();
         if (!sel || sel.rangeCount === 0) return false;
@@ -121,7 +121,7 @@ export class LiveConverter {
         const annotationStart = range.startOffset - annotationMatch[0].length;
         if (!textBefore.slice(0, annotationStart).endsWith(content)) return false;
 
-        const newEl = createElement(content);
+        const newEl = createElement(annotationMatch);
         const inserted = insertAnnotationElement(
             textNode, annotationStart - content.length, range.startOffset, newEl,
         );

@@ -1,6 +1,7 @@
 import type { ParagraphRecord } from './ParagraphVirtualizer';
+import { HEADING, scanRegex, headingLevelFromKanji, type HeadingLevel } from './aozoraPatterns';
 
-export type HeadingLevel = 'large' | 'mid' | 'small';
+export type { HeadingLevel };
 
 export interface HeadingEntry {
     text: string;
@@ -9,22 +10,20 @@ export interface HeadingEntry {
     viewOffset: number; // prefix sum of viewLen for paragraphs [0, paragraphIndex)
 }
 
-const HEADING_RE = /［＃「([^「」\n]+)」は(大|中|小)見出し］/g;
-
 // Scans paragraphRecords for heading annotations and returns a flat list of HeadingEntry values.
 // viewOffset is the cumulative visible-text offset of the paragraph containing the heading.
 // Pure function — no DOM or Obsidian API dependencies.
 export function extractHeadings(records: readonly ParagraphRecord[]): HeadingEntry[] {
     const entries: HeadingEntry[] = [];
+    const re = scanRegex(HEADING);
     let viewOffset = 0;
     for (let i = 0; i < records.length; i++) {
         const { src, viewLen } = records[i];
-        HEADING_RE.lastIndex = 0;
+        re.lastIndex = 0;
         let m: RegExpExecArray | null;
-        while ((m = HEADING_RE.exec(src)) !== null) {
+        while ((m = re.exec(src)) !== null) {
             const text = m[1];
-            const level: HeadingLevel =
-                m[2] === '大' ? 'large' : m[2] === '中' ? 'mid' : 'small';
+            const level = headingLevelFromKanji(m[2]);
             entries.push({ text, level, paragraphIndex: i, viewOffset });
         }
         viewOffset += viewLen;

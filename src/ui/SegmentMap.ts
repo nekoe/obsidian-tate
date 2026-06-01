@@ -1,4 +1,7 @@
-import { KANJI_RE_STR } from './domHelpers';
+import {
+    EXPLICIT_RUBY, IMPLICIT_RUBY, TCY, BOUTEN, HEADING,
+    scanRegex, headingLevelFromKanji,
+} from './aozoraPatterns';
 
 export type SegmentKind = 'plain' | 'ruby-explicit' | 'ruby-implicit' | 'tcy' | 'bouten' | 'heading-large' | 'heading-mid' | 'heading-small' | 'newline';
 
@@ -206,8 +209,8 @@ function mapViewLocalToSrc(seg: Segment, local: number): number {
 function tokenize(source: string): ResolvedItem[] {
     let items: PipelineItem[] = [{ resolved: false, raw: source }];
 
-    const tcyRe    = /［＃「([^「」\n]+)」は縦中横］/g;
-    const boutenRe = /［＃「([^「」\n]+)」に傍点］/g;
+    const tcyRe    = scanRegex(TCY);
+    const boutenRe = scanRegex(BOUTEN);
 
     // Recognize each notation in the same order as parseInlineToHtml()
     items = flatScan(items, scanExplicitRuby);
@@ -235,7 +238,7 @@ function flatScan(
 }
 
 function scanExplicitRuby(raw: string): PipelineItem[] {
-    const re = /[|｜]([^|｜《》\n]+)《([^《》\n]*)》/g;
+    const re = scanRegex(EXPLICIT_RUBY);
     const result: PipelineItem[] = [];
     let lastIndex = 0;
     let m: RegExpExecArray | null;
@@ -295,7 +298,7 @@ function scanAnnotation(
 }
 
 function scanImplicitRuby(raw: string): PipelineItem[] {
-    const re = new RegExp(`(${KANJI_RE_STR})《([^《》\\n]*)》`, 'gu');
+    const re = scanRegex(IMPLICIT_RUBY);
     const result: PipelineItem[] = [];
     let lastIndex = 0;
     let m: RegExpExecArray | null;
@@ -320,7 +323,7 @@ function scanImplicitRuby(raw: string): PipelineItem[] {
 // Scans heading annotations: content［＃「content」は(大|中|小)見出し］
 // bracketFixedLen = 10 for all heading levels: ［＃「」は大/中/小見出し］ = 10 chars
 function scanHeadings(raw: string): PipelineItem[] {
-    const re = /［＃「([^「」\n]+)」は(大|中|小)見出し］/g;
+    const re = scanRegex(HEADING);
     const result: PipelineItem[] = [];
     let lastIndex = 0;
     let m: RegExpExecArray | null;
@@ -339,8 +342,8 @@ function scanHeadings(raw: string): PipelineItem[] {
         if (contentStart > lastIndex) {
             result.push({ resolved: false, raw: raw.slice(lastIndex, contentStart) });
         }
-        const kind: 'heading-large' | 'heading-mid' | 'heading-small' =
-            m[2] === '大' ? 'heading-large' : m[2] === '中' ? 'heading-mid' : 'heading-small';
+        const kind = `heading-${headingLevelFromKanji(m[2])}` as
+            'heading-large' | 'heading-mid' | 'heading-small';
         result.push({
             resolved: true, kind,
             srcLen:  content.length * 2 + 10, // content + ［＃「content」は大/中/小見出し］

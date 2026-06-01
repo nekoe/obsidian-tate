@@ -1,4 +1,7 @@
-import { KANJI_RE_STR } from './domHelpers';
+import {
+    EXPLICIT_RUBY, IMPLICIT_RUBY, TCY, BOUTEN, HEADING,
+    scanRegex, headingLevelFromKanji,
+} from './aozoraPatterns';
 
 // Intermediate representation for the parser pipeline
 type ParseSegment = { type: 'text'; text: string } | { type: 'html'; html: string };
@@ -48,7 +51,7 @@ function applyParsers(
 // Splits explicit ruby ｜base《rt》 (or |base《rt》)
 function splitByExplicitRuby(text: string): ParseSegment[] {
     const result: ParseSegment[] = [];
-    const re = /[|｜]([^|｜《》\n]+)《([^《》\n]*)》/g;
+    const re = scanRegex(EXPLICIT_RUBY);
     let lastIndex = 0;
     let m: RegExpExecArray | null;
 
@@ -72,7 +75,7 @@ function splitByExplicitRuby(text: string): ParseSegment[] {
 function splitByExplicitTcy(text: string): ParseSegment[] {
     return splitByAnnotation(
         text,
-        /［＃「([^「」\n]+)」は縦中横］/g,
+        scanRegex(TCY),
         c => `<span data-tcy="explicit" class="tcy">${esc(c)}</span>`,
     );
 }
@@ -81,7 +84,7 @@ function splitByExplicitTcy(text: string): ParseSegment[] {
 function splitByExplicitBouten(text: string): ParseSegment[] {
     return splitByAnnotation(
         text,
-        /［＃「([^「」\n]+)」に傍点］/g,
+        scanRegex(BOUTEN),
         c => `<span data-bouten="sesame" class="bouten">${esc(c)}</span>`,
     );
 }
@@ -123,13 +126,13 @@ function splitByAnnotation(
 // Splits heading content［＃「content」は(大|中|小)見出し］
 function splitByHeadings(text: string): ParseSegment[] {
     const result: ParseSegment[] = [];
-    const re = /［＃「([^「」\n]+)」は(大|中|小)見出し］/g;
+    const re = scanRegex(HEADING);
     let lastIndex = 0;
     let m: RegExpExecArray | null;
 
     while ((m = re.exec(text)) !== null) {
         const content = m[1];
-        const level = m[2] === '大' ? 'large' : m[2] === '中' ? 'mid' : 'small';
+        const level = headingLevelFromKanji(m[2]);
         const annotationStart = m.index;
 
         if (!text.slice(lastIndex, annotationStart).endsWith(content)) {
@@ -156,7 +159,7 @@ function splitByHeadings(text: string): ParseSegment[] {
 
 // Splits implicit ruby kanji《rt》
 function splitByImplicitRuby(text: string): ParseSegment[] {
-    const re = new RegExp(`(${KANJI_RE_STR})《([^《》\\n]*)》`, 'gu');
+    const re = scanRegex(IMPLICIT_RUBY);
     const result: ParseSegment[] = [];
     let lastIndex = 0;
     let m: RegExpExecArray | null;

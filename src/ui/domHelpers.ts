@@ -1,7 +1,9 @@
+import { plainRegex, TCY, BOUTEN, HEADING } from './aozoraPatterns';
+
 // ---- Constants ----
 
-// CJK Unified Ideographs (U+4E00–U+9FFF) + Extension A (U+3400–U+4DBF) + iteration marks
-export const KANJI_RE_STR = '[\u4E00-\u9FFF\u3400-\u4DBF\u{20000}-\u{2A6DF}々〆〤]+';
+// Re-exported for backward compatibility; the canonical definition lives in aozoraPatterns.
+export { KANJI_RE_STR } from './aozoraPatterns';
 
 // ---- Element factories ----
 
@@ -250,11 +252,10 @@ export function computeDomPositionFromViewOff(
 }
 
 export function getExtraCharsFromAnnotation(rawText: string): string {
-    const patterns = [
-        /［＃「([^「」\n]+)」は縦中横］/,
-        /［＃「([^「」\n]+)」に傍点］/,
-        /［＃「([^「」\n]+)」は(大|中|小)見出し］/,
-    ];
+    // Ruby is intentionally excluded: in ｜base《rt》 / kanji《rt》 the base text is not the
+    // backward-referenced content of a bracket annotation, so no leading character can be
+    // absorbed into the preceding text node. Only tcy/bouten/heading need this correction.
+    const patterns = [TCY, BOUTEN, HEADING].map(plainRegex);
     for (const re of patterns) {
         const m = rawText.match(re);
         if (!m || m.index === undefined) continue;

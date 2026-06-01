@@ -223,8 +223,481 @@ var TateSettingTab = class extends import_obsidian.PluginSettingTab {
   }
 };
 
-// src/ui/domHelpers.ts
+// src/ui/aozoraPatterns.ts
 var KANJI_RE_STR = "[\u4E00-\u9FFF\u3400-\u4DBF\u{20000}-\u{2A6DF}\u3005\u3006\u3024]+";
+var EXPLICIT_RUBY = {
+  body: "[|\uFF5C]([^|\uFF5C\u300A\u300B\\n]+)\u300A([^\u300A\u300B\\n]*)\u300B",
+  unicode: false
+};
+var IMPLICIT_RUBY = {
+  body: `(${KANJI_RE_STR})\u300A([^\u300A\u300B\\n]*)\u300B`,
+  unicode: true
+};
+var TCY = {
+  body: "\uFF3B\uFF03\u300C([^\u300C\u300D\\n]+)\u300D\u306F\u7E26\u4E2D\u6A2A\uFF3D",
+  unicode: false
+};
+var BOUTEN = {
+  body: "\uFF3B\uFF03\u300C([^\u300C\u300D\\n]+)\u300D\u306B\u508D\u70B9\uFF3D",
+  unicode: false
+};
+var HEADING = {
+  body: "\uFF3B\uFF03\u300C([^\u300C\u300D\\n]+)\u300D\u306F(\u5927|\u4E2D|\u5C0F)\u898B\u51FA\u3057\uFF3D",
+  unicode: false
+};
+function scanRegex(p) {
+  return new RegExp(p.body, p.unicode ? "gu" : "g");
+}
+function completionRegex(p) {
+  return new RegExp(p.body + "$", p.unicode ? "u" : "");
+}
+function plainRegex(p) {
+  return new RegExp(p.body, p.unicode ? "u" : "");
+}
+function headingLevelFromKanji(kanji) {
+  return kanji === "\u5927" ? "large" : kanji === "\u4E2D" ? "mid" : "small";
+}
+
+// src/ui/SegmentMap.ts
+function buildSegmentMap(source) {
+  const tokens = tokenize(source);
+  const segments = [];
+  let srcPos = 0;
+  let viewPos = 0;
+  for (const tok of tokens) {
+    const seg = {
+      kind: tok.kind,
+      srcStart: srcPos,
+      srcLen: tok.srcLen,
+      viewStart: viewPos,
+      viewLen: tok.viewLen
+    };
+    if (tok.baseLen !== void 0) seg.baseLen = tok.baseLen;
+    if (tok.rtLen !== void 0) seg.rtLen = tok.rtLen;
+    segments.push(seg);
+    srcPos += tok.srcLen;
+    viewPos += tok.viewLen;
+  }
+  return segments;
+}
+function srcToView(segs, srcOffset) {
+  for (const seg of segs) {
+    if (srcOffset < seg.srcStart) break;
+    if (srcOffset < seg.srcStart + seg.srcLen) {
+      return mapSrcLocalToView(seg, srcOffset - seg.srcStart);
+    }
+  }
+  if (segs.length === 0) return 0;
+  const last = segs[segs.length - 1];
+  return last.viewStart + last.viewLen;
+}
+function viewToSrc(segs, viewOffset) {
+  for (const seg of segs) {
+    if (seg.viewLen === 0) continue;
+    if (viewOffset < seg.viewStart + seg.viewLen) {
+      const local = Math.max(0, viewOffset - seg.viewStart);
+      return mapViewLocalToSrc(seg, local);
+    }
+  }
+  if (segs.length === 0) return 0;
+  const last = segs[segs.length - 1];
+  return last.srcStart + last.srcLen;
+}
+function stripAnnotationsInSrcRange(src, segs, startViewOff, endViewOff) {
+  var _a, _b;
+  let result = "";
+  for (const seg of segs) {
+    const chunk = src.slice(seg.srcStart, seg.srcStart + seg.srcLen);
+    if (seg.kind === "plain" || seg.kind === "newline") {
+      result += chunk;
+      continue;
+    }
+    const overlaps = seg.viewStart < endViewOff && seg.viewStart + seg.viewLen > startViewOff;
+    if (!overlaps) {
+      result += chunk;
+      continue;
+    }
+    if (seg.kind === "ruby-explicit") {
+      result += src.slice(seg.srcStart + 1, seg.srcStart + 1 + ((_a = seg.baseLen) != null ? _a : seg.viewLen));
+    } else if (seg.kind === "ruby-implicit") {
+      result += src.slice(seg.srcStart, seg.srcStart + ((_b = seg.baseLen) != null ? _b : seg.viewLen));
+    } else {
+      result += src.slice(seg.srcStart, seg.srcStart + seg.viewLen);
+    }
+  }
+  return result;
+}
+function mapSrcLocalToView(seg, local) {
+  var _a, _b;
+  switch (seg.kind) {
+    case "plain":
+    case "newline":
+      return seg.viewStart + local;
+    case "ruby-explicit": {
+      const baseLen = (_a = seg.baseLen) != null ? _a : seg.viewLen;
+      if (local === 0) return seg.viewStart;
+      if (local <= baseLen) return seg.viewStart + local - 1;
+      return seg.viewStart + seg.viewLen;
+    }
+    case "ruby-implicit": {
+      const baseLen = (_b = seg.baseLen) != null ? _b : seg.viewLen;
+      if (local <= baseLen) return seg.viewStart + local;
+      return seg.viewStart + seg.viewLen;
+    }
+    case "tcy":
+    case "bouten":
+    case "heading-large":
+    case "heading-mid":
+    case "heading-small": {
+      if (local <= seg.viewLen) return seg.viewStart + local;
+      return seg.viewStart + seg.viewLen;
+    }
+  }
+}
+function mapViewLocalToSrc(seg, local) {
+  switch (seg.kind) {
+    case "plain":
+    case "newline":
+      return seg.srcStart + local;
+    case "ruby-explicit":
+      return seg.srcStart + 1 + local;
+    case "ruby-implicit":
+    case "tcy":
+    case "bouten":
+    case "heading-large":
+    case "heading-mid":
+    case "heading-small":
+      return seg.srcStart + local;
+  }
+}
+function tokenize(source) {
+  let items = [{ resolved: false, raw: source }];
+  const tcyRe = scanRegex(TCY);
+  const boutenRe = scanRegex(BOUTEN);
+  items = flatScan(items, scanExplicitRuby);
+  items = flatScan(items, (raw) => scanAnnotation(raw, tcyRe, "tcy", 9));
+  items = flatScan(items, (raw) => scanAnnotation(raw, boutenRe, "bouten", 8));
+  items = flatScan(items, scanHeadings);
+  items = flatScan(items, scanImplicitRuby);
+  items = flatScan(items, scanNewlines);
+  return items.map((item) => {
+    if (!item.resolved) {
+      const len = item.raw.length;
+      return { resolved: true, kind: "plain", srcLen: len, viewLen: len };
+    }
+    return item;
+  });
+}
+function flatScan(items, scanner) {
+  return items.flatMap((item) => item.resolved ? [item] : scanner(item.raw));
+}
+function scanExplicitRuby(raw) {
+  const re = scanRegex(EXPLICIT_RUBY);
+  const result = [];
+  let lastIndex = 0;
+  let m;
+  while ((m = re.exec(raw)) !== null) {
+    if (m.index > lastIndex) {
+      result.push({ resolved: false, raw: raw.slice(lastIndex, m.index) });
+    }
+    const baseLen = m[1].length;
+    const rtLen = m[2].length;
+    result.push({
+      resolved: true,
+      kind: "ruby-explicit",
+      srcLen: baseLen + rtLen + 3,
+      // ｜ + base + 《 + rt + 》
+      viewLen: baseLen,
+      baseLen,
+      rtLen
+    });
+    lastIndex = re.lastIndex;
+  }
+  if (lastIndex < raw.length) result.push({ resolved: false, raw: raw.slice(lastIndex) });
+  return result;
+}
+function scanAnnotation(raw, re, kind, bracketFixedLen) {
+  re.lastIndex = 0;
+  const result = [];
+  let lastIndex = 0;
+  let m;
+  while ((m = re.exec(raw)) !== null) {
+    const content = m[1];
+    const annotationStart = m.index;
+    if (!raw.slice(lastIndex, annotationStart).endsWith(content)) {
+      result.push({ resolved: false, raw: raw.slice(lastIndex, re.lastIndex) });
+      lastIndex = re.lastIndex;
+      continue;
+    }
+    const contentStart = annotationStart - content.length;
+    if (contentStart > lastIndex) {
+      result.push({ resolved: false, raw: raw.slice(lastIndex, contentStart) });
+    }
+    result.push({
+      resolved: true,
+      kind,
+      srcLen: content.length * 2 + bracketFixedLen,
+      // content + ［＃「content」...］
+      viewLen: content.length
+    });
+    lastIndex = re.lastIndex;
+  }
+  if (lastIndex < raw.length) result.push({ resolved: false, raw: raw.slice(lastIndex) });
+  return result;
+}
+function scanImplicitRuby(raw) {
+  const re = scanRegex(IMPLICIT_RUBY);
+  const result = [];
+  let lastIndex = 0;
+  let m;
+  while ((m = re.exec(raw)) !== null) {
+    if (m.index > lastIndex) {
+      result.push({ resolved: false, raw: raw.slice(lastIndex, m.index) });
+    }
+    const baseLen = m[1].length;
+    const rtLen = m[2].length;
+    result.push({
+      resolved: true,
+      kind: "ruby-implicit",
+      srcLen: baseLen + rtLen + 2,
+      // base + 《 + rt + 》
+      viewLen: baseLen,
+      baseLen,
+      rtLen
+    });
+    lastIndex = re.lastIndex;
+  }
+  if (lastIndex < raw.length) result.push({ resolved: false, raw: raw.slice(lastIndex) });
+  return result;
+}
+function scanHeadings(raw) {
+  const re = scanRegex(HEADING);
+  const result = [];
+  let lastIndex = 0;
+  let m;
+  while ((m = re.exec(raw)) !== null) {
+    const content = m[1];
+    const annotationStart = m.index;
+    if (!raw.slice(lastIndex, annotationStart).endsWith(content)) {
+      result.push({ resolved: false, raw: raw.slice(lastIndex, re.lastIndex) });
+      lastIndex = re.lastIndex;
+      continue;
+    }
+    const contentStart = annotationStart - content.length;
+    if (contentStart > lastIndex) {
+      result.push({ resolved: false, raw: raw.slice(lastIndex, contentStart) });
+    }
+    const kind = `heading-${headingLevelFromKanji(m[2])}`;
+    result.push({
+      resolved: true,
+      kind,
+      srcLen: content.length * 2 + 10,
+      // content + ［＃「content」は大/中/小見出し］
+      viewLen: content.length
+    });
+    lastIndex = re.lastIndex;
+  }
+  if (lastIndex < raw.length) result.push({ resolved: false, raw: raw.slice(lastIndex) });
+  return result;
+}
+function scanNewlines(raw) {
+  const parts = raw.split("\n");
+  const result = [];
+  for (let i = 0; i < parts.length; i++) {
+    if (parts[i].length > 0) result.push({ resolved: false, raw: parts[i] });
+    if (i < parts.length - 1) {
+      result.push({ resolved: true, kind: "newline", srcLen: 1, viewLen: 0 });
+    }
+  }
+  return result;
+}
+
+// src/ui/AozoraParser.ts
+function parseToHtml(text) {
+  if (!text) return "<div><br></div>";
+  return text.split("\n").map((line) => `<div>${parseInlineToHtml(line) || "<br>"}</div>`).join("");
+}
+function parseInlineToHtml(text) {
+  return applyParsers(text, [
+    splitByExplicitRuby,
+    splitByExplicitTcy,
+    splitByExplicitBouten,
+    splitByHeadings,
+    splitByImplicitRuby
+  ]);
+}
+function applyParsers(text, parsers) {
+  let segments = [{ type: "text", text }];
+  for (const parser of parsers) {
+    segments = segments.flatMap(
+      (seg) => seg.type === "text" ? parser(seg.text) : [seg]
+    );
+  }
+  return segments.map((seg) => seg.type === "html" ? seg.html : esc(seg.text)).join("");
+}
+function splitByExplicitRuby(text) {
+  const result = [];
+  const re = scanRegex(EXPLICIT_RUBY);
+  let lastIndex = 0;
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    if (m.index > lastIndex) {
+      result.push({ type: "text", text: text.slice(lastIndex, m.index) });
+    }
+    result.push({
+      type: "html",
+      html: `<ruby data-ruby-explicit="true" data-rt="${esc(m[2])}">${esc(m[1])}</ruby>`
+    });
+    lastIndex = re.lastIndex;
+  }
+  if (lastIndex < text.length) {
+    result.push({ type: "text", text: text.slice(lastIndex) });
+  }
+  return result;
+}
+function splitByExplicitTcy(text) {
+  return splitByAnnotation(
+    text,
+    scanRegex(TCY),
+    (c) => `<span data-tcy="explicit" class="tcy">${esc(c)}</span>`
+  );
+}
+function splitByExplicitBouten(text) {
+  return splitByAnnotation(
+    text,
+    scanRegex(BOUTEN),
+    (c) => `<span data-bouten="sesame" class="bouten">${esc(c)}</span>`
+  );
+}
+function splitByAnnotation(text, re, buildHtml) {
+  const result = [];
+  let lastIndex = 0;
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    const content = m[1];
+    const annotationStart = m.index;
+    if (!text.slice(lastIndex, annotationStart).endsWith(content)) {
+      result.push({ type: "text", text: text.slice(lastIndex, re.lastIndex) });
+      lastIndex = re.lastIndex;
+      continue;
+    }
+    const contentStart = annotationStart - content.length;
+    if (contentStart > lastIndex) {
+      result.push({ type: "text", text: text.slice(lastIndex, contentStart) });
+    }
+    result.push({ type: "html", html: buildHtml(content) });
+    lastIndex = re.lastIndex;
+  }
+  if (lastIndex < text.length) {
+    result.push({ type: "text", text: text.slice(lastIndex) });
+  }
+  return result;
+}
+function splitByHeadings(text) {
+  const result = [];
+  const re = scanRegex(HEADING);
+  let lastIndex = 0;
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    const content = m[1];
+    const level = headingLevelFromKanji(m[2]);
+    const annotationStart = m.index;
+    if (!text.slice(lastIndex, annotationStart).endsWith(content)) {
+      result.push({ type: "text", text: text.slice(lastIndex, re.lastIndex) });
+      lastIndex = re.lastIndex;
+      continue;
+    }
+    const contentStart = annotationStart - content.length;
+    if (contentStart > lastIndex) {
+      result.push({ type: "text", text: text.slice(lastIndex, contentStart) });
+    }
+    result.push({
+      type: "html",
+      html: `<span class="tate-heading tate-heading-${level}" data-heading="${level}">${esc(content)}</span>`
+    });
+    lastIndex = re.lastIndex;
+  }
+  if (lastIndex < text.length) {
+    result.push({ type: "text", text: text.slice(lastIndex) });
+  }
+  return result;
+}
+function splitByImplicitRuby(text) {
+  const re = scanRegex(IMPLICIT_RUBY);
+  const result = [];
+  let lastIndex = 0;
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    if (m.index > lastIndex) {
+      result.push({ type: "text", text: text.slice(lastIndex, m.index) });
+    }
+    result.push({
+      type: "html",
+      html: `<ruby data-ruby-explicit="false" data-rt="${esc(m[2])}">${esc(m[1])}</ruby>`
+    });
+    lastIndex = re.lastIndex;
+  }
+  if (lastIndex < text.length) {
+    result.push({ type: "text", text: text.slice(lastIndex) });
+  }
+  return result;
+}
+function esc(text) {
+  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+function serializeNode(node, rootEl) {
+  var _a, _b, _c, _d, _e, _f;
+  if (node.nodeType === Node.TEXT_NODE) {
+    return (_a = node.textContent) != null ? _a : "";
+  }
+  if (!node.instanceOf(HTMLElement)) return "";
+  switch (node.tagName) {
+    case "RUBY": {
+      const explicit = node.getAttribute("data-ruby-explicit") !== "false";
+      const base = Array.from(node.childNodes).map((n) => serializeNode(n, rootEl)).join("");
+      if (!base) return "";
+      const rt = (_b = node.getAttribute("data-rt")) != null ? _b : "";
+      return explicit ? `\uFF5C${base}\u300A${rt}\u300B` : `${base}\u300A${rt}\u300B`;
+    }
+    case "SPAN": {
+      const tcy = node.getAttribute("data-tcy");
+      if (tcy === "explicit") {
+        const content = (_c = node.textContent) != null ? _c : "";
+        if (!content) return "";
+        return `${content}\uFF3B\uFF03\u300C${content}\u300D\u306F\u7E26\u4E2D\u6A2A\uFF3D`;
+      }
+      if (node.getAttribute("data-bouten")) {
+        const content = (_d = node.textContent) != null ? _d : "";
+        if (!content) return "";
+        return `${content}\uFF3B\uFF03\u300C${content}\u300D\u306B\u508D\u70B9\uFF3D`;
+      }
+      const heading = node.getAttribute("data-heading");
+      if (heading === "large" || heading === "mid" || heading === "small") {
+        const suffix = heading === "large" ? "\u5927\u898B\u51FA\u3057" : heading === "mid" ? "\u4E2D\u898B\u51FA\u3057" : "\u5C0F\u898B\u51FA\u3057";
+        const content = Array.from(node.childNodes).map((n) => serializeNode(n, rootEl)).join("");
+        if (!content) return "";
+        return `${content}\uFF3B\uFF03\u300C${content}\u300D\u306F${suffix}\uFF3D`;
+      }
+      if (node.classList.contains("tate-cursor-anchor")) {
+        return ((_e = node.textContent) != null ? _e : "").replace(/\u200B/g, "");
+      }
+      return Array.from(node.childNodes).map((n) => serializeNode(n, rootEl)).join("");
+    }
+    case "BR":
+      if (node.parentElement !== rootEl && ((_f = node.parentElement) == null ? void 0 : _f.tagName) === "DIV" && node === node.parentElement.lastChild) {
+        return "";
+      }
+      return "\n";
+    case "DIV": {
+      const content = Array.from(node.childNodes).map((n) => serializeNode(n, rootEl)).join("");
+      return node.previousSibling !== null ? "\n" + content : content;
+    }
+    default:
+      return Array.from(node.childNodes).map((n) => serializeNode(n, rootEl)).join("");
+  }
+}
+
+// src/ui/domHelpers.ts
 function createRubyEl(base, rt, explicit) {
   const rubyEl = activeDocument.createElement("ruby");
   rubyEl.setAttribute("data-ruby-explicit", String(explicit));
@@ -396,11 +869,7 @@ function computeDomPositionFromViewOff(div, editorEl, viewOff) {
   return { node: div, offset: div.childNodes.length };
 }
 function getExtraCharsFromAnnotation(rawText) {
-  const patterns = [
-    /［＃「([^「」\n]+)」は縦中横］/,
-    /［＃「([^「」\n]+)」に傍点］/,
-    /［＃「([^「」\n]+)」は(大|中|小)見出し］/
-  ];
+  const patterns = [TCY, BOUTEN, HEADING].map(plainRegex);
   for (const re of patterns) {
     const m = rawText.match(re);
     if (!m || m.index === void 0) continue;
@@ -422,445 +891,6 @@ function findParentDivInEditor(node, editorEl) {
     current = current.parentElement;
   }
   return null;
-}
-
-// src/ui/SegmentMap.ts
-function buildSegmentMap(source) {
-  const tokens = tokenize(source);
-  const segments = [];
-  let srcPos = 0;
-  let viewPos = 0;
-  for (const tok of tokens) {
-    const seg = {
-      kind: tok.kind,
-      srcStart: srcPos,
-      srcLen: tok.srcLen,
-      viewStart: viewPos,
-      viewLen: tok.viewLen
-    };
-    if (tok.baseLen !== void 0) seg.baseLen = tok.baseLen;
-    if (tok.rtLen !== void 0) seg.rtLen = tok.rtLen;
-    segments.push(seg);
-    srcPos += tok.srcLen;
-    viewPos += tok.viewLen;
-  }
-  return segments;
-}
-function srcToView(segs, srcOffset) {
-  for (const seg of segs) {
-    if (srcOffset < seg.srcStart) break;
-    if (srcOffset < seg.srcStart + seg.srcLen) {
-      return mapSrcLocalToView(seg, srcOffset - seg.srcStart);
-    }
-  }
-  if (segs.length === 0) return 0;
-  const last = segs[segs.length - 1];
-  return last.viewStart + last.viewLen;
-}
-function viewToSrc(segs, viewOffset) {
-  for (const seg of segs) {
-    if (seg.viewLen === 0) continue;
-    if (viewOffset < seg.viewStart + seg.viewLen) {
-      const local = Math.max(0, viewOffset - seg.viewStart);
-      return mapViewLocalToSrc(seg, local);
-    }
-  }
-  if (segs.length === 0) return 0;
-  const last = segs[segs.length - 1];
-  return last.srcStart + last.srcLen;
-}
-function stripAnnotationsInSrcRange(src, segs, startViewOff, endViewOff) {
-  var _a, _b;
-  let result = "";
-  for (const seg of segs) {
-    const chunk = src.slice(seg.srcStart, seg.srcStart + seg.srcLen);
-    if (seg.kind === "plain" || seg.kind === "newline") {
-      result += chunk;
-      continue;
-    }
-    const overlaps = seg.viewStart < endViewOff && seg.viewStart + seg.viewLen > startViewOff;
-    if (!overlaps) {
-      result += chunk;
-      continue;
-    }
-    if (seg.kind === "ruby-explicit") {
-      result += src.slice(seg.srcStart + 1, seg.srcStart + 1 + ((_a = seg.baseLen) != null ? _a : seg.viewLen));
-    } else if (seg.kind === "ruby-implicit") {
-      result += src.slice(seg.srcStart, seg.srcStart + ((_b = seg.baseLen) != null ? _b : seg.viewLen));
-    } else {
-      result += src.slice(seg.srcStart, seg.srcStart + seg.viewLen);
-    }
-  }
-  return result;
-}
-function mapSrcLocalToView(seg, local) {
-  var _a, _b;
-  switch (seg.kind) {
-    case "plain":
-    case "newline":
-      return seg.viewStart + local;
-    case "ruby-explicit": {
-      const baseLen = (_a = seg.baseLen) != null ? _a : seg.viewLen;
-      if (local === 0) return seg.viewStart;
-      if (local <= baseLen) return seg.viewStart + local - 1;
-      return seg.viewStart + seg.viewLen;
-    }
-    case "ruby-implicit": {
-      const baseLen = (_b = seg.baseLen) != null ? _b : seg.viewLen;
-      if (local <= baseLen) return seg.viewStart + local;
-      return seg.viewStart + seg.viewLen;
-    }
-    case "tcy":
-    case "bouten":
-    case "heading-large":
-    case "heading-mid":
-    case "heading-small": {
-      if (local <= seg.viewLen) return seg.viewStart + local;
-      return seg.viewStart + seg.viewLen;
-    }
-  }
-}
-function mapViewLocalToSrc(seg, local) {
-  switch (seg.kind) {
-    case "plain":
-    case "newline":
-      return seg.srcStart + local;
-    case "ruby-explicit":
-      return seg.srcStart + 1 + local;
-    case "ruby-implicit":
-    case "tcy":
-    case "bouten":
-    case "heading-large":
-    case "heading-mid":
-    case "heading-small":
-      return seg.srcStart + local;
-  }
-}
-function tokenize(source) {
-  let items = [{ resolved: false, raw: source }];
-  const tcyRe = /［＃「([^「」\n]+)」は縦中横］/g;
-  const boutenRe = /［＃「([^「」\n]+)」に傍点］/g;
-  items = flatScan(items, scanExplicitRuby);
-  items = flatScan(items, (raw) => scanAnnotation(raw, tcyRe, "tcy", 9));
-  items = flatScan(items, (raw) => scanAnnotation(raw, boutenRe, "bouten", 8));
-  items = flatScan(items, scanHeadings);
-  items = flatScan(items, scanImplicitRuby);
-  items = flatScan(items, scanNewlines);
-  return items.map((item) => {
-    if (!item.resolved) {
-      const len = item.raw.length;
-      return { resolved: true, kind: "plain", srcLen: len, viewLen: len };
-    }
-    return item;
-  });
-}
-function flatScan(items, scanner) {
-  return items.flatMap((item) => item.resolved ? [item] : scanner(item.raw));
-}
-function scanExplicitRuby(raw) {
-  const re = /[|｜]([^|｜《》\n]+)《([^《》\n]*)》/g;
-  const result = [];
-  let lastIndex = 0;
-  let m;
-  while ((m = re.exec(raw)) !== null) {
-    if (m.index > lastIndex) {
-      result.push({ resolved: false, raw: raw.slice(lastIndex, m.index) });
-    }
-    const baseLen = m[1].length;
-    const rtLen = m[2].length;
-    result.push({
-      resolved: true,
-      kind: "ruby-explicit",
-      srcLen: baseLen + rtLen + 3,
-      // ｜ + base + 《 + rt + 》
-      viewLen: baseLen,
-      baseLen,
-      rtLen
-    });
-    lastIndex = re.lastIndex;
-  }
-  if (lastIndex < raw.length) result.push({ resolved: false, raw: raw.slice(lastIndex) });
-  return result;
-}
-function scanAnnotation(raw, re, kind, bracketFixedLen) {
-  re.lastIndex = 0;
-  const result = [];
-  let lastIndex = 0;
-  let m;
-  while ((m = re.exec(raw)) !== null) {
-    const content = m[1];
-    const annotationStart = m.index;
-    if (!raw.slice(lastIndex, annotationStart).endsWith(content)) {
-      result.push({ resolved: false, raw: raw.slice(lastIndex, re.lastIndex) });
-      lastIndex = re.lastIndex;
-      continue;
-    }
-    const contentStart = annotationStart - content.length;
-    if (contentStart > lastIndex) {
-      result.push({ resolved: false, raw: raw.slice(lastIndex, contentStart) });
-    }
-    result.push({
-      resolved: true,
-      kind,
-      srcLen: content.length * 2 + bracketFixedLen,
-      // content + ［＃「content」...］
-      viewLen: content.length
-    });
-    lastIndex = re.lastIndex;
-  }
-  if (lastIndex < raw.length) result.push({ resolved: false, raw: raw.slice(lastIndex) });
-  return result;
-}
-function scanImplicitRuby(raw) {
-  const re = new RegExp(`(${KANJI_RE_STR})\u300A([^\u300A\u300B\\n]*)\u300B`, "gu");
-  const result = [];
-  let lastIndex = 0;
-  let m;
-  while ((m = re.exec(raw)) !== null) {
-    if (m.index > lastIndex) {
-      result.push({ resolved: false, raw: raw.slice(lastIndex, m.index) });
-    }
-    const baseLen = m[1].length;
-    const rtLen = m[2].length;
-    result.push({
-      resolved: true,
-      kind: "ruby-implicit",
-      srcLen: baseLen + rtLen + 2,
-      // base + 《 + rt + 》
-      viewLen: baseLen,
-      baseLen,
-      rtLen
-    });
-    lastIndex = re.lastIndex;
-  }
-  if (lastIndex < raw.length) result.push({ resolved: false, raw: raw.slice(lastIndex) });
-  return result;
-}
-function scanHeadings(raw) {
-  const re = /［＃「([^「」\n]+)」は(大|中|小)見出し］/g;
-  const result = [];
-  let lastIndex = 0;
-  let m;
-  while ((m = re.exec(raw)) !== null) {
-    const content = m[1];
-    const annotationStart = m.index;
-    if (!raw.slice(lastIndex, annotationStart).endsWith(content)) {
-      result.push({ resolved: false, raw: raw.slice(lastIndex, re.lastIndex) });
-      lastIndex = re.lastIndex;
-      continue;
-    }
-    const contentStart = annotationStart - content.length;
-    if (contentStart > lastIndex) {
-      result.push({ resolved: false, raw: raw.slice(lastIndex, contentStart) });
-    }
-    const kind = m[2] === "\u5927" ? "heading-large" : m[2] === "\u4E2D" ? "heading-mid" : "heading-small";
-    result.push({
-      resolved: true,
-      kind,
-      srcLen: content.length * 2 + 10,
-      // content + ［＃「content」は大/中/小見出し］
-      viewLen: content.length
-    });
-    lastIndex = re.lastIndex;
-  }
-  if (lastIndex < raw.length) result.push({ resolved: false, raw: raw.slice(lastIndex) });
-  return result;
-}
-function scanNewlines(raw) {
-  const parts = raw.split("\n");
-  const result = [];
-  for (let i = 0; i < parts.length; i++) {
-    if (parts[i].length > 0) result.push({ resolved: false, raw: parts[i] });
-    if (i < parts.length - 1) {
-      result.push({ resolved: true, kind: "newline", srcLen: 1, viewLen: 0 });
-    }
-  }
-  return result;
-}
-
-// src/ui/AozoraParser.ts
-function parseToHtml(text) {
-  if (!text) return "<div><br></div>";
-  return text.split("\n").map((line) => `<div>${parseInlineToHtml(line) || "<br>"}</div>`).join("");
-}
-function parseInlineToHtml(text) {
-  return applyParsers(text, [
-    splitByExplicitRuby,
-    splitByExplicitTcy,
-    splitByExplicitBouten,
-    splitByHeadings,
-    splitByImplicitRuby
-  ]);
-}
-function applyParsers(text, parsers) {
-  let segments = [{ type: "text", text }];
-  for (const parser of parsers) {
-    segments = segments.flatMap(
-      (seg) => seg.type === "text" ? parser(seg.text) : [seg]
-    );
-  }
-  return segments.map((seg) => seg.type === "html" ? seg.html : esc(seg.text)).join("");
-}
-function splitByExplicitRuby(text) {
-  const result = [];
-  const re = /[|｜]([^|｜《》\n]+)《([^《》\n]*)》/g;
-  let lastIndex = 0;
-  let m;
-  while ((m = re.exec(text)) !== null) {
-    if (m.index > lastIndex) {
-      result.push({ type: "text", text: text.slice(lastIndex, m.index) });
-    }
-    result.push({
-      type: "html",
-      html: `<ruby data-ruby-explicit="true" data-rt="${esc(m[2])}">${esc(m[1])}</ruby>`
-    });
-    lastIndex = re.lastIndex;
-  }
-  if (lastIndex < text.length) {
-    result.push({ type: "text", text: text.slice(lastIndex) });
-  }
-  return result;
-}
-function splitByExplicitTcy(text) {
-  return splitByAnnotation(
-    text,
-    /［＃「([^「」\n]+)」は縦中横］/g,
-    (c) => `<span data-tcy="explicit" class="tcy">${esc(c)}</span>`
-  );
-}
-function splitByExplicitBouten(text) {
-  return splitByAnnotation(
-    text,
-    /［＃「([^「」\n]+)」に傍点］/g,
-    (c) => `<span data-bouten="sesame" class="bouten">${esc(c)}</span>`
-  );
-}
-function splitByAnnotation(text, re, buildHtml) {
-  const result = [];
-  let lastIndex = 0;
-  let m;
-  while ((m = re.exec(text)) !== null) {
-    const content = m[1];
-    const annotationStart = m.index;
-    if (!text.slice(lastIndex, annotationStart).endsWith(content)) {
-      result.push({ type: "text", text: text.slice(lastIndex, re.lastIndex) });
-      lastIndex = re.lastIndex;
-      continue;
-    }
-    const contentStart = annotationStart - content.length;
-    if (contentStart > lastIndex) {
-      result.push({ type: "text", text: text.slice(lastIndex, contentStart) });
-    }
-    result.push({ type: "html", html: buildHtml(content) });
-    lastIndex = re.lastIndex;
-  }
-  if (lastIndex < text.length) {
-    result.push({ type: "text", text: text.slice(lastIndex) });
-  }
-  return result;
-}
-function splitByHeadings(text) {
-  const result = [];
-  const re = /［＃「([^「」\n]+)」は(大|中|小)見出し］/g;
-  let lastIndex = 0;
-  let m;
-  while ((m = re.exec(text)) !== null) {
-    const content = m[1];
-    const level = m[2] === "\u5927" ? "large" : m[2] === "\u4E2D" ? "mid" : "small";
-    const annotationStart = m.index;
-    if (!text.slice(lastIndex, annotationStart).endsWith(content)) {
-      result.push({ type: "text", text: text.slice(lastIndex, re.lastIndex) });
-      lastIndex = re.lastIndex;
-      continue;
-    }
-    const contentStart = annotationStart - content.length;
-    if (contentStart > lastIndex) {
-      result.push({ type: "text", text: text.slice(lastIndex, contentStart) });
-    }
-    result.push({
-      type: "html",
-      html: `<span class="tate-heading tate-heading-${level}" data-heading="${level}">${esc(content)}</span>`
-    });
-    lastIndex = re.lastIndex;
-  }
-  if (lastIndex < text.length) {
-    result.push({ type: "text", text: text.slice(lastIndex) });
-  }
-  return result;
-}
-function splitByImplicitRuby(text) {
-  const re = new RegExp(`(${KANJI_RE_STR})\u300A([^\u300A\u300B\\n]*)\u300B`, "gu");
-  const result = [];
-  let lastIndex = 0;
-  let m;
-  while ((m = re.exec(text)) !== null) {
-    if (m.index > lastIndex) {
-      result.push({ type: "text", text: text.slice(lastIndex, m.index) });
-    }
-    result.push({
-      type: "html",
-      html: `<ruby data-ruby-explicit="false" data-rt="${esc(m[2])}">${esc(m[1])}</ruby>`
-    });
-    lastIndex = re.lastIndex;
-  }
-  if (lastIndex < text.length) {
-    result.push({ type: "text", text: text.slice(lastIndex) });
-  }
-  return result;
-}
-function esc(text) {
-  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-}
-function serializeNode(node, rootEl) {
-  var _a, _b, _c, _d, _e, _f;
-  if (node.nodeType === Node.TEXT_NODE) {
-    return (_a = node.textContent) != null ? _a : "";
-  }
-  if (!node.instanceOf(HTMLElement)) return "";
-  switch (node.tagName) {
-    case "RUBY": {
-      const explicit = node.getAttribute("data-ruby-explicit") !== "false";
-      const base = Array.from(node.childNodes).map((n) => serializeNode(n, rootEl)).join("");
-      if (!base) return "";
-      const rt = (_b = node.getAttribute("data-rt")) != null ? _b : "";
-      return explicit ? `\uFF5C${base}\u300A${rt}\u300B` : `${base}\u300A${rt}\u300B`;
-    }
-    case "SPAN": {
-      const tcy = node.getAttribute("data-tcy");
-      if (tcy === "explicit") {
-        const content = (_c = node.textContent) != null ? _c : "";
-        if (!content) return "";
-        return `${content}\uFF3B\uFF03\u300C${content}\u300D\u306F\u7E26\u4E2D\u6A2A\uFF3D`;
-      }
-      if (node.getAttribute("data-bouten")) {
-        const content = (_d = node.textContent) != null ? _d : "";
-        if (!content) return "";
-        return `${content}\uFF3B\uFF03\u300C${content}\u300D\u306B\u508D\u70B9\uFF3D`;
-      }
-      const heading = node.getAttribute("data-heading");
-      if (heading === "large" || heading === "mid" || heading === "small") {
-        const suffix = heading === "large" ? "\u5927\u898B\u51FA\u3057" : heading === "mid" ? "\u4E2D\u898B\u51FA\u3057" : "\u5C0F\u898B\u51FA\u3057";
-        const content = Array.from(node.childNodes).map((n) => serializeNode(n, rootEl)).join("");
-        if (!content) return "";
-        return `${content}\uFF3B\uFF03\u300C${content}\u300D\u306F${suffix}\uFF3D`;
-      }
-      if (node.classList.contains("tate-cursor-anchor")) {
-        return ((_e = node.textContent) != null ? _e : "").replace(/\u200B/g, "");
-      }
-      return Array.from(node.childNodes).map((n) => serializeNode(n, rootEl)).join("");
-    }
-    case "BR":
-      if (node.parentElement !== rootEl && ((_f = node.parentElement) == null ? void 0 : _f.tagName) === "DIV" && node === node.parentElement.lastChild) {
-        return "";
-      }
-      return "\n";
-    case "DIV": {
-      const content = Array.from(node.childNodes).map((n) => serializeNode(n, rootEl)).join("");
-      return node.previousSibling !== null ? "\n" + content : content;
-    }
-    default:
-      return Array.from(node.childNodes).map((n) => serializeNode(n, rootEl)).join("");
-  }
 }
 
 // src/ui/CollapseGuard.ts
@@ -1203,10 +1233,10 @@ var LiveConverter = class {
     const textNode = range.startContainer;
     const textBefore = (_b = (_a = textNode.textContent) == null ? void 0 : _a.slice(0, range.startOffset)) != null ? _b : "";
     if (!textBefore.endsWith("\u300B")) return { converted: false };
-    let match = textBefore.match(/[|｜]([^|｜《》\n]+)《([^《》\n]*)》$/);
+    let match = textBefore.match(completionRegex(EXPLICIT_RUBY));
     let explicit = true;
     if (!match) {
-      match = textBefore.match(new RegExp(`(${KANJI_RE_STR})\u300A([^\u300A\u300B\\n]*)\u300B$`, "u"));
+      match = textBefore.match(completionRegex(IMPLICIT_RUBY));
       explicit = false;
     }
     if (!match) return { converted: false };
@@ -1238,17 +1268,21 @@ var LiveConverter = class {
   // Converts a tate-chu-yoko notation just before the cursor to a <span class="tcy"> when ］ is typed.
   // Returns true if a conversion occurred.
   handleTcyCompletion() {
-    return this.handleAnnotationCompletion("\uFF3D", /［＃「([^「」\n]+)」は縦中横］$/, createTcyEl);
+    return this.handleAnnotationCompletion("\uFF3D", completionRegex(TCY), (m) => createTcyEl(m[1]));
   }
   // Converts a bouten notation just before the cursor to a <span class="bouten"> when ］ is typed.
   // Returns true if a conversion occurred.
   handleBoutenCompletion() {
-    return this.handleAnnotationCompletion("\uFF3D", /［＃「([^「」\n]+)」に傍点］$/, createBoutenEl);
+    return this.handleAnnotationCompletion("\uFF3D", completionRegex(BOUTEN), (m) => createBoutenEl(m[1]));
   }
   // Converts a heading notation just before the cursor to a heading span when ］ is typed.
-  // Tries large → mid → small in order; returns true if any conversion occurred.
+  // The level (大/中/小) is read from the match, so a single pass handles all three levels.
   handleHeadingCompletion() {
-    return this.handleAnnotationCompletion("\uFF3D", /［＃「([^「」\n]+)」は大見出し］$/, (c) => createHeadingEl(c, "large")) || this.handleAnnotationCompletion("\uFF3D", /［＃「([^「」\n]+)」は中見出し］$/, (c) => createHeadingEl(c, "mid")) || this.handleAnnotationCompletion("\uFF3D", /［＃「([^「」\n]+)」は小見出し］$/, (c) => createHeadingEl(c, "small"));
+    return this.handleAnnotationCompletion(
+      "\uFF3D",
+      completionRegex(HEADING),
+      (m) => createHeadingEl(m[1], headingLevelFromKanji(m[2]))
+    );
   }
   // Shared implementation for live conversions that complete on a terminal character (tcy, bouten).
   handleAnnotationCompletion(endChar, re, createElement) {
@@ -1266,7 +1300,7 @@ var LiveConverter = class {
     const content = annotationMatch[1];
     const annotationStart = range.startOffset - annotationMatch[0].length;
     if (!textBefore.slice(0, annotationStart).endsWith(content)) return false;
-    const newEl = createElement(content);
+    const newEl = createElement(annotationMatch);
     const inserted = insertAnnotationElement(
       textNode,
       annotationStart - content.length,
@@ -5999,17 +6033,17 @@ var OutlineView = class extends import_obsidian7.ItemView {
 };
 
 // src/ui/HeadingExtractor.ts
-var HEADING_RE = /［＃「([^「」\n]+)」は(大|中|小)見出し］/g;
 function extractHeadings(records) {
   const entries = [];
+  const re = scanRegex(HEADING);
   let viewOffset = 0;
   for (let i = 0; i < records.length; i++) {
     const { src, viewLen } = records[i];
-    HEADING_RE.lastIndex = 0;
+    re.lastIndex = 0;
     let m;
-    while ((m = HEADING_RE.exec(src)) !== null) {
+    while ((m = re.exec(src)) !== null) {
       const text = m[1];
-      const level = m[2] === "\u5927" ? "large" : m[2] === "\u4E2D" ? "mid" : "small";
+      const level = headingLevelFromKanji(m[2]);
       entries.push({ text, level, paragraphIndex: i, viewOffset });
     }
     viewOffset += viewLen;
