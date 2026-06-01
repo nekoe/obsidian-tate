@@ -321,4 +321,44 @@ describe('ParagraphVirtualizer', () => {
         });
     });
 
+    // ---- getVirtualSelectionFocusOffset ----
+
+    describe('getVirtualSelectionFocusOffset', () => {
+        // Builds a fully-in-window doc and sets up a select-all VS (focus = document end).
+        function setupSelectAll(lines: string[]): void {
+            for (const line of lines) addDiv(editorEl, line);
+            virt.attach(); // wraps the divs with spacers
+            virt.initRecords(lines);
+            virt.setVirtualSelectAll();
+        }
+
+        it('returns null when no VirtualSelection is active', () => {
+            virt.attach();
+            virt.initRecords(['吾輩', '猫である']);
+            expect(virt.getVirtualSelectionFocusOffset()).toBeNull();
+        });
+
+        it('returns the total view length for a select-all VS (focus at document end)', () => {
+            setupSelectAll(['吾輩', '猫である']); // viewLens 2 + 4
+            expect(virt.getVirtualSelectionFocusOffset()).toBe(6);
+        });
+
+        it('sums viewLens of all paragraphs preceding the focus paragraph', () => {
+            setupSelectAll(['ab', 'cde', 'fg']); // viewLens 2 + 3 + 2, focus = (2, 2)
+            expect(virt.getVirtualSelectionFocusOffset()).toBe(7);
+        });
+
+        it('returns 0 when the focus collapses to the document start', () => {
+            const d0 = addDiv(editorEl, 'ab');
+            addDiv(editorEl, 'cde');
+            virt.attach();
+            virt.initRecords(['ab', 'cde']);
+            // extendSelectionToDocumentBoundary reads the anchor from the DOM selection.
+            const sel = window.getSelection()!;
+            sel.collapse(d0.firstChild, 1);
+            virt.extendSelectionToDocumentBoundary(true); // focus = (0, 0)
+            expect(virt.getVirtualSelectionFocusOffset()).toBe(0);
+        });
+    });
+
 });

@@ -141,6 +141,7 @@ export class VerticalWritingView extends ItemView {
         // can still be dismissed normally.
         this.escScope.register([], 'Escape', (evt) => {
             if (evt.isComposing) return;
+            this.collapseSelectionToFocusAndScroll(editorEl, virtualizer);
             return false;
         });
 
@@ -960,6 +961,29 @@ export class VerticalWritingView extends ItemView {
                 this.pendingParagraphJump = null;
             });
         });
+    }
+
+    /** ESC: collapse any active range selection to its focus node and scroll the focus
+     *  into view. Off-window focus (VirtualSelection) centers, in-window focus uses 'nearest' —
+     *  the same scroll policy as Undo/Redo (see doUndoRedo). No-op when nothing is selected,
+     *  so ESC still only blocks Obsidian's leaf switch in that case. */
+    private collapseSelectionToFocusAndScroll(editorEl: EditorElement, virtualizer: ParagraphVirtualizer): void {
+        const focusOffset = virtualizer.getVirtualSelectionFocusOffset();
+        if (focusOffset !== null) {
+            // VirtualSelection (Cmd-A / off-window selection): focus may be off-window.
+            virtualizer.clearVirtualSelection();
+            editorEl.el.focus({ preventScroll: true });
+            editorEl.setViewCursorOffset(focusOffset); // teleports + sets cursorJumped when off-window
+            const block = editorEl.cursorJumped ? 'center' : 'nearest';
+            editorEl.scrollCursorIntoView(block, block);
+            return;
+        }
+        const sel = window.getSelection();
+        if (sel && !sel.isCollapsed && sel.focusNode) {
+            // Native DOM selection: focus is in-window (island-crossing selections are promoted to VS).
+            sel.collapse(sel.focusNode, sel.focusOffset);
+            editorEl.scrollCursorIntoView('nearest', 'nearest');
+        }
     }
 
     /** Returns the current paragraphRecords for outline extraction. */

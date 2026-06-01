@@ -3202,6 +3202,15 @@ var ParagraphVirtualizer = class {
   getVirtualSelection() {
     return this.virtualSelection;
   }
+  /** Absolute view offset of the active VirtualSelection's focus endpoint, or null when
+   *  no VS is active. Equals the sum of preceding paragraph viewLens plus focusViewOff. */
+  getVirtualSelectionFocusOffset() {
+    const vs = this.virtualSelection;
+    if (!vs) return null;
+    let offset = vs.focusViewOff;
+    for (let i = 0; i < vs.focusParaIdx; i++) offset += this.paragraphRecords[i].viewLen;
+    return offset;
+  }
   clearVirtualSelection() {
     var _a, _b;
     if (this.virtualSelection) {
@@ -5157,6 +5166,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
     this.syncCoordinator = syncCoordinator;
     this.escScope.register([], "Escape", (evt) => {
       if (evt.isComposing) return;
+      this.collapseSelectionToFocusAndScroll(editorEl, virtualizer);
       return false;
     });
     this.registerEditorDomEvents(editorEl, virtualizer);
@@ -5810,6 +5820,26 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
         this.pendingParagraphJump = null;
       });
     });
+  }
+  /** ESC: collapse any active range selection to its focus node and scroll the focus
+   *  into view. Off-window focus (VirtualSelection) centers, in-window focus uses 'nearest' —
+   *  the same scroll policy as Undo/Redo (see doUndoRedo). No-op when nothing is selected,
+   *  so ESC still only blocks Obsidian's leaf switch in that case. */
+  collapseSelectionToFocusAndScroll(editorEl, virtualizer) {
+    const focusOffset = virtualizer.getVirtualSelectionFocusOffset();
+    if (focusOffset !== null) {
+      virtualizer.clearVirtualSelection();
+      editorEl.el.focus({ preventScroll: true });
+      editorEl.setViewCursorOffset(focusOffset);
+      const block = editorEl.cursorJumped ? "center" : "nearest";
+      editorEl.scrollCursorIntoView(block, block);
+      return;
+    }
+    const sel = window.getSelection();
+    if (sel && !sel.isCollapsed && sel.focusNode) {
+      sel.collapse(sel.focusNode, sel.focusOffset);
+      editorEl.scrollCursorIntoView("nearest", "nearest");
+    }
   }
   /** Returns the current paragraphRecords for outline extraction. */
   getParagraphRecords() {

@@ -1243,6 +1243,16 @@ export class ParagraphVirtualizer {
 
     getVirtualSelection(): VirtualSelection | null { return this.virtualSelection; }
 
+    /** Absolute view offset of the active VirtualSelection's focus endpoint, or null when
+     *  no VS is active. Equals the sum of preceding paragraph viewLens plus focusViewOff. */
+    getVirtualSelectionFocusOffset(): number | null {
+        const vs = this.virtualSelection;
+        if (!vs) return null;
+        let offset = vs.focusViewOff;
+        for (let i = 0; i < vs.focusParaIdx; i++) offset += this.paragraphRecords[i].viewLen;
+        return offset;
+    }
+
     clearVirtualSelection(): void {
         if (this.virtualSelection) {
             // Release selection-type anchor islands created for Cmd-A.
