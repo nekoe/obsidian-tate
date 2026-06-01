@@ -1920,6 +1920,9 @@ var InlineEditor = class {
     if (r.endContainer.nodeType === Node.ELEMENT_NODE && r.endContainer.tagName === "BR" && r.endContainer.parentNode === parent) {
       return { textNode, startOffset: r.startOffset, endOffset: textNode.length };
     }
+    if (textNode.compareDocumentPosition(r.endContainer) & Node.DOCUMENT_POSITION_FOLLOWING) {
+      return { textNode, startOffset: r.startOffset, endOffset: textNode.length };
+    }
     return null;
   }
   // Records the direction of the most recent navigation key so handleSelectionChange

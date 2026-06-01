@@ -720,6 +720,12 @@ export class InlineEditor {
             r.endContainer.parentNode === parent) {
             return { textNode, startOffset: r.startOffset, endOffset: textNode.length };
         }
+        // Triple-click selection: endContainer is a following block (e.g. the next paragraph
+        // div at offset 0). The selection extends past this text node's paragraph, so clamp to
+        // the end of textNode — consistent with the block-end cases above.
+        if (textNode.compareDocumentPosition(r.endContainer) & Node.DOCUMENT_POSITION_FOLLOWING) {
+            return { textNode, startOffset: r.startOffset, endOffset: textNode.length };
+        }
 
         return null;
     }
