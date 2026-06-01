@@ -374,10 +374,11 @@ function tokenize(source) {
   let items = [{ resolved: false, raw: source }];
   const tcyRe = scanRegex(TCY);
   const boutenRe = scanRegex(BOUTEN);
+  const headingRe = scanRegex(HEADING);
   items = flatScan(items, scanExplicitRuby);
-  items = flatScan(items, (raw) => scanAnnotation(raw, tcyRe, "tcy", 9));
-  items = flatScan(items, (raw) => scanAnnotation(raw, boutenRe, "bouten", 8));
-  items = flatScan(items, scanHeadings);
+  items = flatScan(items, (raw) => scanAnnotation(raw, tcyRe, 9, () => "tcy"));
+  items = flatScan(items, (raw) => scanAnnotation(raw, boutenRe, 8, () => "bouten"));
+  items = flatScan(items, (raw) => scanAnnotation(raw, headingRe, 10, (m) => `heading-${headingLevelFromKanji(m[2])}`));
   items = flatScan(items, scanImplicitRuby);
   items = flatScan(items, scanNewlines);
   return items.map((item) => {
@@ -416,7 +417,7 @@ function scanExplicitRuby(raw) {
   if (lastIndex < raw.length) result.push({ resolved: false, raw: raw.slice(lastIndex) });
   return result;
 }
-function scanAnnotation(raw, re, kind, bracketFixedLen) {
+function scanAnnotation(raw, re, bracketFixedLen, kindOf) {
   re.lastIndex = 0;
   const result = [];
   let lastIndex = 0;
@@ -435,7 +436,7 @@ function scanAnnotation(raw, re, kind, bracketFixedLen) {
     }
     result.push({
       resolved: true,
-      kind,
+      kind: kindOf(m),
       srcLen: content.length * 2 + bracketFixedLen,
       // content + ［＃「content」...］
       viewLen: content.length
@@ -464,36 +465,6 @@ function scanImplicitRuby(raw) {
       viewLen: baseLen,
       baseLen,
       rtLen
-    });
-    lastIndex = re.lastIndex;
-  }
-  if (lastIndex < raw.length) result.push({ resolved: false, raw: raw.slice(lastIndex) });
-  return result;
-}
-function scanHeadings(raw) {
-  const re = scanRegex(HEADING);
-  const result = [];
-  let lastIndex = 0;
-  let m;
-  while ((m = re.exec(raw)) !== null) {
-    const content = m[1];
-    const annotationStart = m.index;
-    if (!raw.slice(lastIndex, annotationStart).endsWith(content)) {
-      result.push({ resolved: false, raw: raw.slice(lastIndex, re.lastIndex) });
-      lastIndex = re.lastIndex;
-      continue;
-    }
-    const contentStart = annotationStart - content.length;
-    if (contentStart > lastIndex) {
-      result.push({ resolved: false, raw: raw.slice(lastIndex, contentStart) });
-    }
-    const kind = `heading-${headingLevelFromKanji(m[2])}`;
-    result.push({
-      resolved: true,
-      kind,
-      srcLen: content.length * 2 + 10,
-      // content + ［＃「content」は大/中/小見出し］
-      viewLen: content.length
     });
     lastIndex = re.lastIndex;
   }
@@ -559,14 +530,14 @@ function splitByExplicitTcy(text) {
   return splitByAnnotation(
     text,
     scanRegex(TCY),
-    (c) => `<span data-tcy="explicit" class="tcy">${esc(c)}</span>`
+    (m) => `<span data-tcy="explicit" class="tcy">${esc(m[1])}</span>`
   );
 }
 function splitByExplicitBouten(text) {
   return splitByAnnotation(
     text,
     scanRegex(BOUTEN),
-    (c) => `<span data-bouten="sesame" class="bouten">${esc(c)}</span>`
+    (m) => `<span data-bouten="sesame" class="bouten">${esc(m[1])}</span>`
   );
 }
 function splitByAnnotation(text, re, buildHtml) {
@@ -585,7 +556,7 @@ function splitByAnnotation(text, re, buildHtml) {
     if (contentStart > lastIndex) {
       result.push({ type: "text", text: text.slice(lastIndex, contentStart) });
     }
-    result.push({ type: "html", html: buildHtml(content) });
+    result.push({ type: "html", html: buildHtml(m) });
     lastIndex = re.lastIndex;
   }
   if (lastIndex < text.length) {
@@ -594,33 +565,10 @@ function splitByAnnotation(text, re, buildHtml) {
   return result;
 }
 function splitByHeadings(text) {
-  const result = [];
-  const re = scanRegex(HEADING);
-  let lastIndex = 0;
-  let m;
-  while ((m = re.exec(text)) !== null) {
-    const content = m[1];
+  return splitByAnnotation(text, scanRegex(HEADING), (m) => {
     const level = headingLevelFromKanji(m[2]);
-    const annotationStart = m.index;
-    if (!text.slice(lastIndex, annotationStart).endsWith(content)) {
-      result.push({ type: "text", text: text.slice(lastIndex, re.lastIndex) });
-      lastIndex = re.lastIndex;
-      continue;
-    }
-    const contentStart = annotationStart - content.length;
-    if (contentStart > lastIndex) {
-      result.push({ type: "text", text: text.slice(lastIndex, contentStart) });
-    }
-    result.push({
-      type: "html",
-      html: `<span class="tate-heading tate-heading-${level}" data-heading="${level}">${esc(content)}</span>`
-    });
-    lastIndex = re.lastIndex;
-  }
-  if (lastIndex < text.length) {
-    result.push({ type: "text", text: text.slice(lastIndex) });
-  }
-  return result;
+    return `<span class="tate-heading tate-heading-${level}" data-heading="${level}">${esc(m[1])}</span>`;
+  });
 }
 function splitByImplicitRuby(text) {
   const re = scanRegex(IMPLICIT_RUBY);

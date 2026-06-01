@@ -209,14 +209,16 @@ function mapViewLocalToSrc(seg: Segment, local: number): number {
 function tokenize(source: string): ResolvedItem[] {
     let items: PipelineItem[] = [{ resolved: false, raw: source }];
 
-    const tcyRe    = scanRegex(TCY);
-    const boutenRe = scanRegex(BOUTEN);
+    const tcyRe     = scanRegex(TCY);
+    const boutenRe  = scanRegex(BOUTEN);
+    const headingRe = scanRegex(HEADING);
 
-    // Recognize each notation in the same order as parseInlineToHtml()
+    // Recognize each notation in the same order as parseInlineToHtml().
+    // bracketFixedLen: 9=tcy, 8=bouten, 10=heading (fixed ［＃「」keyword］ chars excluding content).
     items = flatScan(items, scanExplicitRuby);
-    items = flatScan(items, raw => scanAnnotation(raw, tcyRe,    'tcy',    9));
-    items = flatScan(items, raw => scanAnnotation(raw, boutenRe, 'bouten', 8));
-    items = flatScan(items, scanHeadings);
+    items = flatScan(items, raw => scanAnnotation(raw, tcyRe,     9,  () => 'tcy'));
+    items = flatScan(items, raw => scanAnnotation(raw, boutenRe,  8,  () => 'bouten'));
+    items = flatScan(items, raw => scanAnnotation(raw, headingRe, 10, m => `heading-${headingLevelFromKanji(m[2])}`));
     items = flatScan(items, scanImplicitRuby);
     items = flatScan(items, scanNewlines);
 
@@ -260,11 +262,15 @@ function scanExplicitRuby(raw: string): PipelineItem[] {
     return result;
 }
 
+// Shared scanner for forward-reference annotations: content［＃「content」keyword］.
+// bracketFixedLen is the fixed char count of the bracket part excluding content
+// (9=tcy, 8=bouten, 10=heading). kindOf derives the SegmentKind from the match so heading
+// levels (capture group 2) can be distinguished while tcy/bouten use a constant kind.
 function scanAnnotation(
     raw: string,
     re: RegExp,
-    kind: 'tcy' | 'bouten',
-    bracketFixedLen: number, // 9=tcy, 8=bouten (fixed char count of ［＃「」keyword］ excluding content)
+    bracketFixedLen: number,
+    kindOf: (m: RegExpExecArray) => SegmentKind,
 ): PipelineItem[] {
     re.lastIndex = 0;
     const result: PipelineItem[] = [];
@@ -287,7 +293,7 @@ function scanAnnotation(
             result.push({ resolved: false, raw: raw.slice(lastIndex, contentStart) });
         }
         result.push({
-            resolved: true, kind,
+            resolved: true, kind: kindOf(m),
             srcLen:  content.length * 2 + bracketFixedLen, // content + ［＃「content」...］
             viewLen: content.length,
         });
@@ -313,41 +319,6 @@ function scanImplicitRuby(raw: string): PipelineItem[] {
             resolved: true, kind: 'ruby-implicit',
             srcLen: baseLen + rtLen + 2, // base + 《 + rt + 》
             viewLen: baseLen, baseLen, rtLen,
-        });
-        lastIndex = re.lastIndex;
-    }
-    if (lastIndex < raw.length) result.push({ resolved: false, raw: raw.slice(lastIndex) });
-    return result;
-}
-
-// Scans heading annotations: content［＃「content」は(大|中|小)見出し］
-// bracketFixedLen = 10 for all heading levels: ［＃「」は大/中/小見出し］ = 10 chars
-function scanHeadings(raw: string): PipelineItem[] {
-    const re = scanRegex(HEADING);
-    const result: PipelineItem[] = [];
-    let lastIndex = 0;
-    let m: RegExpExecArray | null;
-
-    while ((m = re.exec(raw)) !== null) {
-        const content         = m[1];
-        const annotationStart = m.index;
-
-        if (!raw.slice(lastIndex, annotationStart).endsWith(content)) {
-            result.push({ resolved: false, raw: raw.slice(lastIndex, re.lastIndex) });
-            lastIndex = re.lastIndex;
-            continue;
-        }
-
-        const contentStart = annotationStart - content.length;
-        if (contentStart > lastIndex) {
-            result.push({ resolved: false, raw: raw.slice(lastIndex, contentStart) });
-        }
-        const kind = `heading-${headingLevelFromKanji(m[2])}` as
-            'heading-large' | 'heading-mid' | 'heading-small';
-        result.push({
-            resolved: true, kind,
-            srcLen:  content.length * 2 + 10, // content + ［＃「content」は大/中/小見出し］
-            viewLen: content.length,
         });
         lastIndex = re.lastIndex;
     }

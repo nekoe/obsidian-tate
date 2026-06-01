@@ -76,7 +76,7 @@ function splitByExplicitTcy(text: string): ParseSegment[] {
     return splitByAnnotation(
         text,
         scanRegex(TCY),
-        c => `<span data-tcy="explicit" class="tcy">${esc(c)}</span>`,
+        m => `<span data-tcy="explicit" class="tcy">${esc(m[1])}</span>`,
     );
 }
 
@@ -85,15 +85,17 @@ function splitByExplicitBouten(text: string): ParseSegment[] {
     return splitByAnnotation(
         text,
         scanRegex(BOUTEN),
-        c => `<span data-bouten="sesame" class="bouten">${esc(c)}</span>`,
+        m => `<span data-bouten="sesame" class="bouten">${esc(m[1])}</span>`,
     );
 }
 
 // Shared split logic for forward-reference annotation notation: content［＃「content」...］
+// buildHtml receives the full match so callers can read extra capture groups (e.g. the
+// heading level in group 2) in addition to the content in group 1.
 function splitByAnnotation(
     text: string,
     re: RegExp,
-    buildHtml: (content: string) => string,
+    buildHtml: (m: RegExpExecArray) => string,
 ): ParseSegment[] {
     const result: ParseSegment[] = [];
     let lastIndex = 0;
@@ -114,7 +116,7 @@ function splitByAnnotation(
         if (contentStart > lastIndex) {
             result.push({ type: 'text', text: text.slice(lastIndex, contentStart) });
         }
-        result.push({ type: 'html', html: buildHtml(content) });
+        result.push({ type: 'html', html: buildHtml(m) });
         lastIndex = re.lastIndex;
     }
     if (lastIndex < text.length) {
@@ -123,38 +125,12 @@ function splitByAnnotation(
     return result;
 }
 
-// Splits heading content［＃「content」は(大|中|小)見出し］
+// Splits heading content［＃「content」は(大|中|小)見出し］. The level comes from match group 2.
 function splitByHeadings(text: string): ParseSegment[] {
-    const result: ParseSegment[] = [];
-    const re = scanRegex(HEADING);
-    let lastIndex = 0;
-    let m: RegExpExecArray | null;
-
-    while ((m = re.exec(text)) !== null) {
-        const content = m[1];
+    return splitByAnnotation(text, scanRegex(HEADING), m => {
         const level = headingLevelFromKanji(m[2]);
-        const annotationStart = m.index;
-
-        if (!text.slice(lastIndex, annotationStart).endsWith(content)) {
-            result.push({ type: 'text', text: text.slice(lastIndex, re.lastIndex) });
-            lastIndex = re.lastIndex;
-            continue;
-        }
-
-        const contentStart = annotationStart - content.length;
-        if (contentStart > lastIndex) {
-            result.push({ type: 'text', text: text.slice(lastIndex, contentStart) });
-        }
-        result.push({
-            type: 'html',
-            html: `<span class="tate-heading tate-heading-${level}" data-heading="${level}">${esc(content)}</span>`,
-        });
-        lastIndex = re.lastIndex;
-    }
-    if (lastIndex < text.length) {
-        result.push({ type: 'text', text: text.slice(lastIndex) });
-    }
-    return result;
+        return `<span class="tate-heading tate-heading-${level}" data-heading="${level}">${esc(m[1])}</span>`;
+    });
 }
 
 // Splits implicit ruby kanji《rt》
