@@ -75,6 +75,30 @@ export function setCursorAfter(node: Node): void {
     sel.addRange(r);
 }
 
+// ---- Annotation element predicates ----
+
+// CSS selector matching every annotation element type (ruby / tcy / bouten / heading).
+// Single source of truth for querySelectorAll calls that collect annotation elements.
+export const ANNOTATION_SELECTOR = 'ruby, [data-bouten], [data-tcy="explicit"], [data-heading]';
+
+export type AnnotationKind = 'ruby' | 'tcy' | 'bouten' | 'heading';
+
+// Returns the annotation kind of node, or null if node is not an annotation element.
+// Centralizes the tagName / data-attribute checks duplicated across the inline editor.
+export function annotationKindOf(node: Node | null | undefined): AnnotationKind | null {
+    if (!node?.instanceOf(HTMLElement)) return null;
+    if (node.tagName === 'RUBY') return 'ruby';
+    if (node.getAttribute('data-tcy') === 'explicit') return 'tcy';
+    if (node.getAttribute('data-bouten') !== null) return 'bouten';
+    if (node.getAttribute('data-heading') !== null) return 'heading';
+    return null;
+}
+
+// Returns true if node is any annotation element (ruby / tcy / bouten / heading).
+export function isAnnotationElement(node: Node | null | undefined): node is HTMLElement {
+    return annotationKindOf(node) !== null;
+}
+
 // ---- Ancestor traversal ----
 
 export function findAncestor(
@@ -152,7 +176,7 @@ export function ensureBrPlaceholder(el: HTMLElement): void {
 // entirely deleted. Range.deleteContents() removes child text nodes but leaves the
 // element shell when the selection boundary falls inside the element.
 export function removeEmptyAnnotationShells(el: HTMLElement): void {
-    const shells = el.querySelectorAll('ruby, [data-bouten], [data-tcy="explicit"], [data-heading]');
+    const shells = el.querySelectorAll(ANNOTATION_SELECTOR);
     for (const shell of Array.from(shells)) {
         // U+200B is used by cursor anchor spans; strip it before the empty check
         if (shell.instanceOf(HTMLElement) && (shell.textContent ?? '').replace(/\u200B/g, '') === '') {

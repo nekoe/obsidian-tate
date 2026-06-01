@@ -752,6 +752,18 @@ function setCursorAfter(node) {
   sel.removeAllRanges();
   sel.addRange(r);
 }
+var ANNOTATION_SELECTOR = 'ruby, [data-bouten], [data-tcy="explicit"], [data-heading]';
+function annotationKindOf(node) {
+  if (!(node == null ? void 0 : node.instanceOf(HTMLElement))) return null;
+  if (node.tagName === "RUBY") return "ruby";
+  if (node.getAttribute("data-tcy") === "explicit") return "tcy";
+  if (node.getAttribute("data-bouten") !== null) return "bouten";
+  if (node.getAttribute("data-heading") !== null) return "heading";
+  return null;
+}
+function isAnnotationElement(node) {
+  return annotationKindOf(node) !== null;
+}
 function findAncestor(node, pred, rootEl) {
   let el = node.instanceOf(HTMLElement) ? node : node.parentElement;
   while (el && el !== rootEl) {
@@ -793,7 +805,7 @@ function ensureBrPlaceholder(el) {
 }
 function removeEmptyAnnotationShells(el) {
   var _a;
-  const shells = el.querySelectorAll('ruby, [data-bouten], [data-tcy="explicit"], [data-heading]');
+  const shells = el.querySelectorAll(ANNOTATION_SELECTOR);
   for (const shell of Array.from(shells)) {
     if (shell.instanceOf(HTMLElement) && ((_a = shell.textContent) != null ? _a : "").replace(/\u200B/g, "") === "") {
       shell.remove();
@@ -1321,12 +1333,11 @@ var InlineExpander = class {
   // Returns the first ancestor of node that is an expandable annotation element,
   // filtered by the caller-provided expand flags.
   findExpandableAncestor(node, ruby, tcy, bouten, heading = true) {
+    const flags = { ruby, tcy, bouten, heading };
     let el = node.instanceOf(HTMLElement) ? node : node.parentElement;
     while (el && el !== this.el) {
-      if (el.tagName === "RUBY" && ruby) return el;
-      if (el.tagName === "SPAN" && el.getAttribute("data-tcy") === "explicit" && tcy) return el;
-      if (el.tagName === "SPAN" && el.getAttribute("data-bouten") && bouten) return el;
-      if (el.tagName === "SPAN" && el.getAttribute("data-heading") && heading) return el;
+      const kind = annotationKindOf(el);
+      if (kind && flags[kind]) return el;
       el = el.parentElement;
     }
     return null;
@@ -1522,7 +1533,7 @@ var InlineEditor = class {
           return contentChanged;
         }
         this.collapseGuard.clear();
-        if (target.tagName === "RUBY" || target.getAttribute("data-tcy") === "explicit" || target.getAttribute("data-bouten") || target.getAttribute("data-heading"))
+        if (isAnnotationElement(target))
           this.anchorManager.ensureCursorAnchorAfter(target);
         this.expandForEditing(target, currentRange);
       }
@@ -1661,7 +1672,7 @@ var InlineEditor = class {
     let targets = this.findAnnotationsIntersectingSavedRange();
     if (targets.length === 0 && collapseParent) {
       const candidate = collapseNextSib ? collapseNextSib.previousSibling : collapseParent.lastChild;
-      if ((candidate == null ? void 0 : candidate.instanceOf(HTMLElement)) && (candidate.tagName === "RUBY" || candidate.getAttribute("data-tcy") === "explicit" || candidate.getAttribute("data-bouten") !== null || candidate.getAttribute("data-heading") !== null)) {
+      if (isAnnotationElement(candidate)) {
         targets = [candidate];
       }
     }
@@ -1767,7 +1778,14 @@ var InlineEditor = class {
   getCursorCollapseEl() {
     const state = this.collapseGuard.get();
     if (!state) return null;
-    const expandFlag = state.el.getAttribute("data-bouten") !== null ? this.expandBouten : state.el.tagName === "RUBY" ? this.expandRuby : state.el.getAttribute("data-heading") !== null ? this.expandHeading : true;
+    const flags = {
+      ruby: this.expandRuby,
+      tcy: this.expandTcy,
+      bouten: this.expandBouten,
+      heading: this.expandHeading
+    };
+    const kind = annotationKindOf(state.el);
+    const expandFlag = kind ? flags[kind] : true;
     return this.collapseGuard.getCursorCollapseEl(expandFlag, this.expandedEl);
   }
   // Inserts chars immediately after el without going through the Selection API.
@@ -1822,8 +1840,7 @@ var InlineEditor = class {
     var _a;
     const node = range.startContainer;
     const offset = range.startOffset;
-    const isAnnotation = (n) => !!(n == null ? void 0 : n.instanceOf(HTMLElement)) && (n.tagName === "RUBY" || n.getAttribute("data-tcy") === "explicit" || n.getAttribute("data-bouten") !== null || n.getAttribute("data-heading") !== null);
-    const ancestor = findAncestor(node, isAnnotation, this.el);
+    const ancestor = findAncestor(node, isAnnotationElement, this.el);
     if (ancestor) return ancestor;
     let next = null;
     let prev = null;
@@ -1836,12 +1853,12 @@ var InlineEditor = class {
       if (offset === text.length) next = text.nextSibling;
       if (offset === 0) prev = text.previousSibling;
     }
-    if (isAnnotation(next)) return next;
-    if (isAnnotation(prev)) return prev;
+    if (isAnnotationElement(next)) return next;
+    if (isAnnotationElement(prev)) return prev;
     const parentEl = node.nodeType === Node.TEXT_NODE ? node.parentElement : null;
     if (parentEl == null ? void 0 : parentEl.classList.contains("tate-cursor-anchor")) {
       const beforeAnchor = parentEl.previousSibling;
-      if (isAnnotation(beforeAnchor)) return beforeAnchor;
+      if (isAnnotationElement(beforeAnchor)) return beforeAnchor;
     }
     return null;
   }
@@ -1858,9 +1875,7 @@ var InlineEditor = class {
     } catch (e) {
       return [];
     }
-    const candidates = this.el.querySelectorAll(
-      'ruby, [data-bouten], [data-tcy="explicit"], [data-heading]'
-    );
+    const candidates = this.el.querySelectorAll(ANNOTATION_SELECTOR);
     const result = [];
     for (const candidate of Array.from(candidates)) {
       if (range.intersectsNode(candidate)) result.push(candidate);
@@ -1886,7 +1901,7 @@ var InlineEditor = class {
     this.anchorManager.placeCursorAfterCollapse(nextSib, parentEl, sel);
     if (nextSib == null ? void 0 : nextSib.isConnected) {
       const prev = nextSib.previousSibling;
-      if ((prev == null ? void 0 : prev.instanceOf(HTMLElement)) && (prev.getAttribute("data-bouten") !== null || prev.tagName === "RUBY" || prev.getAttribute("data-heading") !== null)) {
+      if (isAnnotationElement(prev) && annotationKindOf(prev) !== "tcy") {
         this.collapseGuard.set(prev, (_a = prev.textContent) != null ? _a : "");
       }
     }

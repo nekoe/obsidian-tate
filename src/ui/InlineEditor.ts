@@ -2,6 +2,7 @@ import {
     createTcyEl, createBoutenEl, createHeadingEl,
     insertAnnotationElement,
     findTcyAncestor, findAncestor,
+    annotationKindOf, isAnnotationElement, ANNOTATION_SELECTOR,
 } from './domHelpers';
 import { CollapseGuard } from './CollapseGuard';
 import { CursorAnchorManager } from './CursorAnchorManager';
@@ -191,8 +192,7 @@ export class InlineEditor {
                 this.collapseGuard.clear();
                 // For expandable elements at end-of-line, insert a cursor anchor before expanding so
                 // that when the user exits past the closing bracket, nextSibling is already the anchor.
-                if (target.tagName === 'RUBY' || target.getAttribute('data-tcy') === 'explicit'
-                        || target.getAttribute('data-bouten') || target.getAttribute('data-heading'))
+                if (isAnnotationElement(target))
                     this.anchorManager.ensureCursorAnchorAfter(target);
                 this.expandForEditing(target, currentRange);
             }
@@ -363,11 +363,7 @@ export class InlineEditor {
             const candidate = collapseNextSib
                 ? collapseNextSib.previousSibling
                 : collapseParent.lastChild;
-            if (candidate?.instanceOf(HTMLElement)
-                    && (candidate.tagName === 'RUBY'
-                        || candidate.getAttribute('data-tcy') === 'explicit'
-                        || candidate.getAttribute('data-bouten') !== null
-                        || candidate.getAttribute('data-heading') !== null)) {
+            if (isAnnotationElement(candidate)) {
                 targets = [candidate];
             }
         }
@@ -497,10 +493,12 @@ export class InlineEditor {
     getCursorCollapseEl(): HTMLElement | null {
         const state = this.collapseGuard.get();
         if (!state) return null;
-        const expandFlag = state.el.getAttribute('data-bouten') !== null ? this.expandBouten
-            : state.el.tagName === 'RUBY' ? this.expandRuby
-            : state.el.getAttribute('data-heading') !== null ? this.expandHeading
-            : true;
+        const flags = {
+            ruby: this.expandRuby, tcy: this.expandTcy,
+            bouten: this.expandBouten, heading: this.expandHeading,
+        };
+        const kind = annotationKindOf(state.el);
+        const expandFlag = kind ? flags[kind] : true;
         return this.collapseGuard.getCursorCollapseEl(expandFlag, this.expandedEl);
     }
 
@@ -567,15 +565,8 @@ export class InlineEditor {
         const node   = range.startContainer;
         const offset = range.startOffset;
 
-        const isAnnotation = (n: Node | null | undefined): n is HTMLElement =>
-            !!n?.instanceOf(HTMLElement)
-            && (n.tagName === 'RUBY'
-                || n.getAttribute('data-tcy') === 'explicit'
-                || n.getAttribute('data-bouten') !== null
-                || n.getAttribute('data-heading') !== null);
-
         // Case 1: cursor is inside an annotation element
-        const ancestor = findAncestor(node, isAnnotation, this.el);
+        const ancestor = findAncestor(node, isAnnotationElement, this.el);
         if (ancestor) return ancestor;
 
         // Case 2: cursor is between DOM siblings — check the node just before and just after
@@ -590,14 +581,14 @@ export class InlineEditor {
             if (offset === text.length) next = text.nextSibling;
             if (offset === 0)           prev = text.previousSibling;
         }
-        if (isAnnotation(next)) return next;
-        if (isAnnotation(prev)) return prev;
+        if (isAnnotationElement(next)) return next;
+        if (isAnnotationElement(prev)) return prev;
 
         // Case 3: cursor is inside a cursor anchor span — annotation is the anchor's prev sibling
         const parentEl = node.nodeType === Node.TEXT_NODE ? node.parentElement : null;
         if (parentEl?.classList.contains('tate-cursor-anchor')) {
             const beforeAnchor = parentEl.previousSibling;
-            if (isAnnotation(beforeAnchor)) return beforeAnchor;
+            if (isAnnotationElement(beforeAnchor)) return beforeAnchor;
         }
 
         return null;
@@ -618,9 +609,7 @@ export class InlineEditor {
             return [];
         }
 
-        const candidates = this.el.querySelectorAll<HTMLElement>(
-            'ruby, [data-bouten], [data-tcy="explicit"], [data-heading]'
-        );
+        const candidates = this.el.querySelectorAll<HTMLElement>(ANNOTATION_SELECTOR);
         const result: HTMLElement[] = [];
         for (const candidate of Array.from(candidates)) {
             if (range.intersectsNode(candidate)) result.push(candidate);
@@ -648,10 +637,9 @@ export class InlineEditor {
         this.anchorManager.placeCursorAfterCollapse(nextSib, parentEl, sel);
         if (nextSib?.isConnected) {
             const prev = nextSib.previousSibling;
-            if (prev?.instanceOf(HTMLElement)
-                    && (prev.getAttribute('data-bouten') !== null
-                        || prev.tagName === 'RUBY'
-                        || prev.getAttribute('data-heading') !== null)) {
+            // tcy is intentionally excluded: it has its own arrow-key navigation and is not
+            // subject to the post-collapse cursor-normalization that collapseGuard handles.
+            if (isAnnotationElement(prev) && annotationKindOf(prev) !== 'tcy') {
                 this.collapseGuard.set(prev, prev.textContent ?? '');
             }
         }

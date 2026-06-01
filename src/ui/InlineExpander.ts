@@ -1,6 +1,6 @@
 import { sanitizeHTMLToDom } from 'obsidian';
 import { parseInlineToHtml, serializeNode } from './AozoraParser';
-import { rawOffsetForExpand, getExtraCharsFromAnnotation } from './domHelpers';
+import { rawOffsetForExpand, getExtraCharsFromAnnotation, annotationKindOf } from './domHelpers';
 
 // Result of collapseEditing. The detached flag is true when the span was not
 // in the DOM; in that case, InlineEditor must NOT clear inBurst.
@@ -17,12 +17,11 @@ export class InlineExpander {
     findExpandableAncestor(
         node: Node, ruby: boolean, tcy: boolean, bouten: boolean, heading = true,
     ): HTMLElement | null {
+        const flags = { ruby, tcy, bouten, heading };
         let el: HTMLElement | null = node.instanceOf(HTMLElement) ? node : node.parentElement;
         while (el && el !== this.el) {
-            if (el.tagName === 'RUBY' && ruby) return el;
-            if (el.tagName === 'SPAN' && el.getAttribute('data-tcy') === 'explicit' && tcy) return el;
-            if (el.tagName === 'SPAN' && el.getAttribute('data-bouten') && bouten) return el;
-            if (el.tagName === 'SPAN' && el.getAttribute('data-heading') && heading) return el;
+            const kind = annotationKindOf(el);
+            if (kind && flags[kind]) return el;
             el = el.parentElement;
         }
         return null;
