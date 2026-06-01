@@ -386,122 +386,162 @@ export class VerticalWritingView extends ItemView {
             editorEl.afterNavigation();
         });
         this.registerDomEvent(editorEl.el, 'keydown', (e: KeyboardEvent) => {
-            // Delete VS content on printable key press before compositionstart fires.
-            // The browser establishes the IME anchor when it passes the key to the IME engine,
-            // which happens AFTER keydown handlers complete but BEFORE compositionstart fires.
-            // Deleting VS here (rather than in compositionstart) ensures the cursor is already
-            // at (si, so) when the IME records its anchor, so composition text lands correctly.
-            if (!e.isComposing && !e.metaKey && !e.ctrlKey && e.key.length === 1
-                    && virtualizer.getVirtualSelection()) {
-                const vs = virtualizer.getVirtualSelection() as VirtualSelection;
-                virtualizer.clearVirtualSelection();
-                editorEl.deleteVirtualSelection(vs);
-                // Fall through: let subsequent beforeinput/compositionstart proceed normally.
+            this.handleEditorKeyDown(e, editorEl, virtualizer);
+        });
+    }
+
+    // Dispatches a keydown on the editor to the specialized handlers below.
+    // Each handler returns true when it consumes the event (no further handling needed).
+    private handleEditorKeyDown(
+        e: KeyboardEvent, editorEl: EditorElement, virtualizer: ParagraphVirtualizer,
+    ): void {
+        this.deleteVirtualSelectionOnPrintableKey(e, editorEl, virtualizer);
+        if (this.handleUndoRedoKey(e, editorEl)) return;
+        if (this.handleSelectAllKey(e, virtualizer)) return;
+        if (this.handleDocumentBoundaryKey(e, editorEl, virtualizer)) return;
+        this.handleArrowAndNavigationKeys(e, editorEl, virtualizer);
+    }
+
+    // Deletes VS content on printable key press before compositionstart fires.
+    // The browser establishes the IME anchor when it passes the key to the IME engine,
+    // which happens AFTER keydown handlers complete but BEFORE compositionstart fires.
+    // Deleting VS here (rather than in compositionstart) ensures the cursor is already
+    // at (si, so) when the IME records its anchor, so composition text lands correctly.
+    // Does not consume the event: subsequent beforeinput/compositionstart proceed normally.
+    private deleteVirtualSelectionOnPrintableKey(
+        e: KeyboardEvent, editorEl: EditorElement, virtualizer: ParagraphVirtualizer,
+    ): void {
+        if (!e.isComposing && !e.metaKey && !e.ctrlKey && e.key.length === 1
+                && virtualizer.getVirtualSelection()) {
+            const vs = virtualizer.getVirtualSelection() as VirtualSelection;
+            virtualizer.clearVirtualSelection();
+            editorEl.deleteVirtualSelection(vs);
+        }
+    }
+
+    // Ctrl+Z / Cmd+Z: Undo,  Ctrl+Shift+Z / Cmd+Shift+Z: Redo.
+    private handleUndoRedoKey(e: KeyboardEvent, editorEl: EditorElement): boolean {
+        if ((e.metaKey || e.ctrlKey) && !e.altKey && e.key === 'z') {
+            e.preventDefault();
+            this.doUndoRedo(editorEl, e.shiftKey);
+            return true;
+        }
+        return false;
+    }
+
+    // Cmd-A / Ctrl-A: initialize a VirtualSelection spanning the entire activeDocument.
+    // The DOM Range is set to proxy positions (window boundaries) so native ::selection
+    // highlights all in-window paragraphs; no full DOM expansion is required.
+    private handleSelectAllKey(e: KeyboardEvent, virtualizer: ParagraphVirtualizer): boolean {
+        if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.key === 'a') {
+            e.preventDefault();
+            if (virtualizer.paragraphRecords.length > 0) virtualizer.setVirtualSelectAll();
+            return true;
+        }
+        return false;
+    }
+
+    // Cmd+↑/↓ (macOS) / Ctrl+Home/End (Windows/Linux): jump or extend selection to document boundary.
+    // Without Shift: collapse cursor to start/end. With Shift: extend selection from anchor.
+    private handleDocumentBoundaryKey(
+        e: KeyboardEvent, editorEl: EditorElement, virtualizer: ParagraphVirtualizer,
+    ): boolean {
+        if (e.isComposing || e.altKey) return false;
+        const toStart = Platform.isMacOS
+            ? e.metaKey && e.key === 'ArrowUp'
+            : e.ctrlKey && e.key === 'Home';
+        const toEnd = Platform.isMacOS
+            ? e.metaKey && e.key === 'ArrowDown'
+            : e.ctrlKey && e.key === 'End';
+        if (!toStart && !toEnd) return false;
+        e.preventDefault();
+        if (this.commitTimer !== null) this.commitToCm6();
+        if (e.shiftKey) {
+            virtualizer.extendSelectionToDocumentBoundary(toStart);
+        } else {
+            virtualizer.clearVirtualSelection();
+            if (toStart) {
+                this.jumpToViewOffset(0);
+            } else {
+                const totalLen = virtualizer.paragraphRecords.reduce((sum, r) => sum + r.viewLen, 0);
+                this.jumpToViewOffset(totalLen);
             }
-            // Ctrl+Z / Cmd+Z: Undo,  Ctrl+Shift+Z / Cmd+Shift+Z: Redo
-            if ((e.metaKey || e.ctrlKey) && !e.altKey && e.key === 'z') {
+        }
+        editorEl.afterNavigation();
+        return true;
+    }
+
+    // Handles arrow keys inside a tcy span and plain navigation keys (arrows + Home/End/PageUp/Down).
+    private handleArrowAndNavigationKeys(
+        e: KeyboardEvent, editorEl: EditorElement, virtualizer: ParagraphVirtualizer,
+    ): void {
+        // Arrow keys inside a tcy span.
+        // ArrowUp/Down: move within the horizontal TCY text (or escape with Shift).
+        // ArrowLeft/Right: escape the span entirely to prevent the bounce-back loop.
+        if (!e.isComposing && (e.key === 'ArrowUp' || e.key === 'ArrowDown' ||
+                e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+            if (editorEl.handleTcyNavigation(e.key, e.shiftKey)) {
                 e.preventDefault();
-                this.doUndoRedo(editorEl, e.shiftKey);
-                return;
-            }
-            // Cmd-A / Ctrl-A: initialize a VirtualSelection spanning the entire activeDocument.
-            // The DOM Range is set to proxy positions (window boundaries) so native ::selection
-            // highlights all in-window paragraphs; no full DOM expansion is required.
-            if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.key === 'a') {
-                e.preventDefault();
-                if (virtualizer.paragraphRecords.length > 0) virtualizer.setVirtualSelectAll();
-                return;
-            }
-            // Cmd+↑/↓ (macOS) / Ctrl+Home/End (Windows/Linux): jump or extend selection to document boundary.
-            // Without Shift: collapse cursor to start/end. With Shift: extend selection from anchor.
-            if (!e.isComposing && !e.altKey) {
-                const toStart = Platform.isMacOS
-                    ? e.metaKey && e.key === 'ArrowUp'
-                    : e.ctrlKey && e.key === 'Home';
-                const toEnd = Platform.isMacOS
-                    ? e.metaKey && e.key === 'ArrowDown'
-                    : e.ctrlKey && e.key === 'End';
-                if (toStart || toEnd) {
-                    e.preventDefault();
+                if (!e.shiftKey) {
                     if (this.commitTimer !== null) this.commitToCm6();
-                    if (e.shiftKey) {
-                        virtualizer.extendSelectionToDocumentBoundary(toStart);
-                    } else {
-                        virtualizer.clearVirtualSelection();
-                        if (toStart) {
-                            this.jumpToViewOffset(0);
-                        } else {
-                            const totalLen = virtualizer.paragraphRecords.reduce((sum, r) => sum + r.viewLen, 0);
-                            this.jumpToViewOffset(totalLen);
-                        }
-                    }
                     editorEl.afterNavigation();
                     return;
                 }
+                // Shift: fall through to the navigation-keys block for notifyNavigationKey etc.
             }
-            // Arrow keys inside a tcy span.
-            // ArrowUp/Down: move within the horizontal TCY text (or escape with Shift).
-            // ArrowLeft/Right: escape the span entirely to prevent the bounce-back loop.
-            if (!e.isComposing && (e.key === 'ArrowUp' || e.key === 'ArrowDown' ||
-                    e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
-                if (editorEl.handleTcyNavigation(e.key, e.shiftKey)) {
-                    e.preventDefault();
-                    if (!e.shiftKey) {
-                        if (this.commitTimer !== null) this.commitToCm6();
-                        editorEl.afterNavigation();
-                        return;
-                    }
-                    // Shift: fall through to the navigation-keys block for notifyNavigationKey etc.
-                }
+        }
+        // Navigation keys are commit points only when there are uncommitted changes
+        // (commitTimer !== null means the debounce is running). Skipping the commit
+        // when nothing is pending avoids an O(N) getValue() call on every keypress.
+        // Skip while isComposing=true (user is selecting IME candidates)
+        if (!e.isComposing && ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown',
+             'Home', 'End', 'PageUp', 'PageDown'].includes(e.key)) {
+            editorEl.notifyNavigationKey(e.key);
+            // Without Shift: the selection is being moved (not extended), so any
+            // gap-spanning VS is no longer relevant. Clear it so the next selectionchange
+            // does not try to re-sync the DOM Range to stale VS endpoints.
+            if (!e.shiftKey) {
+                if (this.collapseVirtualSelectionWithArrow(e, editorEl, virtualizer)) return;
+                virtualizer.clearVirtualSelection();
             }
-            // Navigation keys are commit points only when there are uncommitted changes
-            // (commitTimer !== null means the debounce is running). Skipping the commit
-            // when nothing is pending avoids an O(N) getValue() call on every keypress.
-            // Skip while isComposing=true (user is selecting IME candidates)
-            if (!e.isComposing && ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown',
-                 'Home', 'End', 'PageUp', 'PageDown'].includes(e.key)) {
-                editorEl.notifyNavigationKey(e.key);
-                // Without Shift: the selection is being moved (not extended), so any
-                // gap-spanning VS is no longer relevant. Clear it so the next selectionchange
-                // does not try to re-sync the DOM Range to stale VS endpoints.
-                if (!e.shiftKey) {
-                    // When VS is active and an Arrow key collapses the selection, the
-                    // browser collapses to the anchor PROXY (a window-boundary div), which
-                    // triggers adjustWindowOnScroll to expand the DOM window toward the real
-                    // anchor. Intercept and explicitly jump to the correct VS endpoint instead.
-                    // Cmd+Up/Down are handled earlier (extendSelectionToDocumentBoundary) and
-                    // return early, so only Cmd+Left/Right can reach here with metaKey set.
-                    const vs = !e.altKey && !e.ctrlKey &&
-                        (!e.metaKey || e.key === 'ArrowLeft' || e.key === 'ArrowRight')
-                        ? virtualizer.getVirtualSelection() : null;
-                    if (vs && (e.key === 'ArrowLeft' || e.key === 'ArrowRight' ||
-                               e.key === 'ArrowUp'   || e.key === 'ArrowDown')) {
-                        e.preventDefault();
-                        // vertical-rl: ArrowLeft/ArrowDown moves toward later paragraphs (end).
-                        //              ArrowRight/ArrowUp moves toward earlier paragraphs (start).
-                        const towardEnd = e.key === 'ArrowLeft' || e.key === 'ArrowDown';
-                        const anchorIsEnd = vs.anchorParaIdx > vs.focusParaIdx ||
-                            (vs.anchorParaIdx === vs.focusParaIdx &&
-                             vs.anchorViewOff >= vs.focusViewOff);
-                        // Collapse toward the end of the selection (whichever endpoint is "more
-                        // in the direction of movement"), matching standard browser behavior.
-                        const useAnchor = towardEnd ? anchorIsEnd : !anchorIsEnd;
-                        const paraIdx = useAnchor ? vs.anchorParaIdx : vs.focusParaIdx;
-                        const viewOff = useAnchor ? vs.anchorViewOff : vs.focusViewOff;
-                        virtualizer.clearVirtualSelection();
-                        if (this.commitTimer !== null) this.commitToCm6();
-                        const abs = virtualizer.paragraphRecords
-                            .slice(0, paraIdx).reduce((s, r) => s + r.viewLen, 0) + viewOff;
-                        this.jumpToViewOffset(abs);
-                        editorEl.afterNavigation();
-                        return;
-                    }
-                    virtualizer.clearVirtualSelection();
-                }
-                if (this.commitTimer !== null) this.commitToCm6();
-                editorEl.afterNavigation();
-            }
-        });
+            if (this.commitTimer !== null) this.commitToCm6();
+            editorEl.afterNavigation();
+        }
+    }
+
+    // When VS is active and an Arrow key collapses the selection, the browser collapses to the
+    // anchor PROXY (a window-boundary div), which triggers adjustWindowOnScroll to expand the
+    // DOM window toward the real anchor. Intercept and explicitly jump to the correct VS endpoint.
+    // Cmd+Up/Down are handled earlier (extendSelectionToDocumentBoundary) and return early, so
+    // only Cmd+Left/Right can reach here with metaKey set.
+    // Returns true if the key was consumed (a VS-aware jump was performed).
+    private collapseVirtualSelectionWithArrow(
+        e: KeyboardEvent, editorEl: EditorElement, virtualizer: ParagraphVirtualizer,
+    ): boolean {
+        const vs = !e.altKey && !e.ctrlKey &&
+            (!e.metaKey || e.key === 'ArrowLeft' || e.key === 'ArrowRight')
+            ? virtualizer.getVirtualSelection() : null;
+        if (!vs || !(e.key === 'ArrowLeft' || e.key === 'ArrowRight' ||
+                     e.key === 'ArrowUp'   || e.key === 'ArrowDown')) return false;
+        e.preventDefault();
+        // vertical-rl: ArrowLeft/ArrowDown moves toward later paragraphs (end).
+        //              ArrowRight/ArrowUp moves toward earlier paragraphs (start).
+        const towardEnd = e.key === 'ArrowLeft' || e.key === 'ArrowDown';
+        const anchorIsEnd = vs.anchorParaIdx > vs.focusParaIdx ||
+            (vs.anchorParaIdx === vs.focusParaIdx &&
+             vs.anchorViewOff >= vs.focusViewOff);
+        // Collapse toward the end of the selection (whichever endpoint is "more
+        // in the direction of movement"), matching standard browser behavior.
+        const useAnchor = towardEnd ? anchorIsEnd : !anchorIsEnd;
+        const paraIdx = useAnchor ? vs.anchorParaIdx : vs.focusParaIdx;
+        const viewOff = useAnchor ? vs.anchorViewOff : vs.focusViewOff;
+        virtualizer.clearVirtualSelection();
+        if (this.commitTimer !== null) this.commitToCm6();
+        const abs = virtualizer.paragraphRecords
+            .slice(0, paraIdx).reduce((s, r) => s + r.viewLen, 0) + viewOff;
+        this.jumpToViewOffset(abs);
+        editorEl.afterNavigation();
+        return true;
     }
 
     private registerVaultEvents(syncCoordinator: SyncCoordinator, clearForUnload: () => void): void {

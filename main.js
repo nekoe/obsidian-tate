@@ -5387,85 +5387,126 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
       editorEl.afterNavigation();
     });
     this.registerDomEvent(editorEl.el, "keydown", (e) => {
-      if (!e.isComposing && !e.metaKey && !e.ctrlKey && e.key.length === 1 && virtualizer.getVirtualSelection()) {
-        const vs = virtualizer.getVirtualSelection();
-        virtualizer.clearVirtualSelection();
-        editorEl.deleteVirtualSelection(vs);
+      this.handleEditorKeyDown(e, editorEl, virtualizer);
+    });
+  }
+  // Dispatches a keydown on the editor to the specialized handlers below.
+  // Each handler returns true when it consumes the event (no further handling needed).
+  handleEditorKeyDown(e, editorEl, virtualizer) {
+    this.deleteVirtualSelectionOnPrintableKey(e, editorEl, virtualizer);
+    if (this.handleUndoRedoKey(e, editorEl)) return;
+    if (this.handleSelectAllKey(e, virtualizer)) return;
+    if (this.handleDocumentBoundaryKey(e, editorEl, virtualizer)) return;
+    this.handleArrowAndNavigationKeys(e, editorEl, virtualizer);
+  }
+  // Deletes VS content on printable key press before compositionstart fires.
+  // The browser establishes the IME anchor when it passes the key to the IME engine,
+  // which happens AFTER keydown handlers complete but BEFORE compositionstart fires.
+  // Deleting VS here (rather than in compositionstart) ensures the cursor is already
+  // at (si, so) when the IME records its anchor, so composition text lands correctly.
+  // Does not consume the event: subsequent beforeinput/compositionstart proceed normally.
+  deleteVirtualSelectionOnPrintableKey(e, editorEl, virtualizer) {
+    if (!e.isComposing && !e.metaKey && !e.ctrlKey && e.key.length === 1 && virtualizer.getVirtualSelection()) {
+      const vs = virtualizer.getVirtualSelection();
+      virtualizer.clearVirtualSelection();
+      editorEl.deleteVirtualSelection(vs);
+    }
+  }
+  // Ctrl+Z / Cmd+Z: Undo,  Ctrl+Shift+Z / Cmd+Shift+Z: Redo.
+  handleUndoRedoKey(e, editorEl) {
+    if ((e.metaKey || e.ctrlKey) && !e.altKey && e.key === "z") {
+      e.preventDefault();
+      this.doUndoRedo(editorEl, e.shiftKey);
+      return true;
+    }
+    return false;
+  }
+  // Cmd-A / Ctrl-A: initialize a VirtualSelection spanning the entire activeDocument.
+  // The DOM Range is set to proxy positions (window boundaries) so native ::selection
+  // highlights all in-window paragraphs; no full DOM expansion is required.
+  handleSelectAllKey(e, virtualizer) {
+    if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.key === "a") {
+      e.preventDefault();
+      if (virtualizer.paragraphRecords.length > 0) virtualizer.setVirtualSelectAll();
+      return true;
+    }
+    return false;
+  }
+  // Cmd+↑/↓ (macOS) / Ctrl+Home/End (Windows/Linux): jump or extend selection to document boundary.
+  // Without Shift: collapse cursor to start/end. With Shift: extend selection from anchor.
+  handleDocumentBoundaryKey(e, editorEl, virtualizer) {
+    if (e.isComposing || e.altKey) return false;
+    const toStart = import_obsidian6.Platform.isMacOS ? e.metaKey && e.key === "ArrowUp" : e.ctrlKey && e.key === "Home";
+    const toEnd = import_obsidian6.Platform.isMacOS ? e.metaKey && e.key === "ArrowDown" : e.ctrlKey && e.key === "End";
+    if (!toStart && !toEnd) return false;
+    e.preventDefault();
+    if (this.commitTimer !== null) this.commitToCm6();
+    if (e.shiftKey) {
+      virtualizer.extendSelectionToDocumentBoundary(toStart);
+    } else {
+      virtualizer.clearVirtualSelection();
+      if (toStart) {
+        this.jumpToViewOffset(0);
+      } else {
+        const totalLen = virtualizer.paragraphRecords.reduce((sum, r) => sum + r.viewLen, 0);
+        this.jumpToViewOffset(totalLen);
       }
-      if ((e.metaKey || e.ctrlKey) && !e.altKey && e.key === "z") {
+    }
+    editorEl.afterNavigation();
+    return true;
+  }
+  // Handles arrow keys inside a tcy span and plain navigation keys (arrows + Home/End/PageUp/Down).
+  handleArrowAndNavigationKeys(e, editorEl, virtualizer) {
+    if (!e.isComposing && (e.key === "ArrowUp" || e.key === "ArrowDown" || e.key === "ArrowLeft" || e.key === "ArrowRight")) {
+      if (editorEl.handleTcyNavigation(e.key, e.shiftKey)) {
         e.preventDefault();
-        this.doUndoRedo(editorEl, e.shiftKey);
-        return;
-      }
-      if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.key === "a") {
-        e.preventDefault();
-        if (virtualizer.paragraphRecords.length > 0) virtualizer.setVirtualSelectAll();
-        return;
-      }
-      if (!e.isComposing && !e.altKey) {
-        const toStart = import_obsidian6.Platform.isMacOS ? e.metaKey && e.key === "ArrowUp" : e.ctrlKey && e.key === "Home";
-        const toEnd = import_obsidian6.Platform.isMacOS ? e.metaKey && e.key === "ArrowDown" : e.ctrlKey && e.key === "End";
-        if (toStart || toEnd) {
-          e.preventDefault();
+        if (!e.shiftKey) {
           if (this.commitTimer !== null) this.commitToCm6();
-          if (e.shiftKey) {
-            virtualizer.extendSelectionToDocumentBoundary(toStart);
-          } else {
-            virtualizer.clearVirtualSelection();
-            if (toStart) {
-              this.jumpToViewOffset(0);
-            } else {
-              const totalLen = virtualizer.paragraphRecords.reduce((sum, r) => sum + r.viewLen, 0);
-              this.jumpToViewOffset(totalLen);
-            }
-          }
           editorEl.afterNavigation();
           return;
         }
       }
-      if (!e.isComposing && (e.key === "ArrowUp" || e.key === "ArrowDown" || e.key === "ArrowLeft" || e.key === "ArrowRight")) {
-        if (editorEl.handleTcyNavigation(e.key, e.shiftKey)) {
-          e.preventDefault();
-          if (!e.shiftKey) {
-            if (this.commitTimer !== null) this.commitToCm6();
-            editorEl.afterNavigation();
-            return;
-          }
-        }
+    }
+    if (!e.isComposing && [
+      "ArrowLeft",
+      "ArrowRight",
+      "ArrowUp",
+      "ArrowDown",
+      "Home",
+      "End",
+      "PageUp",
+      "PageDown"
+    ].includes(e.key)) {
+      editorEl.notifyNavigationKey(e.key);
+      if (!e.shiftKey) {
+        if (this.collapseVirtualSelectionWithArrow(e, editorEl, virtualizer)) return;
+        virtualizer.clearVirtualSelection();
       }
-      if (!e.isComposing && [
-        "ArrowLeft",
-        "ArrowRight",
-        "ArrowUp",
-        "ArrowDown",
-        "Home",
-        "End",
-        "PageUp",
-        "PageDown"
-      ].includes(e.key)) {
-        editorEl.notifyNavigationKey(e.key);
-        if (!e.shiftKey) {
-          const vs = !e.altKey && !e.ctrlKey && (!e.metaKey || e.key === "ArrowLeft" || e.key === "ArrowRight") ? virtualizer.getVirtualSelection() : null;
-          if (vs && (e.key === "ArrowLeft" || e.key === "ArrowRight" || e.key === "ArrowUp" || e.key === "ArrowDown")) {
-            e.preventDefault();
-            const towardEnd = e.key === "ArrowLeft" || e.key === "ArrowDown";
-            const anchorIsEnd = vs.anchorParaIdx > vs.focusParaIdx || vs.anchorParaIdx === vs.focusParaIdx && vs.anchorViewOff >= vs.focusViewOff;
-            const useAnchor = towardEnd ? anchorIsEnd : !anchorIsEnd;
-            const paraIdx = useAnchor ? vs.anchorParaIdx : vs.focusParaIdx;
-            const viewOff = useAnchor ? vs.anchorViewOff : vs.focusViewOff;
-            virtualizer.clearVirtualSelection();
-            if (this.commitTimer !== null) this.commitToCm6();
-            const abs = virtualizer.paragraphRecords.slice(0, paraIdx).reduce((s, r) => s + r.viewLen, 0) + viewOff;
-            this.jumpToViewOffset(abs);
-            editorEl.afterNavigation();
-            return;
-          }
-          virtualizer.clearVirtualSelection();
-        }
-        if (this.commitTimer !== null) this.commitToCm6();
-        editorEl.afterNavigation();
-      }
-    });
+      if (this.commitTimer !== null) this.commitToCm6();
+      editorEl.afterNavigation();
+    }
+  }
+  // When VS is active and an Arrow key collapses the selection, the browser collapses to the
+  // anchor PROXY (a window-boundary div), which triggers adjustWindowOnScroll to expand the
+  // DOM window toward the real anchor. Intercept and explicitly jump to the correct VS endpoint.
+  // Cmd+Up/Down are handled earlier (extendSelectionToDocumentBoundary) and return early, so
+  // only Cmd+Left/Right can reach here with metaKey set.
+  // Returns true if the key was consumed (a VS-aware jump was performed).
+  collapseVirtualSelectionWithArrow(e, editorEl, virtualizer) {
+    const vs = !e.altKey && !e.ctrlKey && (!e.metaKey || e.key === "ArrowLeft" || e.key === "ArrowRight") ? virtualizer.getVirtualSelection() : null;
+    if (!vs || !(e.key === "ArrowLeft" || e.key === "ArrowRight" || e.key === "ArrowUp" || e.key === "ArrowDown")) return false;
+    e.preventDefault();
+    const towardEnd = e.key === "ArrowLeft" || e.key === "ArrowDown";
+    const anchorIsEnd = vs.anchorParaIdx > vs.focusParaIdx || vs.anchorParaIdx === vs.focusParaIdx && vs.anchorViewOff >= vs.focusViewOff;
+    const useAnchor = towardEnd ? anchorIsEnd : !anchorIsEnd;
+    const paraIdx = useAnchor ? vs.anchorParaIdx : vs.focusParaIdx;
+    const viewOff = useAnchor ? vs.anchorViewOff : vs.focusViewOff;
+    virtualizer.clearVirtualSelection();
+    if (this.commitTimer !== null) this.commitToCm6();
+    const abs = virtualizer.paragraphRecords.slice(0, paraIdx).reduce((s, r) => s + r.viewLen, 0) + viewOff;
+    this.jumpToViewOffset(abs);
+    editorEl.afterNavigation();
+    return true;
   }
   registerVaultEvents(syncCoordinator, clearForUnload) {
     this.registerEvent(
