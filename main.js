@@ -1292,7 +1292,7 @@ var InlineExpander = class {
   }
   // Replaces target with a tate-editing span and positions the cursor.
   // Returns the created span and its raw text (for InlineEditor to store as expandedEl/originalText).
-  // Caller is responsible for setting isModifyingDom and clearing inBurst.
+  // Caller is responsible for setting isModifyingDom.
   expandForEditing(target, range) {
     const rawText = serializeNode(target, this.el);
     const cursorOffset = rawOffsetForExpand(target, range.startContainer, range.startOffset);
@@ -1315,11 +1315,10 @@ var InlineExpander = class {
   }
   // Collapses the editing span, re-parses its content, and inserts the result in place.
   // Cursor placement after collapse is handled by the caller.
-  // Returns hasChanged (whether content differs from when expansion started) and detached
-  // (true when the span was already removed from the DOM — caller must NOT clear inBurst).
+  // Returns hasChanged (whether content differs from when expansion started).
   collapseEditing(expandedEl, expandedElOriginalText) {
     var _a, _b, _c;
-    if (!expandedEl.isConnected) return { hasChanged: false, detached: true };
+    if (!expandedEl.isConnected) return { hasChanged: false };
     let rawText = (_a = expandedEl.textContent) != null ? _a : "";
     const hasChanged = expandedElOriginalText === null || rawText !== expandedElOriginalText;
     const parent = expandedEl.parentNode;
@@ -1349,7 +1348,7 @@ var InlineExpander = class {
     while (fragment.firstChild) {
       parent.insertBefore(fragment.firstChild, nextSibling);
     }
-    return { hasChanged, detached: false };
+    return { hasChanged };
   }
 };
 
@@ -1365,9 +1364,6 @@ var InlineEditor = class {
     this.expandedElOriginalText = null;
     // Cached selection range for command execution (retained even after focus leaves due to command palette)
     this.savedRange = null;
-    // Flag indicating there are uncommitted changes pending for CM6.
-    // Set by onBeforeInput, cleared by resetBurst() when commitToCm6() completes.
-    this.inBurst = false;
     // Per-element-type flags controlling whether cursor entry triggers inline expansion.
     this.expandRuby = true;
     this.expandTcy = true;
@@ -1387,12 +1383,11 @@ var InlineEditor = class {
     this.expandBouten = bouten;
     this.expandHeading = heading;
   }
-  // Resets expansion state, selection cache, and burst flag (called from setValue / applyFromCm6)
+  // Resets expansion state and selection cache (called from setValue / applyFromCm6)
   reset() {
     this.expandedEl = null;
     this.expandedElOriginalText = null;
     this.savedRange = null;
-    this.inBurst = false;
     this.collapseGuard.clear();
   }
   isExpanded() {
@@ -1734,11 +1729,6 @@ var InlineEditor = class {
     sel.addRange(r);
     return true;
   }
-  // Called on the beforeinput event (registered from view.ts).
-  // Sets the inBurst flag to indicate there are uncommitted changes pending for CM6.
-  onBeforeInput() {
-    this.inBurst = true;
-  }
   // Returns the annotation element that should intercept the next insertText event, or null.
   // Determines the expand flag based on the recorded element type.
   getCursorCollapseEl() {
@@ -1763,13 +1753,8 @@ var InlineEditor = class {
   handlePostCollapseInput() {
     return this.collapseGuard.handlePostCollapseInput();
   }
-  // Resets the burst flag after a commit. Does NOT clear collapseGuard.
-  afterCommit() {
-    this.inBurst = false;
-  }
-  // Resets the burst flag and clears collapseGuard on mouse click or navigation key.
+  // Clears collapseGuard on mouse click or navigation key.
   afterNavigation() {
-    this.inBurst = false;
     this.collapseGuard.clear();
   }
   // ---- Shared logic for selection wrap ----
@@ -1857,7 +1842,6 @@ var InlineEditor = class {
     const { el: span, originalText } = this.expander.expandForEditing(target, range);
     this.expandedEl = span;
     this.expandedElOriginalText = originalText;
-    this.inBurst = false;
   }
   // Places the cursor just after a collapsed annotation element.
   // Inserts a cursor-anchor span at end-of-line if needed, and records the collapsed element
@@ -1893,13 +1877,12 @@ var InlineEditor = class {
   // Returns true if content changed (signal for view.ts to call commitToCm6).
   collapseEditing() {
     if (!this.expandedEl) return false;
-    const { hasChanged, detached } = this.expander.collapseEditing(
+    const { hasChanged } = this.expander.collapseEditing(
       this.expandedEl,
       this.expandedElOriginalText
     );
     this.expandedEl = null;
     this.expandedElOriginalText = null;
-    if (!detached) this.inBurst = false;
     return hasChanged;
   }
   // Collapses the editing span (DOM cleanup) before applying CM6 changes, then resets all state.
@@ -3697,7 +3680,6 @@ var EditorElement = class {
     if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return false;
     const range = sel.getRangeAt(0);
     if (!this.el.contains(range.commonAncestorContainer)) return false;
-    this.inlineEditor.onBeforeInput();
     this.deleteRangeContents(range);
     return true;
   }
@@ -3819,7 +3801,6 @@ var EditorElement = class {
     if (anchorTeleported) {
       this._cursorJumped = true;
     }
-    this.inlineEditor.onBeforeInput();
   }
   // Inserts parsed Aozora inline elements at the range position (single-line paste).
   insertParsedInline(range, line) {
@@ -3994,7 +3975,6 @@ var EditorElement = class {
   // after the element instead. Chrome's Selection API normalization is synchronous and
   // cannot be countered with sel.addRange, so Range-level insertion is used instead.
   onBeforeInput(e) {
-    this.inlineEditor.onBeforeInput();
     if (!e.isComposing && e.inputType === "insertText" && e.data) {
       const collapseEl = this.inlineEditor.getCursorCollapseEl();
       if (collapseEl) {
@@ -4046,11 +4026,7 @@ var EditorElement = class {
   onCompositionEnd(e) {
     this.inputTransformer.handleCompositionEnd(e);
   }
-  // Resets the burst flag after a commit. Does NOT clear collapseGuard.
-  afterCommit() {
-    this.inlineEditor.afterCommit();
-  }
-  // Resets the burst flag and clears collapseGuard on mouse click or navigation key.
+  // Clears collapseGuard on mouse click or navigation key.
   afterNavigation() {
     this.inlineEditor.afterNavigation();
   }
@@ -5938,7 +5914,6 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
       const viewOffset = el.getViewCursorOffset();
       cm6.setCursor(cm6.offsetToPos(viewToSrc(segs, viewOffset)));
     }
-    el.afterCommit();
     this.plugin.refreshOutline();
   }
   /** Delegates Undo (isRedo=false) or Redo (isRedo=true) to CM6 and restores

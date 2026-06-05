@@ -22,9 +22,6 @@ export class InlineEditor {
         startContainer: Node; startOffset: number;
         endContainer: Node; endOffset: number;
     } | null = null;
-    // Flag indicating there are uncommitted changes pending for CM6.
-    // Set by onBeforeInput, cleared by resetBurst() when commitToCm6() completes.
-    private inBurst = false;
     // Per-element-type flags controlling whether cursor entry triggers inline expansion.
     private expandRuby = true;
     private expandTcy = true;
@@ -55,12 +52,11 @@ export class InlineEditor {
         this.expandHeading = heading;
     }
 
-    // Resets expansion state, selection cache, and burst flag (called from setValue / applyFromCm6)
+    // Resets expansion state and selection cache (called from setValue / applyFromCm6)
     reset(): void {
         this.expandedEl = null;
         this.expandedElOriginalText = null;
         this.savedRange = null;
-        this.inBurst = false;
         this.collapseGuard.clear();
     }
 
@@ -501,12 +497,6 @@ export class InlineEditor {
         return true;
     }
 
-    // Called on the beforeinput event (registered from view.ts).
-    // Sets the inBurst flag to indicate there are uncommitted changes pending for CM6.
-    onBeforeInput(): void {
-        this.inBurst = true;
-    }
-
     // Returns the annotation element that should intercept the next insertText event, or null.
     // Determines the expand flag based on the recorded element type.
     getCursorCollapseEl(): HTMLElement | null {
@@ -532,14 +522,8 @@ export class InlineEditor {
         return this.collapseGuard.handlePostCollapseInput();
     }
 
-    // Resets the burst flag after a commit. Does NOT clear collapseGuard.
-    afterCommit(): void {
-        this.inBurst = false;
-    }
-
-    // Resets the burst flag and clears collapseGuard on mouse click or navigation key.
+    // Clears collapseGuard on mouse click or navigation key.
     afterNavigation(): void {
-        this.inBurst = false;
         this.collapseGuard.clear();
     }
 
@@ -646,7 +630,6 @@ export class InlineEditor {
         const { el: span, originalText } = this.expander.expandForEditing(target, range);
         this.expandedEl = span;
         this.expandedElOriginalText = originalText;
-        this.inBurst = false; // Expansion is a navigation action; treat subsequent input as a new burst.
     }
 
     // Places the cursor just after a collapsed annotation element.
@@ -686,13 +669,11 @@ export class InlineEditor {
     // Returns true if content changed (signal for view.ts to call commitToCm6).
     private collapseEditing(): boolean {
         if (!this.expandedEl) return false;
-        const { hasChanged, detached } = this.expander.collapseEditing(
+        const { hasChanged } = this.expander.collapseEditing(
             this.expandedEl, this.expandedElOriginalText
         );
         this.expandedEl = null;
         this.expandedElOriginalText = null;
-        // Preserve inBurst when the span was already detached (e.g. Undo removed it externally).
-        if (!detached) this.inBurst = false;
         return hasChanged;
     }
 

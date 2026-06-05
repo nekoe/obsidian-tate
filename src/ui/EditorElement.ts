@@ -305,7 +305,6 @@ export class EditorElement {
         if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return false;
         const range = sel.getRangeAt(0);
         if (!this.el.contains(range.commonAncestorContainer)) return false;
-        this.inlineEditor.onBeforeInput(); // keep burst flag in sync
         this.deleteRangeContents(range);
         return true;
     }
@@ -493,8 +492,6 @@ export class EditorElement {
             this._cursorJumped = true;
         }
 
-        // beforeinput does not fire for paste, so set inBurst manually
-        this.inlineEditor.onBeforeInput();
         // view.ts calls commitToCm6() after paste
     }
 
@@ -701,7 +698,6 @@ export class EditorElement {
     // after the element instead. Chrome's Selection API normalization is synchronous and
     // cannot be countered with sel.addRange, so Range-level insertion is used instead.
     onBeforeInput(e: InputEvent): void {
-        this.inlineEditor.onBeforeInput();
         if (!e.isComposing && e.inputType === 'insertText' && e.data) {
             const collapseEl = this.inlineEditor.getCursorCollapseEl();
             if (collapseEl) {
@@ -767,12 +763,7 @@ export class EditorElement {
         this.inputTransformer.handleCompositionEnd(e);
     }
 
-    // Resets the burst flag after a commit. Does NOT clear collapseGuard.
-    afterCommit(): void {
-        this.inlineEditor.afterCommit();
-    }
-
-    // Resets the burst flag and clears collapseGuard on mouse click or navigation key.
+    // Clears collapseGuard on mouse click or navigation key.
     afterNavigation(): void {
         this.inlineEditor.afterNavigation();
     }

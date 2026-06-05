@@ -1096,7 +1096,6 @@ export class VerticalWritingView extends ItemView {
             const viewOffset = el.getViewCursorOffset();
             cm6.setCursor(cm6.offsetToPos(viewToSrc(segs, viewOffset)));
         }
-        el.afterCommit();
         // Records were already updated by syncRecordsFromDom() at the start of this call,
         // so refreshOutline() sees current src/viewLen values for accurate jump offsets.
         this.plugin.refreshOutline();

@@ -2,13 +2,12 @@ import { sanitizeHTMLToDom } from 'obsidian';
 import { parseInlineToHtml, serializeNode } from './AozoraParser';
 import { rawOffsetForExpand, getExtraCharsFromAnnotation, annotationKindOf } from './domHelpers';
 
-// Result of collapseEditing. The detached flag is true when the span was not
-// in the DOM; in that case, InlineEditor must NOT clear inBurst.
-export type CollapseResult = { hasChanged: boolean; detached: boolean };
+// Result of collapseEditing.
+export type CollapseResult = { hasChanged: boolean };
 
 // Handles the low-level expand/collapse of annotation elements (ruby/tcy/bouten)
 // into raw-text tate-editing spans. Does not own any mutable state beyond the el reference.
-// Caller (InlineEditor) is responsible for isModifyingDom, expandedEl, and inBurst state.
+// Caller (InlineEditor) is responsible for isModifyingDom and expandedEl state.
 export class InlineExpander {
     constructor(private readonly el: HTMLDivElement) {}
 
@@ -29,7 +28,7 @@ export class InlineExpander {
 
     // Replaces target with a tate-editing span and positions the cursor.
     // Returns the created span and its raw text (for InlineEditor to store as expandedEl/originalText).
-    // Caller is responsible for setting isModifyingDom and clearing inBurst.
+    // Caller is responsible for setting isModifyingDom.
     expandForEditing(target: HTMLElement, range: Range): { el: HTMLSpanElement; originalText: string } {
         const rawText = serializeNode(target, this.el);
         const cursorOffset = rawOffsetForExpand(target, range.startContainer, range.startOffset);
@@ -56,10 +55,9 @@ export class InlineExpander {
 
     // Collapses the editing span, re-parses its content, and inserts the result in place.
     // Cursor placement after collapse is handled by the caller.
-    // Returns hasChanged (whether content differs from when expansion started) and detached
-    // (true when the span was already removed from the DOM — caller must NOT clear inBurst).
+    // Returns hasChanged (whether content differs from when expansion started).
     collapseEditing(expandedEl: HTMLSpanElement, expandedElOriginalText: string | null): CollapseResult {
-        if (!expandedEl.isConnected) return { hasChanged: false, detached: true };
+        if (!expandedEl.isConnected) return { hasChanged: false };
 
         let rawText = expandedEl.textContent ?? '';
         const hasChanged = expandedElOriginalText === null || rawText !== expandedElOriginalText;
@@ -101,6 +99,6 @@ export class InlineExpander {
             parent.insertBefore(fragment.firstChild, nextSibling);
         }
 
-        return { hasChanged, detached: false };
+        return { hasChanged };
     }
 }

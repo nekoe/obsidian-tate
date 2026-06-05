@@ -177,7 +177,7 @@ describe('findExpandableAncestor — heading', () => {
 // collapseEditing
 // ================================================================
 
-describe('collapseEditing — detached / hasChanged', () => {
+describe('collapseEditing — hasChanged', () => {
     let root: HTMLDivElement;
     let expander: InlineExpander;
 
@@ -186,11 +186,11 @@ describe('collapseEditing — detached / hasChanged', () => {
         expander = new InlineExpander(root);
     });
 
-    it('returns {hasChanged: false, detached: true} when span is not connected', () => {
+    it('returns hasChanged: false when span is not connected', () => {
         const span = makeEditingSpan('春夏［＃「春夏」に傍点］');
         // intentionally not appended to DOM
         const result = expander.collapseEditing(span, '春夏［＃「春夏」に傍点］');
-        expect(result).toEqual({ hasChanged: false, detached: true });
+        expect(result).toEqual({ hasChanged: false });
     });
 
     it('returns hasChanged: false when text matches originalText', () => {
@@ -199,7 +199,6 @@ describe('collapseEditing — detached / hasChanged', () => {
         para.appendChild(span);
         const result = expander.collapseEditing(span, '春夏［＃「春夏」に傍点］');
         expect(result.hasChanged).toBe(false);
-        expect(result.detached).toBe(false);
     });
 
     it('returns hasChanged: true when text differs from originalText', () => {
