@@ -275,6 +275,22 @@ export function computeDomPositionFromViewOff(
     return { node: div, offset: div.childNodes.length };
 }
 
+// Counts visible characters covered by a virtual selection. The range must be in
+// document order (startPara <= endPara, as returned by normalizeVsRange); same-paragraph
+// offsets may be reversed and are normalized here. Offsets are view offsets within the
+// boundary paragraphs; getViewLen(i) returns the visible char count of paragraph i.
+// Paragraph breaks contribute 0, matching the total-count rule (newline viewLen is 0).
+export function countVsViewChars(
+    startPara: number, startOff: number,
+    endPara: number, endOff: number,
+    getViewLen: (i: number) => number,
+): number {
+    if (startPara === endPara) return Math.abs(endOff - startOff);
+    let count = getViewLen(startPara) - startOff;
+    for (let i = startPara + 1; i < endPara; i++) count += getViewLen(i);
+    return count + endOff;
+}
+
 export function getExtraCharsFromAnnotation(rawText: string): string {
     // Ruby is intentionally excluded: in ｜base《rt》 / kanji《rt》 the base text is not the
     // backward-referenced content of a bracket annotation, so no leading character can be

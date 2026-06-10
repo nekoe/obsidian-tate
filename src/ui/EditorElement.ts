@@ -4,7 +4,7 @@ import { buildSegmentMap, srcToView, viewToSrc, stripAnnotationsInSrcRange } fro
 import { parseInlineToHtml, parseToHtml, serializeNode } from './AozoraParser';
 import { InlineEditor } from './InlineEditor';
 import { InputTransformer } from './InputTransformer';
-import { isEffectivelyEmpty, clearChildren, ensureBrPlaceholder, removeEmptyAnnotationShells, computeDivViewLen, computeViewOffsetInDiv, computeDomPositionFromViewOff, findParentDivInEditor } from './domHelpers';
+import { isEffectivelyEmpty, clearChildren, ensureBrPlaceholder, removeEmptyAnnotationShells, computeDivViewLen, computeViewOffsetInDiv, computeDomPositionFromViewOff, findParentDivInEditor, countVsViewChars } from './domHelpers';
 import type { ParagraphVirtualizer, VirtualSelection } from './ParagraphVirtualizer';
 import { SPACER_CLASS } from './ParagraphVirtualizer';
 
@@ -912,6 +912,32 @@ export class EditorElement {
             parts.push(i === si ? sliced : '\n' + sliced);
         }
         return parts.join('');
+    }
+
+    // Counts visible characters in the current DOM selection, applying the same rules as
+    // the status-bar total (Aozora markup, ruby readings, and newlines excluded).
+    // Returns null when there is no range selection inside the editor.
+    // Selections crossing an anchor island are handled by getVsSelectionViewLen instead
+    // (view.ts initializes a VirtualSelection for them before this is consulted).
+    getSelectionViewLen(): number | null {
+        const sel = window.getSelection();
+        if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return null;
+        const range = sel.getRangeAt(0);
+        if (!this.el.contains(range.commonAncestorContainer)) return null;
+        const fragment = range.cloneContents();
+        const text = Array.from(fragment.childNodes)
+            .map(n => serializeNode(n, this.el))
+            .join('');
+        return buildSegmentMap(text).reduce((sum, seg) => sum + seg.viewLen, 0);
+    }
+
+    // Counts visible characters covered by a gap-spanning VirtualSelection using
+    // per-paragraph viewLen from the records (no string slicing or DOM reads).
+    getVsSelectionViewLen(vs: VirtualSelection): number {
+        const virt = this.virtualizer;
+        if (!virt) return 0;
+        const [si, so, ei, eo] = this.normalizeVsRange(vs);
+        return countVsViewChars(si, so, ei, eo, (i) => virt.getViewLenByIndex(i));
     }
 
     // Called after CM6 Undo/Redo. Applies content to the vertical writing view and

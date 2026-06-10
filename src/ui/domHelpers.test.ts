@@ -5,7 +5,7 @@ import {
     insertAnnotationElement, setCursorAfter,
     findAncestor, findBoutenAncestor, findTcyAncestor, isInsideRuby,
     findCursorAnchorAncestor, findLastBaseTextInElement,
-    rawOffsetForExpand, getExtraCharsFromAnnotation,
+    rawOffsetForExpand, getExtraCharsFromAnnotation, countVsViewChars,
     isEffectivelyEmpty, clearChildren, ensureBrPlaceholder, removeEmptyAnnotationShells,
 } from './domHelpers';
 
@@ -338,6 +338,44 @@ describe('rawOffsetForExpand', () => {
         const bouten = createBoutenEl('春');
         const text = bouten.firstChild as Text;
         expect(rawOffsetForExpand(bouten, text, 0)).toBe(0);
+    });
+});
+
+describe('countVsViewChars', () => {
+    // Paragraph viewLens: para0=10, para1=20, para2=30, para3=40
+    const viewLens = [10, 20, 30, 40];
+    const getViewLen = (i: number) => viewLens[i];
+
+    it('single paragraph: difference of offsets', () => {
+        expect(countVsViewChars(1, 3, 1, 8, getViewLen)).toBe(5);
+    });
+
+    it('single paragraph with reversed offsets is normalized', () => {
+        expect(countVsViewChars(1, 8, 1, 3, getViewLen)).toBe(5);
+    });
+
+    it('single paragraph empty range returns 0', () => {
+        expect(countVsViewChars(2, 7, 2, 7, getViewLen)).toBe(0);
+    });
+
+    it('two adjacent paragraphs: tail of first + head of second', () => {
+        // para1 tail: 20 - 3 = 17, para2 head: 4 → 21
+        expect(countVsViewChars(1, 3, 2, 4, getViewLen)).toBe(21);
+    });
+
+    it('counts intermediate paragraphs in full', () => {
+        // para0 tail: 10 - 2 = 8, para1: 20, para2: 30, para3 head: 5 → 63
+        expect(countVsViewChars(0, 2, 3, 5, getViewLen)).toBe(63);
+    });
+
+    it('boundary offsets cover whole first and last paragraphs', () => {
+        // startOff 0 and endOff === viewLen → both paragraphs counted in full
+        expect(countVsViewChars(0, 0, 1, 20, getViewLen)).toBe(30);
+    });
+
+    it('selection covering only the paragraph break counts 0', () => {
+        // From end of para0 to start of para1: no visible chars
+        expect(countVsViewChars(0, 10, 1, 0, getViewLen)).toBe(0);
     });
 });
 

@@ -828,6 +828,12 @@ function computeDomPositionFromViewOff(div, editorEl, viewOff) {
   }
   return { node: div, offset: div.childNodes.length };
 }
+function countVsViewChars(startPara, startOff, endPara, endOff, getViewLen) {
+  if (startPara === endPara) return Math.abs(endOff - startOff);
+  let count = getViewLen(startPara) - startOff;
+  for (let i = startPara + 1; i < endPara; i++) count += getViewLen(i);
+  return count + endOff;
+}
 function getExtraCharsFromAnnotation(rawText) {
   const patterns = [TCY, BOUTEN, HEADING].map(plainRegex);
   for (const re of patterns) {
@@ -4156,6 +4162,28 @@ var EditorElement = class {
     }
     return parts.join("");
   }
+  // Counts visible characters in the current DOM selection, applying the same rules as
+  // the status-bar total (Aozora markup, ruby readings, and newlines excluded).
+  // Returns null when there is no range selection inside the editor.
+  // Selections crossing an anchor island are handled by getVsSelectionViewLen instead
+  // (view.ts initializes a VirtualSelection for them before this is consulted).
+  getSelectionViewLen() {
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return null;
+    const range = sel.getRangeAt(0);
+    if (!this.el.contains(range.commonAncestorContainer)) return null;
+    const fragment = range.cloneContents();
+    const text = Array.from(fragment.childNodes).map((n) => serializeNode(n, this.el)).join("");
+    return buildSegmentMap(text).reduce((sum, seg) => sum + seg.viewLen, 0);
+  }
+  // Counts visible characters covered by a gap-spanning VirtualSelection using
+  // per-paragraph viewLen from the records (no string slicing or DOM reads).
+  getVsSelectionViewLen(vs) {
+    const virt = this.virtualizer;
+    if (!virt) return 0;
+    const [si, so, ei, eo] = this.normalizeVsRange(vs);
+    return countVsViewChars(si, so, ei, eo, (i) => virt.getViewLenByIndex(i));
+  }
   // Called after CM6 Undo/Redo. Applies content to the vertical writing view and
   // restores the cursor by converting srcOffset (CM6 cursor position) via srcToView.
   // prevContent must equal the current DOM content (caller guarantees prevContent !== content).
@@ -5078,6 +5106,12 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
     // returns 0 when the editor lacks focus, so this field preserves the last valid offset.
     this.lastKnownViewOffset = null;
     this.selectionChangeRafId = null;
+    // Last total character count pushed to the status bar. Cached so selectionchange can
+    // re-render "N (M) 文字" without re-running buildSegmentMap over the whole document.
+    this.lastCharCount = 0;
+    // Last selection count pushed to the status bar. Used to skip redundant status bar
+    // writes on caret-only selectionchange events. null = no selection shown.
+    this.lastSelectedCharCount = null;
     // Tracks whether escScope is currently on the keymap stack to prevent double-push.
     // active-leaf-change and notifyActivated() can both trigger activation; the flag
     // ensures pushScope/popScope are always balanced regardless of call order.
@@ -5129,12 +5163,12 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
           const savedOffset = (_a = this.lastKnownViewOffset) != null ? _a : editorEl.getViewCursorOffset();
           this.beginScrollRestoring();
           editorEl.setValue(content, false);
-          this.plugin.updateCharCount(countChars(content));
+          this.pushCharCount(countChars(content));
           this.plugin.refreshOutline();
           this.restoreViewOffset(savedOffset);
         } else {
           editorEl.loadContent(content, this.pendingLoadViewOffset);
-          this.plugin.updateCharCount(countChars(content));
+          this.pushCharCount(countChars(content));
           this.plugin.refreshOutline();
         }
       }
@@ -5153,6 +5187,8 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
       this.lastCommittedContent = "";
       this.pendingCursorOffset = null;
       this.lastKnownViewOffset = null;
+      this.lastCharCount = 0;
+      this.lastSelectedCharCount = null;
       this.plugin.updateCharCount(null);
       this.plugin.refreshOutline();
       this.cancelScrollRestoring();
@@ -5307,13 +5343,15 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
           }
         }
       }
-      if (activeDocument.activeElement === editorEl.el && !editorEl.isInlineExpanded()) {
+      if (activeDocument.activeElement === editorEl.el) {
         if (this.selectionChangeRafId !== null) window.cancelAnimationFrame(this.selectionChangeRafId);
         this.selectionChangeRafId = window.requestAnimationFrame(() => {
           this.selectionChangeRafId = null;
-          if (activeDocument.activeElement === editorEl.el && !editorEl.isInlineExpanded()) {
+          if (activeDocument.activeElement !== editorEl.el) return;
+          if (!editorEl.isInlineExpanded()) {
             this.lastKnownViewOffset = editorEl.getViewCursorOffset();
           }
+          this.updateSelectionCharCount(editorEl, virtualizer);
         });
       }
     });
@@ -5325,6 +5363,31 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
     this.registerDomEvent(editorEl.el, "keydown", (e) => {
       this.handleEditorKeyDown(e, editorEl, virtualizer);
     });
+  }
+  // Pushes a new total to the status bar and caches it for selection-count re-renders.
+  // All total-count update paths must go through here (not plugin.updateCharCount directly)
+  // so that lastCharCount stays in sync with the displayed total.
+  pushCharCount(count) {
+    this.lastCharCount = count;
+    this.lastSelectedCharCount = null;
+    this.plugin.updateCharCount(count);
+  }
+  // Re-renders the status bar as "N (M) 文字" / "N文字" from the cached total and the
+  // current selection. Called from the selectionchange rAF while the editor has focus.
+  updateSelectionCharCount(editorEl, virtualizer) {
+    var _a;
+    if (!((_a = this.syncCoordinator) == null ? void 0 : _a.currentFile)) return;
+    let selected;
+    if (editorEl.isInlineExpanded()) {
+      const sel = window.getSelection();
+      selected = sel && !sel.isCollapsed ? sel.toString().replace(/\n/g, "").length : null;
+    } else {
+      const vs = virtualizer.getVirtualSelection();
+      selected = vs ? editorEl.getVsSelectionViewLen(vs) : editorEl.getSelectionViewLen();
+    }
+    if (selected === this.lastSelectedCharCount) return;
+    this.lastSelectedCharCount = selected;
+    this.plugin.updateCharCount(this.lastCharCount, selected);
   }
   // Dispatches a keydown on the editor to the specialized handlers below.
   // Each handler returns true when it consumes the event (no further handling needed).
@@ -5676,7 +5739,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
   onThisLeafActivated() {
     var _a, _b;
     this.pushEscScope();
-    this.plugin.updateCharCount(countChars(this.lastCommittedContent));
+    this.pushCharCount(countChars(this.lastCommittedContent));
     const el = this.editorEl;
     if (el) {
       if (this.pendingCursorOffset !== null) {
@@ -5909,7 +5972,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
     this.lastCommittedContent = content;
     (_a = this.syncCoordinator) == null ? void 0 : _a.notifySelfWrite(content);
     const segs = buildSegmentMap(content);
-    this.plugin.updateCharCount(segs.reduce((sum, seg) => sum + seg.viewLen, 0));
+    this.pushCharCount(segs.reduce((sum, seg) => sum + seg.viewLen, 0));
     if (!el.isInlineExpanded()) {
       const viewOffset = el.getViewCursorOffset();
       cm6.setCursor(cm6.offsetToPos(viewToSrc(segs, viewOffset)));
@@ -5945,7 +6008,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
     }
     this.lastCommittedContent = newContent;
     (_a = this.syncCoordinator) == null ? void 0 : _a.notifySelfWrite(newContent);
-    this.plugin.updateCharCount(countChars(newContent));
+    this.pushCharCount(countChars(newContent));
     (_b = this.searchPanel) == null ? void 0 : _b.onContentChanged();
     this.plugin.refreshOutline();
   }
@@ -6237,12 +6300,15 @@ var TatePlugin = class extends import_obsidian8.Plugin {
     });
     return this.saveDataPromise;
   }
-  updateCharCount(count) {
+  /** Updates the status bar character count.
+   *  count=null hides the item. selected (visible chars in the current selection)
+   *  switches the format from "N文字" to "N (M) 文字". */
+  updateCharCount(count, selected) {
     if (count === null) {
       this.statusBarItem.hide();
       return;
     }
-    this.charCountEl.setText(count.toLocaleString() + "\u6587\u5B57");
+    this.charCountEl.setText(selected != null ? `${count.toLocaleString()} (${selected.toLocaleString()}) \u6587\u5B57` : count.toLocaleString() + "\u6587\u5B57");
     this.statusBarItem.show();
   }
   applySettingsToAllViews() {

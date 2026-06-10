@@ -41,6 +41,12 @@ export class VerticalWritingView extends ItemView {
     // returns 0 when the editor lacks focus, so this field preserves the last valid offset.
     private lastKnownViewOffset: number | null = null;
     private selectionChangeRafId: number | null = null;
+    // Last total character count pushed to the status bar. Cached so selectionchange can
+    // re-render "N (M) 文字" without re-running buildSegmentMap over the whole document.
+    private lastCharCount = 0;
+    // Last selection count pushed to the status bar. Used to skip redundant status bar
+    // writes on caret-only selectionchange events. null = no selection shown.
+    private lastSelectedCharCount: number | null = null;
     // Keymap scope pushed while this view is the active leaf. Intercepts Escape before
     // Obsidian's global handler, which would otherwise switch the active leaf to a
     // navigation=true view (e.g. MarkdownView). See docs/design/20260424_esc_key_scope.md.
@@ -114,7 +120,7 @@ export class VerticalWritingView extends ItemView {
                     const savedOffset = this.lastKnownViewOffset ?? editorEl.getViewCursorOffset();
                     this.beginScrollRestoring();
                     editorEl.setValue(content, false);
-                    this.plugin.updateCharCount(countChars(content));
+                    this.pushCharCount(countChars(content));
                     this.plugin.refreshOutline();
                     // restoreViewOffset handles both cases:
                     //   active view  → rAF 1: scroll, rAF 2: remove class
@@ -124,7 +130,7 @@ export class VerticalWritingView extends ItemView {
                     // File load or file delete: create only the initial window around the
                     // saved cursor position to avoid loading all N paragraph divs at once.
                     editorEl.loadContent(content, this.pendingLoadViewOffset);
-                    this.plugin.updateCharCount(countChars(content));
+                    this.pushCharCount(countChars(content));
                     this.plugin.refreshOutline();
                 }
             },
@@ -156,6 +162,8 @@ export class VerticalWritingView extends ItemView {
             this.lastCommittedContent = '';
             this.pendingCursorOffset = null;
             this.lastKnownViewOffset = null;
+            this.lastCharCount = 0;
+            this.lastSelectedCharCount = null;
             this.plugin.updateCharCount(null);
             this.plugin.refreshOutline();
             this.cancelScrollRestoring();
@@ -371,13 +379,17 @@ export class VerticalWritingView extends ItemView {
             // Multiple selectionchange events can fire in a single frame (e.g. auto-indent inserts
             // text via insertText(), triggering one event per DOM mutation). Debounce with rAF so
             // only the final cursor position per frame is captured, avoiding redundant O(N) scans.
-            if (activeDocument.activeElement === editorEl.el && !editorEl.isInlineExpanded()) {
+            if (activeDocument.activeElement === editorEl.el) {
                 if (this.selectionChangeRafId !== null) window.cancelAnimationFrame(this.selectionChangeRafId);
                 this.selectionChangeRafId = window.requestAnimationFrame(() => {
                     this.selectionChangeRafId = null;
-                    if (activeDocument.activeElement === editorEl.el && !editorEl.isInlineExpanded()) {
+                    if (activeDocument.activeElement !== editorEl.el) return;
+                    // Cursor tracking skips inline-expanded: the offset inside the raw
+                    // notation span is not a valid view offset.
+                    if (!editorEl.isInlineExpanded()) {
                         this.lastKnownViewOffset = editorEl.getViewCursorOffset();
                     }
+                    this.updateSelectionCharCount(editorEl, virtualizer);
                 });
             }
         });
@@ -389,6 +401,34 @@ export class VerticalWritingView extends ItemView {
         this.registerDomEvent(editorEl.el, 'keydown', (e: KeyboardEvent) => {
             this.handleEditorKeyDown(e, editorEl, virtualizer);
         });
+    }
+
+    // Pushes a new total to the status bar and caches it for selection-count re-renders.
+    // All total-count update paths must go through here (not plugin.updateCharCount directly)
+    // so that lastCharCount stays in sync with the displayed total.
+    private pushCharCount(count: number): void {
+        this.lastCharCount = count;
+        this.lastSelectedCharCount = null;
+        this.plugin.updateCharCount(count);
+    }
+
+    // Re-renders the status bar as "N (M) 文字" / "N文字" from the cached total and the
+    // current selection. Called from the selectionchange rAF while the editor has focus.
+    private updateSelectionCharCount(editorEl: EditorElement, virtualizer: ParagraphVirtualizer): void {
+        if (!this.syncCoordinator?.currentFile) return; // No file loaded: status bar is hidden
+        let selected: number | null;
+        if (editorEl.isInlineExpanded()) {
+            // Inline-expanded raw notation is counted as-is. Running it through
+            // buildSegmentMap would re-interpret the visible markup and undercount.
+            const sel = window.getSelection();
+            selected = sel && !sel.isCollapsed ? sel.toString().replace(/\n/g, '').length : null;
+        } else {
+            const vs = virtualizer.getVirtualSelection();
+            selected = vs ? editorEl.getVsSelectionViewLen(vs) : editorEl.getSelectionViewLen();
+        }
+        if (selected === this.lastSelectedCharCount) return;
+        this.lastSelectedCharCount = selected;
+        this.plugin.updateCharCount(this.lastCharCount, selected);
     }
 
     // Dispatches a keydown on the editor to the specialized handlers below.
@@ -813,7 +853,7 @@ export class VerticalWritingView extends ItemView {
     // and notifyActivated() (called when revealLeaf doesn't fire active-leaf-change).
     private onThisLeafActivated(): void {
         this.pushEscScope();
-        this.plugin.updateCharCount(countChars(this.lastCommittedContent));
+        this.pushCharCount(countChars(this.lastCommittedContent));
         const el = this.editorEl;
         if (el) {
             if (this.pendingCursorOffset !== null) {
@@ -1089,7 +1129,9 @@ export class VerticalWritingView extends ItemView {
         this.lastCommittedContent = content;
         this.syncCoordinator?.notifySelfWrite(content);
         const segs = buildSegmentMap(content);
-        this.plugin.updateCharCount(segs.reduce((sum, seg) => sum + seg.viewLen, 0));
+        // Inline sum instead of countChars(): segs is reused for viewToSrc below,
+        // avoiding a second buildSegmentMap pass over the whole document.
+        this.pushCharCount(segs.reduce((sum, seg) => sum + seg.viewLen, 0));
         // Skip cursor sync while tate-editing is expanded (the cursor is inside raw text,
         // which is not in the same space as viewToSrc input). Sync happens in the next commitToCm6 after collapse.
         if (!el.isInlineExpanded()) {
@@ -1140,7 +1182,7 @@ export class VerticalWritingView extends ItemView {
         // causing the tate view DOM to reset and the cursor to jump during input right after undo.
         this.lastCommittedContent = newContent;
         this.syncCoordinator?.notifySelfWrite(newContent);
-        this.plugin.updateCharCount(countChars(newContent));
+        this.pushCharCount(countChars(newContent));
         this.searchPanel?.onContentChanged();
         this.plugin.refreshOutline();
     }

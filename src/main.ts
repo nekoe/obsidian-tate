@@ -211,12 +211,17 @@ export default class TatePlugin extends Plugin {
         return this.saveDataPromise;
     }
 
-    updateCharCount(count: number | null): void {
+    /** Updates the status bar character count.
+     *  count=null hides the item. selected (visible chars in the current selection)
+     *  switches the format from "N文字" to "N (M) 文字". */
+    updateCharCount(count: number | null, selected?: number | null): void {
         if (count === null) {
             this.statusBarItem.hide();
             return;
         }
-        this.charCountEl.setText(count.toLocaleString() + '文字');
+        this.charCountEl.setText(selected != null
+            ? `${count.toLocaleString()} (${selected.toLocaleString()}) 文字`
+            : count.toLocaleString() + '文字');
         this.statusBarItem.show();
     }
 
