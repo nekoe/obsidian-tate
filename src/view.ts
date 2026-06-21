@@ -535,17 +535,19 @@ export class VerticalWritingView extends ItemView {
         } else {
             const idx = virtualizer.getCaretParagraphIndex();
             if (idx >= 0) {
+                // 'nearest': only scroll when the paragraph boundary is off-screen, so a jump
+                // within the visible viewport does not move the scroll position.
                 if (toStart) {
                     // jumpToParagraphIndex restores by index, avoiding the boundary ambiguity
                     // where "start of para N" shares an integer with "end of para N-1".
-                    this.jumpToParagraphIndex(idx);
+                    this.jumpToParagraphIndex(idx, 'nearest');
                 } else {
                     // The paragraph-end view offset equals the next paragraph's start integer;
                     // setVisibleOffset's <= tie-break resolves it to this paragraph's end.
                     const startOffset = virtualizer.paragraphRecords
                         .slice(0, idx).reduce((s, r) => s + r.viewLen, 0);
                     virtualizer.clearVirtualSelection();
-                    this.jumpToViewOffset(startOffset + virtualizer.paragraphRecords[idx].viewLen);
+                    this.jumpToViewOffset(startOffset + virtualizer.paragraphRecords[idx].viewLen, 'nearest');
                 }
             }
         }
@@ -1008,21 +1010,25 @@ export class VerticalWritingView extends ItemView {
         }
     }
 
-    /** Moves the editor cursor to viewOffset and scrolls it into view. Used by OutlineView. */
-    jumpToViewOffset(offset: number): void {
+    /** Moves the editor cursor to viewOffset and scrolls it into view. Used by OutlineView.
+     *  block defaults to 'center'; pass 'nearest' to avoid scrolling when the cursor is
+     *  already visible (paragraph-boundary jump). */
+    jumpToViewOffset(offset: number, block: ScrollLogicalPosition = 'center'): void {
         const el = this.editorEl;
         if (!el) return;
         el.el.focus({ preventScroll: true });
         el.setViewCursorOffset(offset);
         this.lastKnownViewOffset = offset;
-        el.scrollCursorIntoView();
+        el.scrollCursorIntoView(block);
     }
 
     /** Moves the editor cursor to the start of the paragraph at paragraphIndex and scrolls into view.
      *  Uses paragraph index directly to avoid the viewOffset ambiguity at paragraph boundaries.
      *  Sets pendingParagraphJump so that onThisLeafActivated (fired by revealLeaf) also restores
-     *  by index rather than re-applying the ambiguous lastKnownViewOffset. */
-    jumpToParagraphIndex(idx: number): void {
+     *  by index rather than re-applying the ambiguous lastKnownViewOffset.
+     *  block defaults to 'center'; pass 'nearest' to avoid scrolling when the cursor is
+     *  already visible (paragraph-boundary jump). */
+    jumpToParagraphIndex(idx: number, block: ScrollLogicalPosition = 'center'): void {
         const el = this.editorEl;
         if (!el) return;
         this.commitToCm6(); // flush any uncommitted changes before jumping
@@ -1033,7 +1039,7 @@ export class VerticalWritingView extends ItemView {
         el.setViewCursorToParagraphIndex(idx);
         this.pendingParagraphJump = idx;
         this.lastKnownViewOffset = el.getViewCursorOffset();
-        el.scrollCursorIntoView();
+        el.scrollCursorIntoView(block);
         // Safety clear: if active-leaf-change never fires (tate view already active),
         // clear the pending index after two frames so it doesn't affect later tab switches.
         window.requestAnimationFrame(() => {

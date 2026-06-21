@@ -5519,11 +5519,11 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
       const idx = virtualizer.getCaretParagraphIndex();
       if (idx >= 0) {
         if (toStart) {
-          this.jumpToParagraphIndex(idx);
+          this.jumpToParagraphIndex(idx, "nearest");
         } else {
           const startOffset = virtualizer.paragraphRecords.slice(0, idx).reduce((s, r) => s + r.viewLen, 0);
           virtualizer.clearVirtualSelection();
-          this.jumpToViewOffset(startOffset + virtualizer.paragraphRecords[idx].viewLen);
+          this.jumpToViewOffset(startOffset + virtualizer.paragraphRecords[idx].viewLen, "nearest");
         }
       }
     }
@@ -5906,20 +5906,24 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
       (_a = this.searchPanel) == null ? void 0 : _a.onContentChanged();
     }
   }
-  /** Moves the editor cursor to viewOffset and scrolls it into view. Used by OutlineView. */
-  jumpToViewOffset(offset) {
+  /** Moves the editor cursor to viewOffset and scrolls it into view. Used by OutlineView.
+   *  block defaults to 'center'; pass 'nearest' to avoid scrolling when the cursor is
+   *  already visible (paragraph-boundary jump). */
+  jumpToViewOffset(offset, block = "center") {
     const el = this.editorEl;
     if (!el) return;
     el.el.focus({ preventScroll: true });
     el.setViewCursorOffset(offset);
     this.lastKnownViewOffset = offset;
-    el.scrollCursorIntoView();
+    el.scrollCursorIntoView(block);
   }
   /** Moves the editor cursor to the start of the paragraph at paragraphIndex and scrolls into view.
    *  Uses paragraph index directly to avoid the viewOffset ambiguity at paragraph boundaries.
    *  Sets pendingParagraphJump so that onThisLeafActivated (fired by revealLeaf) also restores
-   *  by index rather than re-applying the ambiguous lastKnownViewOffset. */
-  jumpToParagraphIndex(idx) {
+   *  by index rather than re-applying the ambiguous lastKnownViewOffset.
+   *  block defaults to 'center'; pass 'nearest' to avoid scrolling when the cursor is
+   *  already visible (paragraph-boundary jump). */
+  jumpToParagraphIndex(idx, block = "center") {
     var _a;
     const el = this.editorEl;
     if (!el) return;
@@ -5929,7 +5933,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
     el.setViewCursorToParagraphIndex(idx);
     this.pendingParagraphJump = idx;
     this.lastKnownViewOffset = el.getViewCursorOffset();
-    el.scrollCursorIntoView();
+    el.scrollCursorIntoView(block);
     window.requestAnimationFrame(() => {
       window.requestAnimationFrame(() => {
         this.pendingParagraphJump = null;
