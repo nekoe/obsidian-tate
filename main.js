@@ -3200,6 +3200,17 @@ var ParagraphVirtualizer = class {
     for (let i = 0; i < vs.focusParaIdx; i++) offset += this.paragraphRecords[i].viewLen;
     return offset;
   }
+  /** Returns the paragraphRecords index of the current caret / selection focus, or -1 when it
+   *  cannot be determined. Uses the VS focus paragraph when a VirtualSelection is active,
+   *  otherwise reads the DOM selection focus node. Used by the paragraph-boundary jump. */
+  getCaretParagraphIndex() {
+    if (this.virtualSelection) return this.virtualSelection.focusParaIdx;
+    const sel = window.getSelection();
+    if (!sel || !sel.focusNode) return -1;
+    const div = this.findParaDiv(sel.focusNode);
+    if (!div) return -1;
+    return this.getParagraphIndex(div);
+  }
   clearVirtualSelection() {
     var _a, _b;
     if (this.virtualSelection) {
@@ -3262,6 +3273,40 @@ var ParagraphVirtualizer = class {
     this.syncDomRangeToVirtual();
     this.scrollArea.scrollLeft = toStart ? this.scrollArea.scrollWidth - this.scrollArea.clientWidth : 0;
     this.adjustWindowOnScroll();
+  }
+  // Extends the selection from the current anchor to the start (toStart=true) or end
+  // (toStart=false) of the paragraph containing the current focus, then scrolls that
+  // boundary into view. Mirrors extendSelectionToDocumentBoundary but targets the focus
+  // paragraph rather than the document boundary, so the selection crosses soft-wrapped
+  // columns to the logical paragraph boundary. If VS is already active the anchor and focus
+  // paragraph are read from it; otherwise both are read from the DOM selection (anchor =
+  // selection anchor, focus paragraph = paragraph under the caret).
+  extendSelectionToParagraphBoundary(toStart) {
+    const N = this.paragraphRecords.length;
+    if (N === 0) return;
+    let anchorParaIdx;
+    let anchorViewOff;
+    let focusParaIdx;
+    if (this.virtualSelection) {
+      anchorParaIdx = this.virtualSelection.anchorParaIdx;
+      anchorViewOff = this.virtualSelection.anchorViewOff;
+      focusParaIdx = this.virtualSelection.focusParaIdx;
+    } else {
+      const sel = window.getSelection();
+      if (!sel || !sel.anchorNode || !sel.focusNode) return;
+      const anchorDiv = this.findParaDiv(sel.anchorNode);
+      const focusDiv = this.findParaDiv(sel.focusNode);
+      if (!anchorDiv || !focusDiv) return;
+      anchorParaIdx = this.getParagraphIndex(anchorDiv);
+      focusParaIdx = this.getParagraphIndex(focusDiv);
+      if (anchorParaIdx < 0 || focusParaIdx < 0) return;
+      anchorViewOff = computeViewOffsetInDiv(anchorDiv, this.editorEl, sel.anchorNode, sel.anchorOffset);
+    }
+    const focusViewOff = toStart ? 0 : this.paragraphRecords[focusParaIdx].viewLen;
+    this.virtualSelection = { anchorParaIdx, anchorViewOff, focusParaIdx, focusViewOff };
+    this.teleportWindowTo(focusParaIdx);
+    this.syncDomRangeToVirtual();
+    this.scrollFocusIntoView();
   }
   // Called from selectionchange when VS is null and the DOM selection is non-collapsed.
   // If one or both endpoints are in anchor island divs, initializes VS from the real
@@ -5396,6 +5441,7 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
     if (this.handleUndoRedoKey(e, editorEl)) return;
     if (this.handleSelectAllKey(e, virtualizer)) return;
     if (this.handleDocumentBoundaryKey(e, editorEl, virtualizer)) return;
+    if (this.handleParagraphBoundaryKey(e, editorEl, virtualizer)) return;
     this.handleArrowAndNavigationKeys(e, editorEl, virtualizer);
   }
   // Deletes VS content on printable key press before compositionstart fires.
@@ -5431,12 +5477,14 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
     }
     return false;
   }
-  // Cmd+↑/↓ (macOS) / Ctrl+Home/End (Windows/Linux): jump or extend selection to document boundary.
+  // Cmd+→/← (macOS) / Ctrl+Home/End (Windows/Linux): jump or extend selection to document boundary.
+  // In vertical-rl the document runs right (start) to left (end), so the rightward key (ArrowRight)
+  // goes to the start and the leftward key (ArrowLeft) to the end.
   // Without Shift: collapse cursor to start/end. With Shift: extend selection from anchor.
   handleDocumentBoundaryKey(e, editorEl, virtualizer) {
     if (e.isComposing || e.altKey) return false;
-    const toStart = import_obsidian6.Platform.isMacOS ? e.metaKey && e.key === "ArrowUp" : e.ctrlKey && e.key === "Home";
-    const toEnd = import_obsidian6.Platform.isMacOS ? e.metaKey && e.key === "ArrowDown" : e.ctrlKey && e.key === "End";
+    const toStart = import_obsidian6.Platform.isMacOS ? e.metaKey && e.key === "ArrowRight" : e.ctrlKey && e.key === "Home";
+    const toEnd = import_obsidian6.Platform.isMacOS ? e.metaKey && e.key === "ArrowLeft" : e.ctrlKey && e.key === "End";
     if (!toStart && !toEnd) return false;
     e.preventDefault();
     if (this.commitTimer !== null) this.commitToCm6();
@@ -5449,6 +5497,34 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
       } else {
         const totalLen = virtualizer.paragraphRecords.reduce((sum, r) => sum + r.viewLen, 0);
         this.jumpToViewOffset(totalLen);
+      }
+    }
+    editorEl.afterNavigation();
+    return true;
+  }
+  // Cmd+↑/↓ (macOS) / Home/End (all platforms): jump or extend selection to paragraph boundary.
+  // Paragraph-level: in vertical-rl text flows top (start) to bottom (end) within a paragraph,
+  // and the jump crosses soft-wrapped columns to the logical paragraph start/end.
+  // Without Shift: collapse cursor to paragraph start/end. With Shift: extend selection from anchor.
+  handleParagraphBoundaryKey(e, editorEl, virtualizer) {
+    if (e.isComposing || e.altKey) return false;
+    const toStart = import_obsidian6.Platform.isMacOS && e.metaKey && e.key === "ArrowUp" || !e.metaKey && !e.ctrlKey && e.key === "Home";
+    const toEnd = import_obsidian6.Platform.isMacOS && e.metaKey && e.key === "ArrowDown" || !e.metaKey && !e.ctrlKey && e.key === "End";
+    if (!toStart && !toEnd) return false;
+    e.preventDefault();
+    if (this.commitTimer !== null) this.commitToCm6();
+    if (e.shiftKey) {
+      virtualizer.extendSelectionToParagraphBoundary(toStart);
+    } else {
+      const idx = virtualizer.getCaretParagraphIndex();
+      if (idx >= 0) {
+        if (toStart) {
+          this.jumpToParagraphIndex(idx);
+        } else {
+          const startOffset = virtualizer.paragraphRecords.slice(0, idx).reduce((s, r) => s + r.viewLen, 0);
+          virtualizer.clearVirtualSelection();
+          this.jumpToViewOffset(startOffset + virtualizer.paragraphRecords[idx].viewLen);
+        }
       }
     }
     editorEl.afterNavigation();
@@ -5488,11 +5564,11 @@ var _VerticalWritingView = class _VerticalWritingView extends import_obsidian6.I
   // When VS is active and an Arrow key collapses the selection, the browser collapses to the
   // anchor PROXY (a window-boundary div), which triggers adjustWindowOnScroll to expand the
   // DOM window toward the real anchor. Intercept and explicitly jump to the correct VS endpoint.
-  // Cmd+Up/Down are handled earlier (extendSelectionToDocumentBoundary) and return early, so
-  // only Cmd+Left/Right can reach here with metaKey set.
+  // All Cmd+Arrow combinations are handled earlier by the paragraph/document boundary handlers
+  // and return early, so only modifier-free arrows reach here.
   // Returns true if the key was consumed (a VS-aware jump was performed).
   collapseVirtualSelectionWithArrow(e, editorEl, virtualizer) {
-    const vs = !e.altKey && !e.ctrlKey && (!e.metaKey || e.key === "ArrowLeft" || e.key === "ArrowRight") ? virtualizer.getVirtualSelection() : null;
+    const vs = !e.altKey && !e.ctrlKey && !e.metaKey ? virtualizer.getVirtualSelection() : null;
     if (!vs || !(e.key === "ArrowLeft" || e.key === "ArrowRight" || e.key === "ArrowUp" || e.key === "ArrowDown")) return false;
     e.preventDefault();
     const towardEnd = e.key === "ArrowLeft" || e.key === "ArrowDown";

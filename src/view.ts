@@ -440,6 +440,7 @@ export class VerticalWritingView extends ItemView {
         if (this.handleUndoRedoKey(e, editorEl)) return;
         if (this.handleSelectAllKey(e, virtualizer)) return;
         if (this.handleDocumentBoundaryKey(e, editorEl, virtualizer)) return;
+        if (this.handleParagraphBoundaryKey(e, editorEl, virtualizer)) return;
         this.handleArrowAndNavigationKeys(e, editorEl, virtualizer);
     }
 
@@ -482,17 +483,19 @@ export class VerticalWritingView extends ItemView {
         return false;
     }
 
-    // Cmd+↑/↓ (macOS) / Ctrl+Home/End (Windows/Linux): jump or extend selection to document boundary.
+    // Cmd+→/← (macOS) / Ctrl+Home/End (Windows/Linux): jump or extend selection to document boundary.
+    // In vertical-rl the document runs right (start) to left (end), so the rightward key (ArrowRight)
+    // goes to the start and the leftward key (ArrowLeft) to the end.
     // Without Shift: collapse cursor to start/end. With Shift: extend selection from anchor.
     private handleDocumentBoundaryKey(
         e: KeyboardEvent, editorEl: EditorElement, virtualizer: ParagraphVirtualizer,
     ): boolean {
         if (e.isComposing || e.altKey) return false;
         const toStart = Platform.isMacOS
-            ? e.metaKey && e.key === 'ArrowUp'
+            ? e.metaKey && e.key === 'ArrowRight'
             : e.ctrlKey && e.key === 'Home';
         const toEnd = Platform.isMacOS
-            ? e.metaKey && e.key === 'ArrowDown'
+            ? e.metaKey && e.key === 'ArrowLeft'
             : e.ctrlKey && e.key === 'End';
         if (!toStart && !toEnd) return false;
         e.preventDefault();
@@ -506,6 +509,44 @@ export class VerticalWritingView extends ItemView {
             } else {
                 const totalLen = virtualizer.paragraphRecords.reduce((sum, r) => sum + r.viewLen, 0);
                 this.jumpToViewOffset(totalLen);
+            }
+        }
+        editorEl.afterNavigation();
+        return true;
+    }
+
+    // Cmd+↑/↓ (macOS) / Home/End (all platforms): jump or extend selection to paragraph boundary.
+    // Paragraph-level: in vertical-rl text flows top (start) to bottom (end) within a paragraph,
+    // and the jump crosses soft-wrapped columns to the logical paragraph start/end.
+    // Without Shift: collapse cursor to paragraph start/end. With Shift: extend selection from anchor.
+    private handleParagraphBoundaryKey(
+        e: KeyboardEvent, editorEl: EditorElement, virtualizer: ParagraphVirtualizer,
+    ): boolean {
+        if (e.isComposing || e.altKey) return false;
+        const toStart = (Platform.isMacOS && e.metaKey && e.key === 'ArrowUp')
+            || (!e.metaKey && !e.ctrlKey && e.key === 'Home');
+        const toEnd = (Platform.isMacOS && e.metaKey && e.key === 'ArrowDown')
+            || (!e.metaKey && !e.ctrlKey && e.key === 'End');
+        if (!toStart && !toEnd) return false;
+        e.preventDefault();
+        if (this.commitTimer !== null) this.commitToCm6();
+        if (e.shiftKey) {
+            virtualizer.extendSelectionToParagraphBoundary(toStart);
+        } else {
+            const idx = virtualizer.getCaretParagraphIndex();
+            if (idx >= 0) {
+                if (toStart) {
+                    // jumpToParagraphIndex restores by index, avoiding the boundary ambiguity
+                    // where "start of para N" shares an integer with "end of para N-1".
+                    this.jumpToParagraphIndex(idx);
+                } else {
+                    // The paragraph-end view offset equals the next paragraph's start integer;
+                    // setVisibleOffset's <= tie-break resolves it to this paragraph's end.
+                    const startOffset = virtualizer.paragraphRecords
+                        .slice(0, idx).reduce((s, r) => s + r.viewLen, 0);
+                    virtualizer.clearVirtualSelection();
+                    this.jumpToViewOffset(startOffset + virtualizer.paragraphRecords[idx].viewLen);
+                }
             }
         }
         editorEl.afterNavigation();
@@ -553,14 +594,13 @@ export class VerticalWritingView extends ItemView {
     // When VS is active and an Arrow key collapses the selection, the browser collapses to the
     // anchor PROXY (a window-boundary div), which triggers adjustWindowOnScroll to expand the
     // DOM window toward the real anchor. Intercept and explicitly jump to the correct VS endpoint.
-    // Cmd+Up/Down are handled earlier (extendSelectionToDocumentBoundary) and return early, so
-    // only Cmd+Left/Right can reach here with metaKey set.
+    // All Cmd+Arrow combinations are handled earlier by the paragraph/document boundary handlers
+    // and return early, so only modifier-free arrows reach here.
     // Returns true if the key was consumed (a VS-aware jump was performed).
     private collapseVirtualSelectionWithArrow(
         e: KeyboardEvent, editorEl: EditorElement, virtualizer: ParagraphVirtualizer,
     ): boolean {
-        const vs = !e.altKey && !e.ctrlKey &&
-            (!e.metaKey || e.key === 'ArrowLeft' || e.key === 'ArrowRight')
+        const vs = !e.altKey && !e.ctrlKey && !e.metaKey
             ? virtualizer.getVirtualSelection() : null;
         if (!vs || !(e.key === 'ArrowLeft' || e.key === 'ArrowRight' ||
                      e.key === 'ArrowUp'   || e.key === 'ArrowDown')) return false;

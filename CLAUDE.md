@@ -113,6 +113,7 @@ See the design documents in `docs/design/` for details:
 - [Anchor Island: Pinned Paragraph Divs Outside the DOM Window (cursor stall fix, Cmd-A fix)](docs/design/20260522_anchor_island.md)
 - [Ruby `<rt>` Removal and CollapseGuard Unification (cursor-trap fix, data-rt + CSS ::after, CollapseGuard)](docs/design/20260528_ruby_rt_removal.md)
 - [ESC: Collapse Selection to Focus and Scroll Into View (reuses Undo/Redo scroll policy)](docs/design/20260601_esc_collapse_selection.md)
+- [Paragraph / Document Boundary Navigation Keys (vertical-rl key rotation, boundary-offset asymmetry)](docs/design/20260621_paragraph_document_navigation.md)
 
 ## Settings
 

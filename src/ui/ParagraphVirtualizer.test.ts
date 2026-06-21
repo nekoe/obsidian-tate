@@ -361,4 +361,71 @@ describe('ParagraphVirtualizer', () => {
         });
     });
 
+    // ---- getCaretParagraphIndex ----
+
+    describe('getCaretParagraphIndex', () => {
+        it('returns the paragraph index of the DOM selection focus', () => {
+            addDiv(editorEl, 'ab');
+            const d1 = addDiv(editorEl, 'cde');
+            virt.attach();
+            virt.initRecords(['ab', 'cde']);
+            window.getSelection()!.collapse(d1.firstChild, 1);
+            expect(virt.getCaretParagraphIndex()).toBe(1);
+        });
+
+        it('returns the VS focus paragraph when a VirtualSelection is active', () => {
+            for (const l of ['ab', 'cde', 'fg']) addDiv(editorEl, l);
+            virt.attach();
+            virt.initRecords(['ab', 'cde', 'fg']);
+            virt.setVirtualSelectAll(); // focus = last paragraph
+            expect(virt.getCaretParagraphIndex()).toBe(2);
+        });
+
+        it('returns -1 when there is no selection focus', () => {
+            virt.attach();
+            virt.initRecords(['ab']);
+            window.getSelection()!.removeAllRanges();
+            expect(virt.getCaretParagraphIndex()).toBe(-1);
+        });
+    });
+
+    // ---- extendSelectionToParagraphBoundary ----
+
+    describe('extendSelectionToParagraphBoundary', () => {
+        // Sets up a two-paragraph doc with the caret inside para 1 ('cde') at the given offset.
+        function setupCaretInPara1(offset: number): void {
+            addDiv(editorEl, 'ab');
+            const d1 = addDiv(editorEl, 'cde');
+            virt.attach();
+            virt.initRecords(['ab', 'cde']); // viewLens 2 + 3
+            window.getSelection()!.collapse(d1.firstChild, offset);
+        }
+
+        it('extends the focus to the start of the focus paragraph', () => {
+            setupCaretInPara1(2);
+            virt.extendSelectionToParagraphBoundary(true);
+            const vs = virt.getVirtualSelection()!;
+            expect(vs.focusParaIdx).toBe(1);
+            expect(vs.focusViewOff).toBe(0);
+            expect(virt.getVirtualSelectionFocusOffset()).toBe(2); // preceding para0 viewLen
+        });
+
+        it('extends the focus to the end of the focus paragraph', () => {
+            setupCaretInPara1(1);
+            virt.extendSelectionToParagraphBoundary(false);
+            const vs = virt.getVirtualSelection()!;
+            expect(vs.focusParaIdx).toBe(1);
+            expect(vs.focusViewOff).toBe(3); // viewLen of 'cde'
+            expect(virt.getVirtualSelectionFocusOffset()).toBe(5); // 2 + 3
+        });
+
+        it('preserves the existing anchor when extending', () => {
+            setupCaretInPara1(1);
+            virt.extendSelectionToParagraphBoundary(true);
+            const vs = virt.getVirtualSelection()!;
+            expect(vs.anchorParaIdx).toBe(1);
+            expect(vs.anchorViewOff).toBe(1);
+        });
+    });
+
 });

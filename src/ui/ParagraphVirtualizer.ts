@@ -1253,6 +1253,18 @@ export class ParagraphVirtualizer {
         return offset;
     }
 
+    /** Returns the paragraphRecords index of the current caret / selection focus, or -1 when it
+     *  cannot be determined. Uses the VS focus paragraph when a VirtualSelection is active,
+     *  otherwise reads the DOM selection focus node. Used by the paragraph-boundary jump. */
+    getCaretParagraphIndex(): number {
+        if (this.virtualSelection) return this.virtualSelection.focusParaIdx;
+        const sel = window.getSelection();
+        if (!sel || !sel.focusNode) return -1;
+        const div = this.findParaDiv(sel.focusNode);
+        if (!div) return -1;
+        return this.getParagraphIndex(div);
+    }
+
     clearVirtualSelection(): void {
         if (this.virtualSelection) {
             // Release selection-type anchor islands created for Cmd-A.
@@ -1326,6 +1338,45 @@ export class ParagraphVirtualizer {
             ? this.scrollArea.scrollWidth - this.scrollArea.clientWidth
             : 0;
         this.adjustWindowOnScroll();
+    }
+
+    // Extends the selection from the current anchor to the start (toStart=true) or end
+    // (toStart=false) of the paragraph containing the current focus, then scrolls that
+    // boundary into view. Mirrors extendSelectionToDocumentBoundary but targets the focus
+    // paragraph rather than the document boundary, so the selection crosses soft-wrapped
+    // columns to the logical paragraph boundary. If VS is already active the anchor and focus
+    // paragraph are read from it; otherwise both are read from the DOM selection (anchor =
+    // selection anchor, focus paragraph = paragraph under the caret).
+    extendSelectionToParagraphBoundary(toStart: boolean): void {
+        const N = this.paragraphRecords.length;
+        if (N === 0) return;
+
+        let anchorParaIdx: number;
+        let anchorViewOff: number;
+        let focusParaIdx: number;
+
+        if (this.virtualSelection) {
+            anchorParaIdx = this.virtualSelection.anchorParaIdx;
+            anchorViewOff = this.virtualSelection.anchorViewOff;
+            focusParaIdx  = this.virtualSelection.focusParaIdx;
+        } else {
+            const sel = window.getSelection();
+            if (!sel || !sel.anchorNode || !sel.focusNode) return;
+            const anchorDiv = this.findParaDiv(sel.anchorNode);
+            const focusDiv  = this.findParaDiv(sel.focusNode);
+            if (!anchorDiv || !focusDiv) return;
+            anchorParaIdx = this.getParagraphIndex(anchorDiv);
+            focusParaIdx  = this.getParagraphIndex(focusDiv);
+            if (anchorParaIdx < 0 || focusParaIdx < 0) return;
+            anchorViewOff = computeViewOffsetInDiv(anchorDiv, this.editorEl, sel.anchorNode, sel.anchorOffset);
+        }
+
+        const focusViewOff = toStart ? 0 : this.paragraphRecords[focusParaIdx].viewLen;
+        this.virtualSelection = { anchorParaIdx, anchorViewOff, focusParaIdx, focusViewOff };
+
+        this.teleportWindowTo(focusParaIdx);
+        this.syncDomRangeToVirtual();
+        this.scrollFocusIntoView();
     }
 
     // Called from selectionchange when VS is null and the DOM selection is non-collapsed.
