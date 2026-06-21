@@ -834,6 +834,10 @@ function countVsViewChars(startPara, startOff, endPara, endOff, getViewLen) {
   for (let i = startPara + 1; i < endPara; i++) count += getViewLen(i);
   return count + endOff;
 }
+function orderVsEndpoints(anchorPara, anchorOff, focusPara, focusOff) {
+  const anchorFirst = anchorPara < focusPara || anchorPara === focusPara && anchorOff <= focusOff;
+  return anchorFirst ? [anchorPara, anchorOff, focusPara, focusOff] : [focusPara, focusOff, anchorPara, anchorOff];
+}
 function getExtraCharsFromAnnotation(rawText) {
   const patterns = [TCY, BOUTEN, HEADING].map(plainRegex);
   for (const re of patterns) {
@@ -4149,9 +4153,10 @@ var EditorElement = class {
     this.reloadAndPlaceCursor(allLines.join("\n"), si, so);
   }
   // Returns VS endpoints in document order: [startPara, startOff, endPara, endOff].
+  // Delegates to orderVsEndpoints, which also orders offsets within the same paragraph so a
+  // focus-before-anchor intra-paragraph selection does not produce an inverted [so > eo] range.
   normalizeVsRange(vs) {
-    const { anchorParaIdx, anchorViewOff, focusParaIdx, focusViewOff } = vs;
-    return anchorParaIdx <= focusParaIdx ? [anchorParaIdx, anchorViewOff, focusParaIdx, focusViewOff] : [focusParaIdx, focusViewOff, anchorParaIdx, anchorViewOff];
+    return orderVsEndpoints(vs.anchorParaIdx, vs.anchorViewOff, vs.focusParaIdx, vs.focusViewOff);
   }
   // Reloads the editor with newContent and positions the cursor at paragraph si / offset so.
   // Shared tail of deleteVirtualSelection and removeAnnotationsFromVirtualSelection.

@@ -4,7 +4,7 @@ import { buildSegmentMap, srcToView, viewToSrc, stripAnnotationsInSrcRange } fro
 import { parseInlineToHtml, parseToHtml, serializeNode } from './AozoraParser';
 import { InlineEditor } from './InlineEditor';
 import { InputTransformer } from './InputTransformer';
-import { isEffectivelyEmpty, clearChildren, ensureBrPlaceholder, removeEmptyAnnotationShells, computeDivViewLen, computeViewOffsetInDiv, computeDomPositionFromViewOff, findParentDivInEditor, countVsViewChars } from './domHelpers';
+import { isEffectivelyEmpty, clearChildren, ensureBrPlaceholder, removeEmptyAnnotationShells, computeDivViewLen, computeViewOffsetInDiv, computeDomPositionFromViewOff, findParentDivInEditor, countVsViewChars, orderVsEndpoints } from './domHelpers';
 import type { ParagraphVirtualizer, VirtualSelection } from './ParagraphVirtualizer';
 import { SPACER_CLASS } from './ParagraphVirtualizer';
 
@@ -843,11 +843,10 @@ export class EditorElement {
     }
 
     // Returns VS endpoints in document order: [startPara, startOff, endPara, endOff].
+    // Delegates to orderVsEndpoints, which also orders offsets within the same paragraph so a
+    // focus-before-anchor intra-paragraph selection does not produce an inverted [so > eo] range.
     private normalizeVsRange(vs: VirtualSelection): [number, number, number, number] {
-        const { anchorParaIdx, anchorViewOff, focusParaIdx, focusViewOff } = vs;
-        return anchorParaIdx <= focusParaIdx
-            ? [anchorParaIdx, anchorViewOff, focusParaIdx, focusViewOff]
-            : [focusParaIdx, focusViewOff, anchorParaIdx, anchorViewOff];
+        return orderVsEndpoints(vs.anchorParaIdx, vs.anchorViewOff, vs.focusParaIdx, vs.focusViewOff);
     }
 
     // Reloads the editor with newContent and positions the cursor at paragraph si / offset so.

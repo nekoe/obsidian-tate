@@ -5,7 +5,7 @@ import {
     insertAnnotationElement, setCursorAfter,
     findAncestor, findBoutenAncestor, findTcyAncestor, isInsideRuby,
     findCursorAnchorAncestor, findLastBaseTextInElement,
-    rawOffsetForExpand, getExtraCharsFromAnnotation, countVsViewChars,
+    rawOffsetForExpand, getExtraCharsFromAnnotation, countVsViewChars, orderVsEndpoints,
     isEffectivelyEmpty, clearChildren, ensureBrPlaceholder, removeEmptyAnnotationShells,
 } from './domHelpers';
 
@@ -376,6 +376,31 @@ describe('countVsViewChars', () => {
     it('selection covering only the paragraph break counts 0', () => {
         // From end of para0 to start of para1: no visible chars
         expect(countVsViewChars(0, 10, 1, 0, getViewLen)).toBe(0);
+    });
+});
+
+describe('orderVsEndpoints', () => {
+    it('keeps anchor-first order when anchor precedes focus across paragraphs', () => {
+        expect(orderVsEndpoints(0, 3, 2, 5)).toEqual([0, 3, 2, 5]);
+    });
+
+    it('swaps when focus precedes anchor across paragraphs', () => {
+        expect(orderVsEndpoints(2, 5, 0, 3)).toEqual([0, 3, 2, 5]);
+    });
+
+    it('orders by offset within the same paragraph (anchor before focus)', () => {
+        expect(orderVsEndpoints(1, 2, 1, 7)).toEqual([1, 2, 1, 7]);
+    });
+
+    it('swaps within the same paragraph when focus offset precedes anchor offset', () => {
+        // Regression: Shift+Cmd+Up selects from the caret back to paragraph start (focusOff=0).
+        // Without offset ordering this returned [1, 6, 1, 0], an inverted range that broke
+        // copy/cut/delete via sliceAozoraSrcByView.
+        expect(orderVsEndpoints(1, 6, 1, 0)).toEqual([1, 0, 1, 6]);
+    });
+
+    it('is stable for a collapsed same-position selection', () => {
+        expect(orderVsEndpoints(3, 4, 3, 4)).toEqual([3, 4, 3, 4]);
     });
 });
 

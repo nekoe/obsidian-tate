@@ -291,6 +291,21 @@ export function countVsViewChars(
     return count + endOff;
 }
 
+// Orders two VirtualSelection endpoints into document order, returning
+// [startPara, startOff, endPara, endOff]. Endpoints in the same paragraph are ordered by
+// offset, so a focus-before-anchor intra-paragraph selection (e.g. Shift+Cmd+Up to the
+// paragraph start) is not returned as an inverted [startOff > endOff] range.
+export function orderVsEndpoints(
+    anchorPara: number, anchorOff: number,
+    focusPara: number, focusOff: number,
+): [number, number, number, number] {
+    const anchorFirst = anchorPara < focusPara ||
+        (anchorPara === focusPara && anchorOff <= focusOff);
+    return anchorFirst
+        ? [anchorPara, anchorOff, focusPara, focusOff]
+        : [focusPara, focusOff, anchorPara, anchorOff];
+}
+
 export function getExtraCharsFromAnnotation(rawText: string): string {
     // Ruby is intentionally excluded: in ｜base《rt》 / kanji《rt》 the base text is not the
     // backward-referenced content of a bracket annotation, so no leading character can be
